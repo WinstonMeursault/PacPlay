@@ -35,7 +35,7 @@
 *.i*86
 *.x86_64
 *.hex
-bin
+bin/
 
 # Debug files
 *.dSYM/
@@ -54,3 +54,5 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+.vscode/
