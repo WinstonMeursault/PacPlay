@@ -58,3 +58,4 @@ dkms.conf
 .vscode/
 commit_draft.md
 compile_commands.json
+AGENTS.md
