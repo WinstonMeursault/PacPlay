@@ -56,6 +56,7 @@ dkms.conf
 *.dwo
 
 .vscode/
+.cache/
 commit_draft.md
 compile_commands.json
 AGENTS.md
