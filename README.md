@@ -137,3 +137,12 @@ logAddCallback(myHandler, ctx, LogLevelWarn);
 ```bash
 clang -DLOG_USE_COLOR ...
 ```
+
+## 第三方库
+
+本项目使用了以下第三方库：
+
+- [log.c](https://github.com/rxi/log.c)
+  License: MIT License
+  Copyright (c) 2020 rxi
+  原始许可证文本包含在: [rxi/log.c LICENSE](https://github.com/rxi/log.c/blob/master/LICENSE)
