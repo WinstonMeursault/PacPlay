@@ -17,16 +17,14 @@ SRC_DIR := src
 BUILD_DIR := build
 BIN_DIR := bin
 INC_DIR := include
+TEST_DIR := tests
 
-# ==========================================
-# 3. Targets
-# ==========================================
+# Targets
 SERVER_BIN := $(BIN_DIR)/server
 CLIENT_BIN := $(BIN_DIR)/client
 
-# ==========================================
-# 4. Source File Discovery
-# ==========================================
+# Source File Discovery
+
 # Target-specific sources
 SERVER_SRC := $(shell find $(SRC_DIR)/server -type f -name '*.c')
 CLIENT_SRC := $(shell find $(SRC_DIR)/client -type f -name '*.c')
@@ -34,9 +32,8 @@ CLIENT_SRC := $(shell find $(SRC_DIR)/client -type f -name '*.c')
 # Shared common sources
 COMMON_SRC := $(shell find $(SRC_DIR)/common -type f -name '*.c')
 
-# ==========================================
-# 5. Object File Mapping
-# ==========================================
+# Object File Mapping
+
 # Server-specific objects under build/server/
 SERVER_OBJ := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SERVER_SRC))
 
@@ -55,17 +52,25 @@ CLIENT_ALL_OBJ := $(CLIENT_OBJ) $(COMMON_CLIENT_OBJ)
 SERVER_DEP := $(SERVER_ALL_OBJ:.o=.d)
 CLIENT_DEP := $(CLIENT_ALL_OBJ:.o=.d)
 
-# ==========================================
-# 6. Terminal Output Colors
-# ==========================================
+# Test Discovery
+TEST_SRC := $(shell find $(TEST_DIR) -type f -name 'test_*.c')
+TEST_BIN := $(patsubst $(TEST_DIR)/%.c, $(BIN_DIR)/tests/%, $(TEST_SRC))
+
+# Server and client objects excluding main.o, for test linking
+SERVER_OBJ_NO_MAIN := $(filter-out $(BUILD_DIR)/server/main.o, $(SERVER_OBJ))
+CLIENT_OBJ_NO_MAIN := $(filter-out $(BUILD_DIR)/client/main.o, $(CLIENT_OBJ))
+
+# Each test binary links against common, server, and client objects (excluding main.o)
+TEST_OBJ_PER_BIN = $(patsubst $(TEST_DIR)/%.c, $(BUILD_DIR)/tests/%.o, $(1))
+
+# Terminal Output Colors
 C_GREEN := \033[92m
+C_RED   := \033[91m
 C_BLUE  := \033[94m
 C_RESET := \033[0m
 
-# ==========================================
-# 7. Build Rules
-# ==========================================
-.PHONY: all server client clean run run-server run-client json json-server json-client debug
+# Build Rules
+.PHONY: all server client clean run run-server run-client test json json-server json-client debug
 
 all: $(SERVER_BIN) $(CLIENT_BIN)
 
@@ -128,9 +133,40 @@ $(BIN_DIR):
 -include $(SERVER_DEP)
 -include $(CLIENT_DEP)
 
-# ==========================================
-# 8. Run Targets
-# ==========================================
+# Test Rules
+
+## Build and run all tests
+test: $(TEST_BIN)
+	@echo -e '$(C_GREEN)Running tests...$(C_RESET)'
+	@failCount=0; \
+	for t in $(TEST_BIN); do \
+		if ! ./$$t; then failCount=$$((failCount + 1)); fi; \
+	done; \
+	if [ $$failCount -ne 0 ]; then \
+		echo -e '$(C_RED)$$failCount test suite(s) failed.$(C_RESET)'; \
+		exit 1; \
+	fi; \
+	echo -e '$(C_GREEN)All test suites passed.$(C_RESET)'
+
+# Compile test source files
+$(BUILD_DIR)/tests/%.o: $(TEST_DIR)/%.c
+	@if [ ! -d $(dir $@) ]; then \
+		echo -e '$(C_GREEN)Creating directory: $(dir $@)$(C_RESET)'; \
+		mkdir -p $(dir $@); \
+	fi
+	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
+	@$(CC) $(CFLAGS) $(DEPFLAGS) -I$(INC_DIR) -I$(TEST_DIR) -I$(SRC_DIR)/server -I$(SRC_DIR)/client -c $< -o $@
+
+# Link each test binary against its object + common, server, and client objects (excluding main.o)
+$(BIN_DIR)/tests/%: $(BUILD_DIR)/tests/%.o $(COMMON_SERVER_OBJ) $(SERVER_OBJ_NO_MAIN) $(COMMON_CLIENT_OBJ) $(CLIENT_OBJ_NO_MAIN) | $(BIN_DIR)/tests
+	@echo -e '$(C_GREEN)Linking test: $@$(C_RESET)'
+	@$(CC) $(CFLAGS) $^ -o $@
+
+$(BIN_DIR)/tests:
+	@echo -e '$(C_GREEN)Creating directory: $@/$(C_RESET)'
+	@mkdir -p $@
+
+# Run Targets
 run: run-server
 
 run-server: $(SERVER_BIN)
@@ -141,9 +177,7 @@ run-client: $(CLIENT_BIN)
 	@echo -e '$(C_GREEN)Running client...$(C_RESET)'
 	@./$(CLIENT_BIN)
 
-# ==========================================
-# 9. compile_commands.json Generation
-# ==========================================
+# compile_commands.json Generation
 json:
 	@echo -e '$(C_GREEN)Generating compile_commands.json for all targets...$(C_RESET)'
 	@rm -f compile_commands.json
@@ -154,6 +188,9 @@ json:
 	@$(foreach src, $(CLIENT_SRC) $(COMMON_SRC), \
 		obj=$(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/client/%.o,$(src)); \
 		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) -I$(INC_DIR) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
+	@$(foreach src, $(TEST_SRC), \
+		obj=$(patsubst $(TEST_DIR)/%.c,$(BUILD_DIR)/tests/%.o,$(src)); \
+		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) -I$(INC_DIR) -I$(TEST_DIR) -I$(SRC_DIR)/server -I$(SRC_DIR)/client -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
 	@sed -i '$$ s/,$$//' compile_commands.json
 	@echo "]" >> compile_commands.json
 	@echo -e '$(C_GREEN)compile_commands.json generated!$(C_RESET)'
@@ -180,9 +217,7 @@ json-client:
 	@echo "]" >> compile_commands.json
 	@echo -e '$(C_GREEN)compile_commands.json generated for client!$(C_RESET)'
 
-# ==========================================
-# 10. Debug & Clean
-# ==========================================
+# Debug & Clean
 debug:
 	@echo -e '$(C_BLUE)Server SRC Files:$(C_RESET) \n$(SERVER_SRC)\n'
 	@echo -e '$(C_BLUE)Client SRC Files:$(C_RESET) \n$(CLIENT_SRC)\n'
