@@ -5,7 +5,8 @@ MAKEFLAGS += -j $(shell nproc)
 
 ## Compiler and compilation flags
 CC := clang
-CFLAGS := -Wall -Wextra -Werror -g
+CFLAGS := -Wall -Wextra -Werror -g -Wno-unused-command-line-argument
+LDLIBS := -lssl -lcrypto
 ## Compiler flags for auto-generating dependency files (modern approach, replaces the old sed method)
 DEPFLAGS = -MMD -MP -MF $(@:%.o=%.d)
 
@@ -16,7 +17,7 @@ CLANG_TIDY := clang-tidy
 SRC_DIR := src
 BUILD_DIR := build
 BIN_DIR := bin
-INC_DIR := include
+INC_DIR := include $(SRC_DIR)
 TEST_DIR := tests
 
 # Targets
@@ -70,9 +71,9 @@ C_BLUE  := \033[94m
 C_RESET := \033[0m
 
 # Build Rules
-.PHONY: all server client clean run run-server run-client test json json-server json-client debug
+.PHONY: all server client clean run run-server run-client analyze test json json-server json-client debug
 
-all: $(SERVER_BIN) $(CLIENT_BIN)
+all: analyze $(SERVER_BIN) $(CLIENT_BIN)
 
 server: $(SERVER_BIN)
 
@@ -81,12 +82,12 @@ client: $(CLIENT_BIN)
 # Link server executable
 $(SERVER_BIN): $(SERVER_ALL_OBJ) | $(BIN_DIR)
 	@echo -e '$(C_GREEN)Linking server: $@$(C_RESET)'
-	@$(CC) $(CFLAGS) $^ -o $@
+	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 # Link client executable
 $(CLIENT_BIN): $(CLIENT_ALL_OBJ) | $(BIN_DIR)
 	@echo -e '$(C_GREEN)Linking client: $@$(C_RESET)'
-	@$(CC) $(CFLAGS) $^ -o $@
+	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 # Compile server-specific .c files
 $(BUILD_DIR)/server/%.o: $(SRC_DIR)/server/%.c
@@ -95,7 +96,7 @@ $(BUILD_DIR)/server/%.o: $(SRC_DIR)/server/%.c
 		mkdir -p $(dir $@); \
 	fi
 	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
-	@$(CC) $(CFLAGS) $(DEPFLAGS) -I$(INC_DIR) -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(addprefix -I, $(INC_DIR)) -c $< -o $@
 
 # Compile client-specific .c files
 $(BUILD_DIR)/client/%.o: $(SRC_DIR)/client/%.c
@@ -104,7 +105,7 @@ $(BUILD_DIR)/client/%.o: $(SRC_DIR)/client/%.c
 		mkdir -p $(dir $@); \
 	fi
 	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
-	@$(CC) $(CFLAGS) $(DEPFLAGS) -I$(INC_DIR) -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(addprefix -I, $(INC_DIR)) -c $< -o $@
 
 # Compile shared common code for the server target
 $(BUILD_DIR)/server/common/%.o: $(SRC_DIR)/common/%.c
@@ -113,7 +114,7 @@ $(BUILD_DIR)/server/common/%.o: $(SRC_DIR)/common/%.c
 		mkdir -p $(dir $@); \
 	fi
 	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
-	@$(CC) $(CFLAGS) $(DEPFLAGS) -I$(INC_DIR) -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(addprefix -I, $(INC_DIR)) -c $< -o $@
 
 # Compile shared common code for the client target
 $(BUILD_DIR)/client/common/%.o: $(SRC_DIR)/common/%.c
@@ -122,7 +123,7 @@ $(BUILD_DIR)/client/common/%.o: $(SRC_DIR)/common/%.c
 		mkdir -p $(dir $@); \
 	fi
 	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
-	@$(CC) $(CFLAGS) $(DEPFLAGS) -I$(INC_DIR) -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(addprefix -I, $(INC_DIR)) -c $< -o $@
 
 # Ensure output bin directory exists
 $(BIN_DIR):
@@ -155,12 +156,12 @@ $(BUILD_DIR)/tests/%.o: $(TEST_DIR)/%.c
 		mkdir -p $(dir $@); \
 	fi
 	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
-	@$(CC) $(CFLAGS) $(DEPFLAGS) -I$(INC_DIR) -I$(TEST_DIR) -I$(SRC_DIR)/server -I$(SRC_DIR)/client -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(addprefix -I, $(INC_DIR)) -I$(TEST_DIR) -c $< -o $@
 
-# Link each test binary against its object + common, server, and client objects (excluding main.o)
-$(BIN_DIR)/tests/%: $(BUILD_DIR)/tests/%.o $(COMMON_SERVER_OBJ) $(SERVER_OBJ_NO_MAIN) $(COMMON_CLIENT_OBJ) $(CLIENT_OBJ_NO_MAIN) | $(BIN_DIR)/tests
+# Link each test binary against its object + server build of common objects (excluding main.o)
+$(BIN_DIR)/tests/%: $(BUILD_DIR)/tests/%.o $(COMMON_SERVER_OBJ) $(SERVER_OBJ_NO_MAIN) | $(BIN_DIR)/tests
 	@echo -e '$(C_GREEN)Linking test: $@$(C_RESET)'
-	@$(CC) $(CFLAGS) $^ -o $@
+	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 $(BIN_DIR)/tests:
 	@echo -e '$(C_GREEN)Creating directory: $@/$(C_RESET)'
@@ -176,6 +177,10 @@ run-server: $(SERVER_BIN)
 run-client: $(CLIENT_BIN)
 	@echo -e '$(C_GREEN)Running client...$(C_RESET)'
 	@./$(CLIENT_BIN)
+
+analyze: json
+	@echo -e '$(C_BLUE)Analyzing code..$(C_RESET)'
+	@run-clang-tidy -quiet | (grep -E "warning:|error:" || true)
 
 # compile_commands.json Generation
 json:
@@ -193,7 +198,7 @@ json:
 		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) -I$(INC_DIR) -I$(TEST_DIR) -I$(SRC_DIR)/server -I$(SRC_DIR)/client -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
 	@sed -i '$$ s/,$$//' compile_commands.json
 	@echo "]" >> compile_commands.json
-	@echo -e '$(C_GREEN)compile_commands.json generated!$(C_RESET)'
+	@echo -e '$(C_GREEN)compile_commands.json generated$(C_RESET)'
 
 json-server:
 	@echo -e '$(C_GREEN)Generating compile_commands.json for server...$(C_RESET)'
@@ -204,7 +209,7 @@ json-server:
 		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) -I$(INC_DIR) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
 	@sed -i '$$ s/,$$//' compile_commands.json
 	@echo "]" >> compile_commands.json
-	@echo -e '$(C_GREEN)compile_commands.json generated for server!$(C_RESET)'
+	@echo -e '$(C_GREEN)compile_commands.json generated for server$(C_RESET)'
 
 json-client:
 	@echo -e '$(C_GREEN)Generating compile_commands.json for client...$(C_RESET)'
@@ -215,7 +220,7 @@ json-client:
 		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) -I$(INC_DIR) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
 	@sed -i '$$ s/,$$//' compile_commands.json
 	@echo "]" >> compile_commands.json
-	@echo -e '$(C_GREEN)compile_commands.json generated for client!$(C_RESET)'
+	@echo -e '$(C_GREEN)compile_commands.json generated for client$(C_RESET)'
 
 # Debug & Clean
 debug:

@@ -4,7 +4,7 @@ Checks: >-
   readability-identifier-naming,
   readability-magic-numbers,
   bugprone-*
-HeaderFilterRegex: '.*'
+HeaderFilterRegex: '.'
 WarningsAsErrors: '*'
 CheckOptions:
   - key: readability-identifier-naming.VariableCase

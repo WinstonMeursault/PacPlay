@@ -35,7 +35,6 @@
 *.i*86
 *.x86_64
 *.hex
-bin/
 
 # Debug files
 *.dSYM/
@@ -60,3 +59,5 @@ dkms.conf
 commit_draft.md
 compile_commands.json
 AGENTS.md
+build/
+bin/

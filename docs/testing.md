@@ -148,7 +148,7 @@ ASSERT_UINT_EQ(offsetof(PacketHeader, magic), ExpectedMagicFieldOffset);
 断言表达式为真。若 `expr` 求值为零，则判定失败。
 
 ```c
-ASSERT_TRUE(MAX_PAYLOAD_SIZE > 0);
+ASSERT_TRUE(MAX_PAYLOAD_LEN > 0);
 ```
 
 #### ASSERT_FALSE(expr)
