@@ -23,5 +23,6 @@
  */
 
 #include "protocol.h"
+#include "client/communication.h"
 
 int main() { return 0; }

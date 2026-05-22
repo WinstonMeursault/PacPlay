@@ -26,259 +26,17 @@
 #include "log.h"
 #include "utils.h"
 #include <errno.h>
-#include <openssl/err.h>
-#include <openssl/evp.h>
-#include <openssl/rand.h>
-#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 /* ───────────────────────── internal constants ──────────────────────────── */
 
-#define CIPHER_SUCC (0)
-#define CIPHER_FAIL (-1)
-#define CIPHER_AUTH_FAIL (-2)
-
 /** @brief Size of the AAD used for AES-GCM packet encryption. */
 #define AAD_LEN (sizeof(uint64_t))
 
 /** @brief Number of bits to shift payloadLength when building the AAD. */
 #define AAD_PAYLOAD_SHIFT 32
-
-/* ───────────────────────── internal types ───────────────────────────────── */
-
-/** @brief AES-256-GCM key material: symmetric key + per-message nonce. */
-typedef struct {
-    uint8_t key[AES_GCM_KEY_LEN];
-    uint8_t nonce[AES_GCM_NONCE_LEN];
-} AESGCMKey;
-
-/** @brief General-purpose byte buffer with capacity tracking. */
-typedef struct {
-    uint8_t *data;
-    size_t capacity;
-    size_t len;
-} AESGCMBuffer;
-
-/** @brief Ciphertext buffer with appended authentication tag. */
-typedef struct {
-    AESGCMBuffer buffer;
-    uint8_t tag[AES_GCM_TAG_LEN];
-} AESGCMCipher;
-
-/* ──────────── OpenSSL error-logging helper ──────────────────────────────── */
-
-#define LOG_ERROR_SSL(msg)                                                     \
-    do {                                                                       \
-        unsigned long errCode = ERR_get_error();                               \
-        LOG_ERROR(msg ": %s (SSLERR:%lu)", ERR_reason_error_string(errCode),   \
-                  errCode);                                                    \
-    } while (false)
-
-/* ──────────────────────── AESGCMBuffer helpers ─────────────────────────── */
-
-/**
- * @brief Allocate an AESGCMBuffer with the given capacity.
- *
- * @param buf      Buffer to initialise.
- * @param capacity Number of bytes to allocate.
- * @return @c CIPHER_SUCC on success, @c CIPHER_FAIL on allocation failure.
- */
-static int aesGCMBufferInit(AESGCMBuffer *buf, size_t capacity) {
-    buf->data = malloc(capacity);
-    buf->capacity = capacity;
-    buf->len = 0;
-    if (buf->data == NULL) {
-        LOG_ERROR("Failed to allocate memory for AESGCM buffer: %s (%d)",
-                  strerror(errno), errno);
-        return CIPHER_FAIL;
-    }
-    return CIPHER_SUCC;
-}
-
-/**
- * @brief Free the memory held by an AESGCMBuffer.
- *
- * @param buf Buffer to deinitialise.
- */
-static void aesGCMBufferDeinit(AESGCMBuffer *buf) {
-    free(buf->data);
-    buf->data = NULL;
-}
-
-/* ───────────────────── AES-256-GCM encrypt / decrypt ───────────────────── */
-
-/**
- * @brief Encrypt plaintext using AES-256-GCM.
- *
- * @param plaintext Input plaintext buffer.
- * @param aad       Additional authenticated data, or NULL if unused.
- * @param key       Encryption key and nonce.
- * @param output    Output ciphertext and authentication tag.
- *                  Caller must pre-allocate @c output->buffer.data with at
- *                  least @c plaintext->len bytes.
- * @return @c CIPHER_SUCC on success, @c CIPHER_FAIL on failure.
- */
-static int encryptAESGCM(const AESGCMBuffer *plaintext, const AESGCMBuffer *aad,
-                         const AESGCMKey *key, AESGCMCipher *output) {
-    if (plaintext == NULL || key == NULL || output == NULL ||
-        output->buffer.data == NULL) {
-        return CIPHER_FAIL;
-    }
-
-    if (output->buffer.capacity < plaintext->len) {
-        LOG_ERROR(
-            "Output buffer capacity too small (%zu(capacity) < %zu(length))",
-            output->buffer.capacity, plaintext->len);
-        return CIPHER_FAIL;
-    }
-
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (ctx == NULL) {
-        LOG_ERROR_SSL("Failed to create EVP_CIPHER_CTX");
-        return CIPHER_FAIL;
-    }
-
-    int32_t len = 0;
-    int ret = CIPHER_FAIL;
-
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1) {
-        LOG_ERROR_SSL("Failed to initialize AES-256-GCM encryption");
-        goto cleanup;
-    }
-
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, AES_GCM_NONCE_LEN,
-                            NULL) != 1) {
-        LOG_ERROR_SSL("Failed to set GCM nonce length");
-        goto cleanup;
-    }
-
-    if (EVP_EncryptInit_ex(ctx, NULL, NULL, key->key, key->nonce) != 1) {
-        LOG_ERROR_SSL("Failed to set AES-GCM key and nonce");
-        goto cleanup;
-    }
-
-    /* Feed AAD (authenticated but not encrypted). */
-    if (aad != NULL && aad->len > 0) {
-        if (EVP_EncryptUpdate(ctx, NULL, &len, aad->data, (int32_t)aad->len) !=
-            1) {
-            LOG_ERROR_SSL("Failed to set AAD for AES-GCM encryption");
-            goto cleanup;
-        }
-    }
-
-    if (EVP_EncryptUpdate(ctx, output->buffer.data, &len, plaintext->data,
-                          (int32_t)plaintext->len) != 1) {
-        LOG_ERROR_SSL("Failed to encrypt plaintext");
-        goto cleanup;
-    }
-    output->buffer.len = (size_t)len;
-
-    if (EVP_EncryptFinal_ex(ctx, output->buffer.data + len, &len) != 1) {
-        LOG_ERROR_SSL("Failed to finalize AES-GCM encryption");
-        goto cleanup;
-    }
-
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, AES_GCM_TAG_LEN,
-                            output->tag) != 1) {
-        LOG_ERROR_SSL("Failed to get AES-GCM authentication tag");
-        goto cleanup;
-    }
-
-    ret = CIPHER_SUCC;
-
-cleanup:
-    EVP_CIPHER_CTX_free(ctx);
-    return ret;
-}
-
-/**
- * @brief Decrypt ciphertext using AES-256-GCM.
- *
- * @param cipher    Input ciphertext, length, and authentication tag.
- * @param aad       Additional authenticated data, or NULL if unused.
- *                  Must match the AAD used during encryption.
- * @param key       Decryption key and nonce.
- * @param plaintext Output plaintext buffer. Caller must pre-allocate
- *                  @c plaintext->data with at least @c cipher->buffer.len
- *                  bytes.
- * @return @c CIPHER_SUCC on success, @c CIPHER_FAIL on internal failure,
- *         @c CIPHER_AUTH_FAIL on authentication tag verification failure.
- */
-static int decryptAESGCM(const AESGCMCipher *cipher, const AESGCMBuffer *aad,
-                         const AESGCMKey *key, AESGCMBuffer *plaintext) {
-    if (cipher == NULL || key == NULL || plaintext == NULL ||
-        plaintext->data == NULL) {
-        return CIPHER_FAIL;
-    }
-
-    if (plaintext->capacity < cipher->buffer.len) {
-        LOG_ERROR(
-            "Output buffer capacity too small (%zu(capacity) < %zu(length))",
-            plaintext->capacity, cipher->buffer.len);
-        return CIPHER_FAIL;
-    }
-
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (ctx == NULL) {
-        LOG_ERROR_SSL("Failed to create EVP_CIPHER_CTX");
-        return CIPHER_FAIL;
-    }
-
-    int32_t len = 0;
-    int ret = CIPHER_FAIL;
-
-    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1) {
-        LOG_ERROR_SSL("Failed to initialize AES-256-GCM decryption");
-        goto cleanup;
-    }
-
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, AES_GCM_NONCE_LEN,
-                            NULL) != 1) {
-        LOG_ERROR_SSL("Failed to set GCM nonce length");
-        goto cleanup;
-    }
-
-    if (EVP_DecryptInit_ex(ctx, NULL, NULL, key->key, key->nonce) != 1) {
-        LOG_ERROR_SSL("Failed to set AES-GCM key and nonce");
-        goto cleanup;
-    }
-
-    /* Feed AAD (must match what was used during encryption). */
-    if (aad != NULL && aad->len > 0) {
-        if (EVP_DecryptUpdate(ctx, NULL, &len, aad->data, (int32_t)aad->len) !=
-            1) {
-            LOG_ERROR_SSL("Failed to set AAD for AES-GCM decryption");
-            goto cleanup;
-        }
-    }
-
-    if (EVP_DecryptUpdate(ctx, plaintext->data, &len, cipher->buffer.data,
-                          (int32_t)cipher->buffer.len) != 1) {
-        LOG_ERROR_SSL("Failed to decrypt ciphertext");
-        goto cleanup;
-    }
-    plaintext->len = (size_t)len;
-
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, AES_GCM_TAG_LEN,
-                            (void *)(uintptr_t)cipher->tag) != 1) {
-        LOG_ERROR_SSL("Failed to set AES-GCM authentication tag");
-        goto cleanup;
-    }
-
-    if (EVP_DecryptFinal_ex(ctx, plaintext->data + len, &len) != 1) {
-        LOG_ERROR_SSL("AES-GCM tag verification failed");
-        EVP_CIPHER_CTX_free(ctx);
-        return CIPHER_AUTH_FAIL;
-    }
-
-    ret = CIPHER_SUCC;
-
-cleanup:
-    EVP_CIPHER_CTX_free(ctx);
-    return ret;
-}
 
 /* ──────────────────── AAD helper ───────────────────────────────────────── */
 
@@ -329,8 +87,15 @@ static int sendAll(SocketFD socketFD, const void *data, size_t totalLen) {
 
     while (remaining > 0) {
         ssize_t sent = send(socketFD, ptr, remaining, MSG_NOSIGNAL);
-        if (sent <= 0) {
+        if (sent < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
             LOG_ERROR("Failed to send data: %s (%d)", strerror(errno), errno);
+            return PROTOCOL_FAIL;
+        }
+        if (sent == 0) {
+            LOG_ERROR("Failed to send data: connection closed");
             return PROTOCOL_FAIL;
         }
         ptr += sent;
@@ -353,9 +118,16 @@ static int recvAll(SocketFD socketFD, void *data, size_t totalLen) {
 
     while (remaining > 0) {
         ssize_t received = recv(socketFD, ptr, remaining, MSG_NOSIGNAL);
-        if (received <= 0) {
+        if (received < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
             LOG_ERROR("Failed to receive data: %s (%d)", strerror(errno),
                       errno);
+            return PROTOCOL_FAIL;
+        }
+        if (received == 0) {
+            LOG_ERROR("Failed to receive data: connection closed by peer");
             return PROTOCOL_FAIL;
         }
         ptr += received;
@@ -399,6 +171,11 @@ cleanup:
 }
 
 SocketFD clientSetup(const char *serverAddress, uint16_t serverPort) {
+    if (serverAddress == NULL) {
+        LOG_ERROR("clientSetup: NULL server address");
+        return NULL_SOCKETFD;
+    }
+
     struct sockaddr_in serverSockAddr;
 
     SocketFD socketFD = socketOpen();
@@ -434,6 +211,9 @@ cleanup:
 }
 
 void socketClose(SocketFD *socketFD) {
+    if (socketFD == NULL) {
+        return;
+    }
     if (*socketFD >= 0) {
         int32_t result;
 #ifdef _WIN32
@@ -451,7 +231,55 @@ void socketClose(SocketFD *socketFD) {
 
 /* ──────────────────── public API: packet lifecycle ──────────────────────── */
 
+/* payloadLength sits between MessageType/PacketType (enums) and
+ * seqID/dataLen (unsigned integers); even with reordering, the remaining
+ * adjacent integral parameters cannot be fully separated.  Suppress the
+ * adjacent-parameters check for this constructor. */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+int packetInit(Packet *packet, MessageType msgType, uint32_t seqID,
+               PacketType pktType, const void *data, size_t dataLen) {
+    if (packet == NULL) {
+        return PROTOCOL_FAIL;
+    }
+    if (packet->payload != NULL) {
+        LOG_ERROR("packetInit: payload is not NULL; must be cleared first");
+        return PROTOCOL_FAIL;
+    }
+    if (dataLen > MAX_PAYLOAD_LEN) {
+        LOG_ERROR("packetInit: dataLen %zu exceeds MAX_PAYLOAD_LEN %d", dataLen,
+                  MAX_PAYLOAD_LEN);
+        return PROTOCOL_FAIL;
+    }
+    if (dataLen > 0 && data == NULL) {
+        LOG_ERROR("packetInit: dataLen %zu > 0 but data is NULL", dataLen);
+        return PROTOCOL_FAIL;
+    }
+
+    packet->header.magic = PACKET_MAGIC;
+    packet->header.packetType = pktType;
+    packet->header.messageType = msgType;
+    packet->header.payloadLength = dataLen;
+    packet->header.sequenceID = seqID;
+
+    if (dataLen > 0) {
+        packet->payload = malloc(dataLen);
+        if (packet->payload == NULL) {
+            LOG_ERROR("packetInit: failed to allocate payload: %s (%d)",
+                      strerror(errno), errno);
+            return PROTOCOL_FAIL;
+        }
+        memcpy(packet->payload, data, dataLen);
+    } else {
+        packet->payload = NULL;
+    }
+
+    return PROTOCOL_SUCC;
+}
+
 void packetClear(Packet *packet) {
+    if (packet == NULL) {
+        return;
+    }
     free(packet->payload);
     packet->payload = NULL;
 }
@@ -461,6 +289,12 @@ void packetClear(Packet *packet) {
 int packetSerialize(const Packet *packet, uint8_t *buffer, size_t bufferSize,
                     size_t *serializedSize) {
     if (packet == NULL || buffer == NULL || serializedSize == NULL) {
+        return PROTOCOL_FAIL;
+    }
+
+    /* Guard against integer overflow in size calculation. */
+    if (packet->header.payloadLength > SIZE_MAX - sizeof(PacketHeader)) {
+        LOG_ERROR("Payload length overflow in serialize");
         return PROTOCOL_FAIL;
     }
 
@@ -499,6 +333,22 @@ int packetDeserialize(const uint8_t *buffer, size_t bufferSize,
 
     if (packet->header.magic != PACKET_MAGIC) {
         LOG_ERROR("Invalid packet magic: 0x%08X", packet->header.magic);
+        return PROTOCOL_FAIL;
+    }
+
+    /* Validate payload length against protocol limits. */
+    size_t maxPayload = (packet->header.packetType == AES256GCMPacket)
+                            ? MAX_PAYLOAD_LEN + AES_PACKET_EXTRA_LEN
+                            : MAX_PAYLOAD_LEN;
+    if (packet->header.payloadLength > maxPayload) {
+        LOG_ERROR("Payload length exceeds protocol limit (%zu > %zu)",
+                  packet->header.payloadLength, maxPayload);
+        return PROTOCOL_FAIL;
+    }
+
+    /* Guard against integer overflow in size calculation. */
+    if (packet->header.payloadLength > SIZE_MAX - sizeof(PacketHeader)) {
+        LOG_ERROR("Payload length overflow in deserialize");
         return PROTOCOL_FAIL;
     }
 
@@ -547,31 +397,31 @@ int packetAESEncrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
     /* 1. Generate random nonce and build key material. */
     AESGCMKey aesKey;
     memcpy(aesKey.key, key, AES_GCM_KEY_LEN);
-    if (RAND_bytes(aesKey.nonce, AES_GCM_NONCE_LEN) != 1) {
-        LOG_ERROR_SSL("Failed to generate random nonce");
+    if (cryptoRandomBytes(aesKey.nonce, AES_GCM_NONCE_LEN) != CRYPTO_SUCC) {
+        OPENSSL_cleanse(&aesKey, sizeof(aesKey));
         return PROTOCOL_FAIL;
     }
 
     /* 2. Build AAD: (payloadLength << 32) | sequenceID. */
     uint64_t aadValue = buildAAD(plaintextLen, packet->header.sequenceID);
-    AESGCMBuffer aad = {.data = (uint8_t *)&aadValue,
-                        .capacity = AAD_LEN,
-                        .len = AAD_LEN};
+    AESGCMBuffer aad = {
+        .data = (uint8_t *)&aadValue, .capacity = AAD_LEN, .len = AAD_LEN};
 
     /* 3. Prepare plaintext buffer (references existing payload, no copy). */
-    AESGCMBuffer plaintext = {.data = packet->payload,
-                              .capacity = plaintextLen,
-                              .len = plaintextLen};
+    AESGCMBuffer plaintext = {
+        .data = packet->payload, .capacity = plaintextLen, .len = plaintextLen};
 
     /* 4. Allocate ciphertext output buffer. */
     AESGCMCipher cipher;
-    if (aesGCMBufferInit(&cipher.buffer, plaintextLen) != CIPHER_SUCC) {
+    if (aesGCMBufferInit(&cipher.buffer, plaintextLen) != CRYPTO_SUCC) {
+        OPENSSL_cleanse(&aesKey, sizeof(aesKey));
         return PROTOCOL_FAIL;
     }
 
     /* 5. Encrypt. */
-    if (encryptAESGCM(&plaintext, &aad, &aesKey, &cipher) != CIPHER_SUCC) {
+    if (encryptAESGCM(&plaintext, &aad, &aesKey, &cipher) != CRYPTO_SUCC) {
         aesGCMBufferDeinit(&cipher.buffer);
+        OPENSSL_cleanse(&aesKey, sizeof(aesKey));
         return PROTOCOL_FAIL;
     }
 
@@ -583,6 +433,7 @@ int packetAESEncrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
         LOG_ERROR("Failed to allocate encrypted payload: %s (%d)",
                   strerror(errno), errno);
         aesGCMBufferDeinit(&cipher.buffer);
+        OPENSSL_cleanse(&aesKey, sizeof(aesKey));
         return PROTOCOL_FAIL;
     }
 
@@ -594,12 +445,14 @@ int packetAESEncrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
     memcpy(cursor, cipher.tag, AES_GCM_TAG_LEN);
 
     /* 7. Replace old payload with encrypted payload. */
+    OPENSSL_cleanse(packet->payload, plaintextLen);
     free(packet->payload);
     packet->payload = newPayload;
     packet->header.payloadLength = newPayloadLen;
     packet->header.packetType = AES256GCMPacket;
 
     aesGCMBufferDeinit(&cipher.buffer);
+    OPENSSL_cleanse(&aesKey, sizeof(aesKey));
     return PROTOCOL_SUCC;
 }
 
@@ -620,8 +473,7 @@ int packetAESDecrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
     }
 
     /* 1. Parse flat payload: nonce(12) || ciphertext(N) || tag(16). */
-    size_t ciphertextLen =
-        packet->header.payloadLength - AES_PACKET_EXTRA_LEN;
+    size_t ciphertextLen = packet->header.payloadLength - AES_PACKET_EXTRA_LEN;
     uint8_t *payloadPtr = packet->payload;
 
     uint8_t nonce[AES_GCM_NONCE_LEN];
@@ -642,9 +494,8 @@ int packetAESDecrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
 
     /* 3. Reconstruct AAD: original payloadLength == ciphertextLen. */
     uint64_t aadValue = buildAAD(ciphertextLen, packet->header.sequenceID);
-    AESGCMBuffer aad = {.data = (uint8_t *)&aadValue,
-                        .capacity = AAD_LEN,
-                        .len = AAD_LEN};
+    AESGCMBuffer aad = {
+        .data = (uint8_t *)&aadValue, .capacity = AAD_LEN, .len = AAD_LEN};
 
     /* 4. Set up cipher input (references existing payload, no extra copy). */
     AESGCMCipher cipher;
@@ -655,19 +506,22 @@ int packetAESDecrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
 
     /* 5. Allocate plaintext output buffer. */
     AESGCMBuffer plaintext;
-    if (aesGCMBufferInit(&plaintext, ciphertextLen) != CIPHER_SUCC) {
+    if (aesGCMBufferInit(&plaintext, ciphertextLen) != CRYPTO_SUCC) {
+        OPENSSL_cleanse(&aesKey, sizeof(aesKey));
         return PROTOCOL_FAIL;
     }
 
     /* 6. Decrypt. If tag verification fails, return authentication error. */
     int decryptRet = decryptAESGCM(&cipher, &aad, &aesKey, &plaintext);
-    if (decryptRet == CIPHER_AUTH_FAIL) {
+    if (decryptRet == CRYPTO_AUTH_FAIL) {
         LOG_ERROR("Decryption authentication failed: AAD or payload tampered");
         aesGCMBufferDeinit(&plaintext);
+        OPENSSL_cleanse(&aesKey, sizeof(aesKey));
         return PROTOCOL_AUTH_FAIL;
     }
-    if (decryptRet != CIPHER_SUCC) {
+    if (decryptRet != CRYPTO_SUCC) {
         aesGCMBufferDeinit(&plaintext);
+        OPENSSL_cleanse(&aesKey, sizeof(aesKey));
         return PROTOCOL_FAIL;
     }
 
@@ -677,6 +531,7 @@ int packetAESDecrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
     if (verifyAAD != aadValue) {
         LOG_ERROR("Post-decryption AAD mismatch");
         aesGCMBufferDeinit(&plaintext);
+        OPENSSL_cleanse(&aesKey, sizeof(aesKey));
         return PROTOCOL_AUTH_FAIL;
     }
 
@@ -687,6 +542,7 @@ int packetAESDecrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
     packet->header.packetType = PlaintextPacket;
 
     /* Do NOT call aesGCMBufferDeinit here; ownership transferred to packet. */
+    OPENSSL_cleanse(&aesKey, sizeof(aesKey));
     return PROTOCOL_SUCC;
 }
 
@@ -725,6 +581,13 @@ int packetRecv(Packet *dest, SocketFD socketFD) {
     /* Validate magic. */
     if (dest->header.magic != PACKET_MAGIC) {
         LOG_ERROR("Received invalid packet magic: 0x%08X", dest->header.magic);
+        return PROTOCOL_FAIL;
+    }
+
+    /* Validate packet type. */
+    if (dest->header.packetType != PlaintextPacket &&
+        dest->header.packetType != AES256GCMPacket) {
+        LOG_ERROR("Received unknown packet type: %d", dest->header.packetType);
         return PROTOCOL_FAIL;
     }
 

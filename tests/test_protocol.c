@@ -155,13 +155,9 @@ static void testMaxPayloadLen(void) {
     ASSERT_TRUE(MAX_PAYLOAD_LEN > 0);
 }
 
-/** @brief AES-GCM constant sizes. */
-static void testAESConstants(void) {
-    enum { ExpectedKeyLen = 32, ExpectedNonceLen = 12, ExpectedTagLen = 16 };
-    ASSERT_UINT_EQ(AES_GCM_KEY_LEN, ExpectedKeyLen);
-    ASSERT_UINT_EQ(AES_GCM_NONCE_LEN, ExpectedNonceLen);
-    ASSERT_UINT_EQ(AES_GCM_TAG_LEN, ExpectedTagLen);
-    ASSERT_UINT_EQ(AES_PACKET_EXTRA_LEN, ExpectedNonceLen + ExpectedTagLen);
+/** @brief AES_PACKET_EXTRA_LEN is consistent with crypto constants. */
+static void testAESPacketExtraLen(void) {
+    ASSERT_UINT_EQ(AES_PACKET_EXTRA_LEN, AES_GCM_NONCE_LEN + AES_GCM_TAG_LEN);
 }
 
 /** @brief PacketType enum values are stable. */
@@ -174,12 +170,14 @@ static void testPacketTypeValues(void) {
 static void testMessageTypeValues(void) {
     ASSERT_INT_EQ(MsgLoginReq, 1);
     ASSERT_INT_EQ(MsgLoginResp, 2);
-    ASSERT_INT_EQ(MsgChat, 3);
-    ASSERT_INT_EQ(MsgCreateRoom, 4);
-    ASSERT_INT_EQ(MsgJoinRoom, 5);
-    ASSERT_INT_EQ(MsgGameStart, 6);
-    ASSERT_INT_EQ(MsgGameStop, 7);
-    ASSERT_INT_EQ(MsgHeartbeat, 8);
+    ASSERT_INT_EQ(MsgKeyExchangeReq, 3);
+    ASSERT_INT_EQ(MsgKeyExchangeResp, 4);
+    ASSERT_INT_EQ(MsgChat, 5);
+    ASSERT_INT_EQ(MsgCreateRoom, 6);
+    ASSERT_INT_EQ(MsgJoinRoom, 7);
+    ASSERT_INT_EQ(MsgGameStart, 8);
+    ASSERT_INT_EQ(MsgGameStop, 9);
+    ASSERT_INT_EQ(MsgHeartbeat, 10);
 }
 
 /** @brief NULL_SOCKETFD sentinel value. */
@@ -1298,6 +1296,88 @@ static void testClientSetupConnectionRefused(void) {
     ASSERT_INT_EQ(fd, NULL_SOCKETFD);
 }
 
+/* ═══════════════ 13. Security Hardening Tests ═════════════════════════ */
+
+/** @brief packetClear(NULL) does not crash. */
+static void testPacketClearNull(void) {
+    packetClear(NULL);
+    ASSERT_TRUE(1); /* Reached here without segfault. */
+}
+
+/** @brief socketClose(NULL) does not crash. */
+static void testSocketCloseNull(void) {
+    socketClose(NULL);
+    ASSERT_TRUE(1); /* Reached here without segfault. */
+}
+
+/** @brief clientSetup with NULL address returns NULL_SOCKETFD. */
+static void testClientSetupNullAddress(void) {
+    enum { AnyPort = 8080 };
+    SocketFD fd = clientSetup(NULL, AnyPort);
+    ASSERT_INT_EQ(fd, NULL_SOCKETFD);
+}
+
+/** @brief packetDeserialize rejects payload length exceeding protocol max. */
+static void testDeserializePayloadLengthExceedsMax(void) {
+    /* Build a raw buffer with a valid magic but payloadLength >
+     * MAX_PAYLOAD_LEN.
+     */
+    Packet src;
+    src.header.magic = PACKET_MAGIC;
+    src.header.packetType = PlaintextPacket;
+    src.header.messageType = MsgChat;
+    src.header.payloadLength = MAX_PAYLOAD_LEN + 1;
+    src.header.sequenceID = 0;
+
+    /* We only need the header bytes for this test. */
+    uint8_t buffer[sizeof(PacketHeader) + MAX_PAYLOAD_LEN + 1];
+    memcpy(buffer, &src.header, sizeof(PacketHeader));
+    /* Fill fake payload area. */
+    memset(buffer + sizeof(PacketHeader), 0, MAX_PAYLOAD_LEN + 1);
+
+    Packet result;
+    result.payload = NULL;
+    ASSERT_INT_EQ(packetDeserialize(buffer, sizeof(buffer), &result),
+                  PROTOCOL_FAIL);
+}
+
+/** @brief packetSerialize with payloadLength near SIZE_MAX returns failure. */
+static void testSerializePayloadLengthOverflow(void) {
+    Packet pkt;
+    pkt.header.magic = PACKET_MAGIC;
+    pkt.header.packetType = PlaintextPacket;
+    pkt.header.messageType = MsgChat;
+    pkt.header.payloadLength = SIZE_MAX; /* triggers overflow check */
+    pkt.header.sequenceID = 0;
+    pkt.payload = NULL;
+
+    enum { BufSize = 128 };
+    uint8_t buffer[BufSize];
+    size_t serializedSize = 0;
+
+    ASSERT_INT_EQ(packetSerialize(&pkt, buffer, BufSize, &serializedSize),
+                  PROTOCOL_FAIL);
+}
+
+/** @brief packetDeserialize with payloadLength near SIZE_MAX (overflow). */
+static void testDeserializePayloadLengthOverflow(void) {
+    /* Craft a header with payloadLength = SIZE_MAX. */
+    PacketHeader hdr;
+    hdr.magic = PACKET_MAGIC;
+    hdr.packetType = PlaintextPacket;
+    hdr.messageType = MsgChat;
+    hdr.payloadLength = SIZE_MAX;
+    hdr.sequenceID = 0;
+
+    uint8_t buffer[sizeof(PacketHeader)];
+    memcpy(buffer, &hdr, sizeof(PacketHeader));
+
+    Packet result;
+    result.payload = NULL;
+    ASSERT_INT_EQ(packetDeserialize(buffer, sizeof(buffer), &result),
+                  PROTOCOL_FAIL);
+}
+
 /* ═══════════════════════  main  ════════════════════════════════════════ */
 
 /**
@@ -1311,7 +1391,7 @@ int main(void) {
     /* 1. Constants & Enums */
     RUN_TEST(testPacketMagicValue);
     RUN_TEST(testMaxPayloadLen);
-    RUN_TEST(testAESConstants);
+    RUN_TEST(testAESPacketExtraLen);
     RUN_TEST(testPacketTypeValues);
     RUN_TEST(testMessageTypeValues);
     RUN_TEST(testNullSocketFD);
@@ -1407,6 +1487,14 @@ int main(void) {
     RUN_TEST(testServerSetupEphemeralPort);
     RUN_TEST(testClientSetupInvalidAddress);
     RUN_TEST(testClientSetupConnectionRefused);
+
+    /* 13. Security Hardening */
+    RUN_TEST(testPacketClearNull);
+    RUN_TEST(testSocketCloseNull);
+    RUN_TEST(testClientSetupNullAddress);
+    RUN_TEST(testDeserializePayloadLengthExceedsMax);
+    RUN_TEST(testSerializePayloadLengthOverflow);
+    RUN_TEST(testDeserializePayloadLengthOverflow);
 
     return TEST_REPORT();
 }

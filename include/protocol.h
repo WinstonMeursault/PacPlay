@@ -25,6 +25,8 @@
 #ifndef PROTOCOL_H
 #define PROTOCOL_H
 
+#include "crypto.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -40,10 +42,6 @@
 #define PROTOCOL_AUTH_FAIL (-2)
 
 #define MAX_PAYLOAD_LEN 1024
-
-#define AES_GCM_KEY_LEN 32
-#define AES_GCM_NONCE_LEN 12
-#define AES_GCM_TAG_LEN 16
 
 /** @brief Extra bytes added by AES-256-GCM encryption: nonce + tag. */
 #define AES_PACKET_EXTRA_LEN (AES_GCM_NONCE_LEN + AES_GCM_TAG_LEN)
@@ -67,6 +65,9 @@ typedef enum {
 typedef enum {
     MsgLoginReq = 1,
     MsgLoginResp,
+
+    MsgKeyExchangeReq,
+    MsgKeyExchangeResp,
 
     MsgChat,
 
@@ -95,6 +96,14 @@ typedef struct {
     PacketHeader header;
     uint8_t *payload;
 } Packet;
+
+#pragma pack(push, 1)
+
+typedef struct {
+    uint8_t publicKey[ECDH_PUBLIC_KEY_SIZE];
+} KeyExchangePacketPayload;
+
+#pragma pack(pop)
 
 /**
  * @brief Setup a server.
@@ -133,6 +142,25 @@ SocketFD clientSetup(const char *serverAddress, uint16_t serverPort);
  * whether the fd is valid.
  */
 void socketClose(SocketFD *socketFD);
+
+/**
+ * @brief Initialise a packet with header fields and a copy of the payload.
+ *
+ * Allocates memory for @p data of @p dataLen bytes and copies it into
+ * @c packet->payload.  All header fields are set according to the parameters.
+ *
+ * @param packet   The packet to initialise.  @c packet->payload MUST be NULL
+ *                 on entry; otherwise the call returns @c PROTOCOL_FAIL.
+ * @param msgType  Application-layer message type.
+ * @param seqID    Sequence number for this packet.
+ * @param pktType  Packet encryption type (e.g. @c PlaintextPacket).
+ * @param data     Pointer to the payload data to copy, or @c NULL if
+ *                 @p dataLen is zero.
+ * @param dataLen  Length of @p data in bytes.  Must be &le; @c MAX_PAYLOAD_LEN.
+ * @return @c PROTOCOL_SUCC on success, @c PROTOCOL_FAIL on failure.
+ */
+int packetInit(Packet *packet, MessageType msgType, uint32_t seqID,
+               PacketType pktType, const void *data, size_t dataLen);
 
 /**
  * @brief Clear a packet.

@@ -18,6 +18,7 @@ SRC_DIR := src
 BUILD_DIR := build
 BIN_DIR := bin
 INC_DIR := include $(SRC_DIR)
+INC_FLAGS := $(addprefix -I, $(INC_DIR))
 TEST_DIR := tests
 
 # Targets
@@ -96,7 +97,7 @@ $(BUILD_DIR)/server/%.o: $(SRC_DIR)/server/%.c
 		mkdir -p $(dir $@); \
 	fi
 	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
-	@$(CC) $(CFLAGS) $(DEPFLAGS) $(addprefix -I, $(INC_DIR)) -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INC_FLAGS) -c $< -o $@
 
 # Compile client-specific .c files
 $(BUILD_DIR)/client/%.o: $(SRC_DIR)/client/%.c
@@ -105,7 +106,7 @@ $(BUILD_DIR)/client/%.o: $(SRC_DIR)/client/%.c
 		mkdir -p $(dir $@); \
 	fi
 	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
-	@$(CC) $(CFLAGS) $(DEPFLAGS) $(addprefix -I, $(INC_DIR)) -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INC_FLAGS) -c $< -o $@
 
 # Compile shared common code for the server target
 $(BUILD_DIR)/server/common/%.o: $(SRC_DIR)/common/%.c
@@ -114,7 +115,7 @@ $(BUILD_DIR)/server/common/%.o: $(SRC_DIR)/common/%.c
 		mkdir -p $(dir $@); \
 	fi
 	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
-	@$(CC) $(CFLAGS) $(DEPFLAGS) $(addprefix -I, $(INC_DIR)) -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INC_FLAGS) -c $< -o $@
 
 # Compile shared common code for the client target
 $(BUILD_DIR)/client/common/%.o: $(SRC_DIR)/common/%.c
@@ -123,7 +124,7 @@ $(BUILD_DIR)/client/common/%.o: $(SRC_DIR)/common/%.c
 		mkdir -p $(dir $@); \
 	fi
 	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
-	@$(CC) $(CFLAGS) $(DEPFLAGS) $(addprefix -I, $(INC_DIR)) -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INC_FLAGS) -c $< -o $@
 
 # Ensure output bin directory exists
 $(BIN_DIR):
@@ -156,10 +157,10 @@ $(BUILD_DIR)/tests/%.o: $(TEST_DIR)/%.c
 		mkdir -p $(dir $@); \
 	fi
 	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
-	@$(CC) $(CFLAGS) $(DEPFLAGS) $(addprefix -I, $(INC_DIR)) -I$(TEST_DIR) -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INC_FLAGS) -I$(TEST_DIR) -c $< -o $@
 
-# Link each test binary against its object + server build of common objects (excluding main.o)
-$(BIN_DIR)/tests/%: $(BUILD_DIR)/tests/%.o $(COMMON_SERVER_OBJ) $(SERVER_OBJ_NO_MAIN) | $(BIN_DIR)/tests
+# Link each test binary against its object + server & client build of common objects (excluding main.o)
+$(BIN_DIR)/tests/%: $(BUILD_DIR)/tests/%.o $(COMMON_SERVER_OBJ) $(SERVER_OBJ_NO_MAIN) $(CLIENT_OBJ_NO_MAIN) | $(BIN_DIR)/tests
 	@echo -e '$(C_GREEN)Linking test: $@$(C_RESET)'
 	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
@@ -189,13 +190,13 @@ json:
 	@echo "[" > compile_commands.json
 	@$(foreach src, $(SERVER_SRC) $(COMMON_SRC), \
 		obj=$(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/server/%.o,$(src)); \
-		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) -I$(INC_DIR) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
+		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) $(INC_FLAGS) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
 	@$(foreach src, $(CLIENT_SRC) $(COMMON_SRC), \
 		obj=$(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/client/%.o,$(src)); \
-		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) -I$(INC_DIR) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
+		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) $(INC_FLAGS) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
 	@$(foreach src, $(TEST_SRC), \
 		obj=$(patsubst $(TEST_DIR)/%.c,$(BUILD_DIR)/tests/%.o,$(src)); \
-		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) -I$(INC_DIR) -I$(TEST_DIR) -I$(SRC_DIR)/server -I$(SRC_DIR)/client -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
+		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) $(INC_FLAGS) -I$(TEST_DIR) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
 	@sed -i '$$ s/,$$//' compile_commands.json
 	@echo "]" >> compile_commands.json
 	@echo -e '$(C_GREEN)compile_commands.json generated$(C_RESET)'
@@ -206,7 +207,7 @@ json-server:
 	@echo "[" > compile_commands.json
 	@$(foreach src, $(SERVER_SRC) $(COMMON_SRC), \
 		obj=$(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/server/%.o,$(src)); \
-		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) -I$(INC_DIR) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
+		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) $(INC_FLAGS) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
 	@sed -i '$$ s/,$$//' compile_commands.json
 	@echo "]" >> compile_commands.json
 	@echo -e '$(C_GREEN)compile_commands.json generated for server$(C_RESET)'
@@ -217,7 +218,7 @@ json-client:
 	@echo "[" > compile_commands.json
 	@$(foreach src, $(CLIENT_SRC) $(COMMON_SRC), \
 		obj=$(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/client/%.o,$(src)); \
-		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) -I$(INC_DIR) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
+		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) $(INC_FLAGS) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
 	@sed -i '$$ s/,$$//' compile_commands.json
 	@echo "]" >> compile_commands.json
 	@echo -e '$(C_GREEN)compile_commands.json generated for client$(C_RESET)'

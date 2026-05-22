@@ -210,7 +210,7 @@ static int testsFailed = 0; /**< Number of tests that failed so far. */
  * @endcode
  */
 #define TEST_REPORT()                                                          \
-    (printf("\n%d passed, %d failed\n", testsPassed, testsFailed),             \
+    (printf("\n%d passed, %d failed\n\n", testsPassed, testsFailed),             \
      testsFailed > 0 ? 1 : 0)
 
 #endif /* TEST_UTILS_H */
