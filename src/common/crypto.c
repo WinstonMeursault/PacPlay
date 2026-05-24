@@ -30,6 +30,7 @@
 #include "log.h"
 #include <errno.h>
 #include <limits.h>
+#include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
@@ -437,6 +438,233 @@ int deriveAESKey(const uint8_t *sharedSecret, size_t secretLen,
 
     EVP_KDF_CTX_free(kctx);
     return CRYPTO_SUCC;
+}
+
+/* ──────────────────────── Password Hashing ─────────────────────────────── */
+
+/**
+ * @brief Convert a byte array to a lowercase hex string.
+ *
+ * Writes (len * 2) hex characters plus a NUL terminator into @p out.
+ * The caller must ensure @p out has at least (len * 2 + 1) bytes available.
+ */
+static void bytesToHex(const uint8_t *bytes, size_t len, char *out) {
+    static const char hexDigits[] = "0123456789abcdef";
+    enum { NibbleMask = 0x0F, HexShiftBits = 4 };
+    for (size_t i = 0; i < len; i++) {
+        out[i * 2] = hexDigits[(bytes[i] >> HexShiftBits) & NibbleMask];
+        out[i * 2 + 1] = hexDigits[bytes[i] & NibbleMask];
+    }
+    out[len * 2] = '\0';
+}
+
+/**
+ * @brief Parse a single hex character to its nibble value.
+ *
+ * @return The 4-bit value (0-15), or -1 if the character is invalid hex.
+ */
+static int hexCharToNibble(char c) {
+    enum { HexBaseValue = 10 };
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + HexBaseValue;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + HexBaseValue;
+    }
+    return -1;
+}
+
+/**
+ * @brief Convert a hex string to a byte array.
+ *
+ * @param hex     Input hex string (must contain exactly len*2 valid hex chars).
+ * @param bytes   Output byte buffer.
+ * @param len     Expected number of output bytes.
+ * @return @c CRYPTO_SUCC on success, @c CRYPTO_FAIL on invalid hex input.
+ */
+static int hexToBytes(const char *hex, uint8_t *bytes, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        int high = hexCharToNibble(hex[i * 2]);
+        int low = hexCharToNibble(hex[i * 2 + 1]);
+        if (high < 0 || low < 0) {
+            return CRYPTO_FAIL;
+        }
+        bytes[i] = (uint8_t)((high << 4) | low);
+    }
+    return CRYPTO_SUCC;
+}
+
+/**
+ * @brief Compute SHA-256(password || salt).
+ *
+ * @param password  Null-terminated password string.
+ * @param passLen   Length of password (excluding NUL).
+ * @param salt      Salt bytes.
+ * @param saltLen   Length of salt.
+ * @param digest    Output buffer (must be at least HASH_SHA256_LEN bytes).
+ * @return @c CRYPTO_SUCC on success, @c CRYPTO_FAIL on failure.
+ */
+static int computePasswordHash(const char *password, size_t passLen,
+                               const uint8_t *salt, size_t saltLen,
+                               uint8_t digest[HASH_SHA256_LEN]) {
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (ctx == NULL) {
+        LOG_ERROR_SSL("Failed to create EVP_MD_CTX for password hashing");
+        return CRYPTO_FAIL;
+    }
+
+    if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1) {
+        LOG_ERROR_SSL("EVP_DigestInit_ex failed for SHA-256");
+        EVP_MD_CTX_free(ctx);
+        return CRYPTO_FAIL;
+    }
+
+    if (EVP_DigestUpdate(ctx, password, passLen) != 1) {
+        LOG_ERROR_SSL("EVP_DigestUpdate failed (password)");
+        EVP_MD_CTX_free(ctx);
+        return CRYPTO_FAIL;
+    }
+
+    if (EVP_DigestUpdate(ctx, salt, saltLen) != 1) {
+        LOG_ERROR_SSL("EVP_DigestUpdate failed (salt)");
+        EVP_MD_CTX_free(ctx);
+        return CRYPTO_FAIL;
+    }
+
+    unsigned int digestLen = 0;
+    if (EVP_DigestFinal_ex(ctx, digest, &digestLen) != 1) {
+        LOG_ERROR_SSL("EVP_DigestFinal_ex failed");
+        EVP_MD_CTX_free(ctx);
+        return CRYPTO_FAIL;
+    }
+
+    EVP_MD_CTX_free(ctx);
+    return CRYPTO_SUCC;
+}
+
+char *hashPassword(const char *password) {
+    if (password == NULL) {
+        LOG_ERROR("hashPassword: password is NULL");
+        return NULL;
+    }
+
+    size_t passLen = strlen(password);
+    if (passLen == 0) {
+        LOG_ERROR("hashPassword: password is empty");
+        return NULL;
+    }
+
+    /* Generate cryptographically random salt */
+    uint8_t salt[HASH_SALT_LEN];
+    if (RAND_bytes(salt, HASH_SALT_LEN) != 1) {
+        LOG_ERROR_SSL("hashPassword: failed to generate random salt");
+        return NULL;
+    }
+
+    /* Compute SHA-256(password || salt) */
+    uint8_t digest[HASH_SHA256_LEN];
+    if (computePasswordHash(password, passLen, salt, HASH_SALT_LEN, digest) !=
+        CRYPTO_SUCC) {
+        OPENSSL_cleanse(salt, sizeof(salt));
+        return NULL;
+    }
+
+    /*
+     * Output format: "<salt_hex>:<hash_hex>\0"
+     * Total length: HASH_SALT_LEN*2 + 1 + HASH_SHA256_LEN*2 + 1
+     */
+    enum { SaltHexLen = HASH_SALT_LEN * 2 };
+    enum { HashHexLen = HASH_SHA256_LEN * 2 };
+    enum { ResultLen = HASH_SALT_LEN * 2 + 1 + HASH_SHA256_LEN * 2 + 1 };
+    char *result = malloc(ResultLen);
+    if (result == NULL) {
+        LOG_ERROR("hashPassword: malloc failed (errno=%d)", errno);
+        OPENSSL_cleanse(salt, sizeof(salt));
+        OPENSSL_cleanse(digest, sizeof(digest));
+        return NULL;
+    }
+
+    bytesToHex(salt, HASH_SALT_LEN, result);
+    result[SaltHexLen] = ':';
+    bytesToHex(digest, HASH_SHA256_LEN, result + SaltHexLen + 1);
+
+    /* Securely wipe intermediate sensitive data */
+    OPENSSL_cleanse(salt, sizeof(salt));
+    OPENSSL_cleanse(digest, sizeof(digest));
+
+    return result;
+}
+
+int verifyPassword(const char *password, const char *storedHash) {
+    if (password == NULL || storedHash == NULL) {
+        LOG_ERROR("verifyPassword: NULL argument");
+        return CRYPTO_FAIL;
+    }
+
+    size_t passLen = strlen(password);
+    if (passLen == 0) {
+        LOG_ERROR("verifyPassword: password is empty");
+        return CRYPTO_FAIL;
+    }
+
+    /*
+     * Expected format: "<salt_hex>:<hash_hex>"
+     * salt_hex = HASH_SALT_LEN * 2 characters
+     * separator = ':'
+     * hash_hex = HASH_SHA256_LEN * 2 characters
+     */
+    enum { SaltHexLen = HASH_SALT_LEN * 2 };
+    enum { HashHexLen = HASH_SHA256_LEN * 2 };
+    enum { ExpectedLen = HASH_SALT_LEN * 2 + 1 + HASH_SHA256_LEN * 2 };
+
+    size_t storedLen = strlen(storedHash);
+    if (storedLen != ExpectedLen) {
+        LOG_ERROR("verifyPassword: invalid storedHash length");
+        return CRYPTO_FAIL;
+    }
+
+    if (storedHash[SaltHexLen] != ':') {
+        LOG_ERROR("verifyPassword: missing separator in storedHash");
+        return CRYPTO_FAIL;
+    }
+
+    /* Parse salt from hex */
+    uint8_t salt[HASH_SALT_LEN];
+    if (hexToBytes(storedHash, salt, HASH_SALT_LEN) != CRYPTO_SUCC) {
+        LOG_ERROR("verifyPassword: invalid hex in salt portion");
+        return CRYPTO_FAIL;
+    }
+
+    /* Parse expected hash from hex */
+    uint8_t expectedHash[HASH_SHA256_LEN];
+    if (hexToBytes(storedHash + SaltHexLen + 1, expectedHash,
+                   HASH_SHA256_LEN) != CRYPTO_SUCC) {
+        LOG_ERROR("verifyPassword: invalid hex in hash portion");
+        OPENSSL_cleanse(salt, sizeof(salt));
+        return CRYPTO_FAIL;
+    }
+
+    /* Recompute SHA-256(password || salt) */
+    uint8_t computedHash[HASH_SHA256_LEN];
+    if (computePasswordHash(password, passLen, salt, HASH_SALT_LEN,
+                            computedHash) != CRYPTO_SUCC) {
+        OPENSSL_cleanse(salt, sizeof(salt));
+        OPENSSL_cleanse(expectedHash, sizeof(expectedHash));
+        return CRYPTO_FAIL;
+    }
+
+    /* Constant-time comparison to prevent timing attacks */
+    int match = CRYPTO_memcmp(computedHash, expectedHash, HASH_SHA256_LEN);
+
+    /* Securely wipe all intermediate sensitive data */
+    OPENSSL_cleanse(salt, sizeof(salt));
+    OPENSSL_cleanse(expectedHash, sizeof(expectedHash));
+    OPENSSL_cleanse(computedHash, sizeof(computedHash));
+
+    return (match == 0) ? CRYPTO_SUCC : CRYPTO_FAIL;
 }
 
 /* ──────────────────────── utility ──────────────────────────────────────── */

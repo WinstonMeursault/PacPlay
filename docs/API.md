@@ -762,3 +762,394 @@ if (serverExchangeAESKey(clientFd, &req, &sessionKey) != COMM_SUCC) {
 packetClear(&req);
 /* sessionKey 已就绪，可用于后续 packetAESEncrypt / packetAESDecrypt */
 ```
+
+## Database 数据库模块
+
+接口位于 `src/server/database.h`，实现在 `src/server/database.c`。
+
+提供基于 SQLite3 的持久化数据层，涵盖用户管理（注册、删除、验证）与聊天记录存储/查询。数据库采用两个独立文件：`db/user.db`（用户库）和 `db/chatHistory.db`（聊天记录库）。
+
+### 常量与宏
+
+| 宏 | 值 | 说明 |
+| --- | --- | --- |
+| `DB_SUCC` | `0` | 操作成功 |
+| `DB_FAIL` | `-1` | 操作失败（参数校验未通过、SQL 执行错误、记录不存在等） |
+| `USER_DB_PATH` | `"db/user.db"` | 用户数据库文件路径 |
+| `CHAT_HISTORY_DB_PATH` | `"db/chatHistory.db"` | 聊天记录数据库文件路径 |
+| `DB_DIRECTORY` | `"db"` | 数据库文件所在目录 |
+| `DB_USERNAME_MAX_LEN` | `32` | 用户名最大长度（含 NUL 终止符） |
+| `ROOM_STMT_BUCKETS` | `32` | Room 语句缓存哈希表桶数 |
+
+### 类型定义
+
+#### DBType
+
+```c
+typedef enum { UserDB = 1, ChatHistoryDB } DBType;
+```
+
+标识数据库类型。`dbInit` 根据此枚举决定打开哪个数据库文件并初始化相应 schema。
+
+#### User
+
+```c
+typedef struct {
+    char username[DB_USERNAME_MAX_LEN];
+    uint32_t uid;
+    char *password;
+} User;
+```
+
+用户记录结构体。`password` 字段在传入 `createUser` 和 `verifyUser` 时为**明文密码**字符串；数据库内部使用 `hashPassword()` 计算带随机 salt 的哈希后存储。调用方负责 `password` 指向的内存的生命周期。
+
+#### ChatHistory
+
+```c
+typedef struct {
+    uint32_t uid;
+    uint64_t msgId;
+    char *message;
+    time_t timestamp;
+} ChatHistory;
+```
+
+聊天消息记录结构体。
+
+* `uid`：发送者用户 ID。
+* `msgId`：全局唯一、严格单调递增的消息 ID，由数据库内部序列表自动生成。存入时忽略此字段，存入成功后由函数回填。
+* `message`：消息文本内容。查询返回时由 `strdup` 分配，调用方须 `free`。
+* `timestamp`：消息时间戳（UTC 秒级 UNIX 时间）。
+
+#### RoomStmtEntry
+
+```c
+typedef struct RoomStmtEntry {
+    uint32_t roomId;
+    sqlite3_stmt *stmtInsert;
+    sqlite3_stmt *stmtSelectById;
+    sqlite3_stmt *stmtSelectByTimeUid;
+    sqlite3_stmt *stmtSelectByTimeAll;
+    struct RoomStmtEntry *next;
+} RoomStmtEntry;
+```
+
+单个聊天室的预编译语句缓存节点。每个 room 在首次访问时创建对应的表和 4 条 prepared statement，随后缓存在哈希表中复用，直到 `dbClose` 时统一 finalize。
+
+#### RoomStmtCache
+
+```c
+typedef struct {
+    RoomStmtEntry *buckets[ROOM_STMT_BUCKETS];
+} RoomStmtCache;
+```
+
+按 `roomId % ROOM_STMT_BUCKETS` 索引的链式哈希表，存放所有已缓存的 `RoomStmtEntry`。
+
+#### DB
+
+```c
+typedef struct {
+    sqlite3 *handle;
+    DBType type;
+    sqlite3_stmt *stmtInsert;
+    sqlite3_stmt *stmtDelete;
+    sqlite3_stmt *stmtSelect;
+    sqlite3_stmt *stmtSeq;
+    RoomStmtCache *roomCache;
+} DB;
+```
+
+数据库句柄包装结构。封装 sqlite3 原始连接及所有预编译语句：
+
+* UserDB 使用 `stmtInsert`/`stmtDelete`/`stmtSelect` 三条固定 stmt。
+* ChatHistoryDB 使用 `stmtSeq`（全局序列号生成）和 `roomCache`（按 room 动态缓存）。
+
+### 数据库 Schema
+
+#### UserDB
+
+```sql
+CREATE TABLE IF NOT EXISTS users (
+    uid INTEGER PRIMARY KEY,
+    username TEXT UNIQUE NOT NULL,
+    password TEXT NOT NULL
+);
+```
+
+`password` 字段存储的是 `hashPassword()` 的输出（格式为 `"<salt_hex>:<hash_hex>"`），而非明文。
+
+#### ChatHistoryDB
+
+**全局序列表**（`dbInit` 时创建）：
+
+```sql
+CREATE TABLE IF NOT EXISTS msg_sequence (
+    id INTEGER PRIMARY KEY AUTOINCREMENT
+);
+```
+
+此表的唯一作用是提供全局唯一、严格单调递增的消息 ID。每次存入消息前先向此表 INSERT 一行，取 `last_insert_rowid()` 作为 `msgId`。由于 `AUTOINCREMENT` 保证 rowid 永不回收、永不重复，即使删除记录后 ID 也不会被复用。
+
+**Room 表**（按需动态创建，每个 room 一张表）：
+
+```sql
+CREATE TABLE IF NOT EXISTS room_<roomId> (
+    msgId INTEGER PRIMARY KEY,
+    uid INTEGER NOT NULL,
+    message TEXT NOT NULL,
+    timestamp INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_room_<roomId>_ts ON room_<roomId>(timestamp);
+CREATE INDEX IF NOT EXISTS idx_room_<roomId>_uid_ts ON room_<roomId>(uid, timestamp);
+```
+
+`msgId` 为从全局序列表获取的值，不使用 `AUTOINCREMENT`（由应用层显式传入）。两个索引分别加速"全体用户时间范围查询"和"指定用户时间范围查询"。
+
+### 生命周期管理
+
+#### `DB *dbInit(DBType dbType)`
+
+打开（或创建）指定类型的数据库，返回 `DB *` 句柄。
+
+**执行流程**：
+
+01. 根据 `dbType` 确定文件路径。
+02. 检查并创建 `db/` 目录（跨平台：POSIX 使用 `mkdir`，Windows 使用 `_mkdir`）。
+03. 调用 `sqlite3_open` 打开数据库文件。
+04. 执行 `PRAGMA journal_mode=WAL`（提升并发读性能与崩溃恢复能力）。
+05. 执行 `PRAGMA foreign_keys=ON`（启用外键约束）。
+06. 初始化 schema：
+    - UserDB：创建 `users` 表。
+    - ChatHistoryDB：创建 `msg_sequence` 表。
+07. 预编译缓存语句：
+    - UserDB：编译 INSERT/DELETE/SELECT 三条 stmt。
+    - ChatHistoryDB：编译全局序列 INSERT stmt，分配空的 `RoomStmtCache`。
+
+**返回值**：
+
+* 成功：返回已就绪的 `DB *` 句柄。
+* 失败：返回 `NULL`，内部记录具体错误。所有已分配资源（sqlite3 handle、stmt、内存）在失败路径中均被正确释放。
+
+#### `void dbClose(DB *database)`
+
+关闭数据库并释放所有关联资源。
+
+**执行流程**：
+
+01. 若 `database == NULL`，直接返回（安全的 no-op）。
+02. Finalize 所有 UserDB 固定 stmt。
+03. Finalize ChatHistoryDB 全局序列 stmt。
+04. 遍历 `roomCache` 哈希表所有 bucket，对每个 `RoomStmtEntry` finalize 4 条 stmt 并 `free` 节点。
+05. `free(roomCache)` 释放哈希表本身。
+06. `sqlite3_close(database->handle)` 关闭 SQLite 连接。
+07. `free(database)` 释放 DB 结构体。
+
+### 用户操作
+
+#### `int createUser(DB *database, User *user)`
+
+创建新用户，将明文密码哈希后存入数据库。
+
+**参数约束**：
+
+* `database` 必须为已打开的 UserDB 句柄（`database->type == UserDB`）。
+* `user` 不得为 `NULL`。
+* `user->uid` 不得为零值
+* `user->username` 不得为空字符串。
+* `user->password` 不得为 `NULL` 或空字符串。
+
+**执行流程**：
+
+01. 校验所有参数与数据库类型。
+02. 调用 `hashPassword(user->password)` 生成带随机 salt 的哈希字符串（格式 `"salt_hex:hash_hex"`）。
+03. `sqlite3_reset` + `sqlite3_clear_bindings` 重置缓存的 INSERT stmt。
+04. 绑定参数：`?1=uid`（`sqlite3_bind_int`）、`?2=username`（`sqlite3_bind_text`，`SQLITE_STATIC`）、`?3=hashed`（`sqlite3_bind_text`，`SQLITE_TRANSIENT`，因为 hashed 随后会被释放）。
+05. `sqlite3_step` → 期望 `SQLITE_DONE`。
+06. `OPENSSL_cleanse(hashed, strlen(hashed))` 安全擦除哈希字符串内存。
+07. `free(hashed)` 释放哈希字符串。
+
+**返回值**：
+
+* `DB_SUCC`：插入成功。
+* `DB_FAIL`：参数非法、哈希失败、用户名或 uid 已存在（UNIQUE 约束违反）、或 SQLite 内部错误。
+
+**安全设计**：哈希字符串在使用完毕后立即通过 `OPENSSL_cleanse` 安全擦除，防止敏感材料在堆内存中残留。
+
+#### `int deleteUser(DB *database, User *user)`
+
+按 uid 删除用户。
+
+**参数约束**：
+
+* `database` 必须为 UserDB 句柄。
+* `user` 不得为 `NULL`。
+
+**执行流程**：
+
+01. 校验参数与数据库类型。
+02. 重置缓存的 DELETE stmt。
+03. 绑定 `?1=uid`。
+04. `sqlite3_step` → 期望 `SQLITE_DONE`。
+05. 检查 `sqlite3_changes(database->handle)`：若为 0，表示 uid 不存在，返回 `DB_FAIL`。
+
+**返回值**：
+
+* `DB_SUCC`：成功删除一行。
+* `DB_FAIL`：uid 不存在、参数非法、或 SQLite 错误。
+
+**严格模式**：删除不存在的用户视为失败，调用方可据此判断用户是否存在。
+
+#### `int verifyUser(DB *database, User *user)`
+
+验证用户凭据（用户名 + uid + 明文密码）。
+
+**参数约束**：
+
+* `database` 必须为 UserDB 句柄。
+* `user` 不得为 `NULL`。
+* `user->username` 不得为空。
+* `user->password` 不得为 `NULL` 或空（须为明文密码）。
+
+**执行流程**：
+
+01. 校验参数与数据库类型。
+02. 重置缓存的 SELECT stmt。
+03. 绑定 `?1=username`、`?2=uid`。
+04. `sqlite3_step`：
+    - `SQLITE_ROW`：用户存在，从结果行提取 `storedHash`。
+    - 其他：用户不存在或查询出错，直接返回 `DB_FAIL`。
+05. 调用 `verifyPassword(user->password, storedHash)`：
+    - 该函数从 `storedHash` 中提取随机 salt。
+    - 重新计算 `SHA-256(password || salt)`。
+    - 使用 `CRYPTO_memcmp` 做常量时间比较，防止时序侧信道攻击。
+06. 根据 `verifyPassword` 返回值映射为 `DB_SUCC`（匹配）或 `DB_FAIL`（不匹配）。
+
+**安全设计**：
+
+* 函数不区分"用户不存在"与"密码错误"两种失败原因，对外统一返回 `DB_FAIL`，防止用户枚举攻击。
+* 使用 `username + uid` 双条件查找，增加暴力破解难度。
+* 密码比较使用常量时间算法，杜绝时序攻击。
+
+### 聊天记录操作
+
+所有聊天记录操作均需传入 `roomId`（`uint32_t`）指定目标聊天室。首次访问某 room 时会自动创建对应的表与索引，并将预编译的 stmt 缓存到 `RoomStmtCache` 哈希表中，后续访问直接命中缓存，无需重复编译。
+
+#### `int storeChatHistory(DB *database, uint32_t roomId, ChatHistory *chatHistory)`
+
+存入一条聊天消息。
+
+**参数约束**：
+
+* `database` 必须为 ChatHistoryDB 句柄。
+* `chatHistory` 不得为 `NULL`。
+* `chatHistory->message` 不得为 `NULL` 或空字符串。
+* `chatHistory->uid` 和 `chatHistory->timestamp` 须由调用方预先设置。
+* `chatHistory->msgId` **忽略**（由数据库生成）。
+
+**执行流程**：
+
+01. 校验参数与数据库类型。
+02. **生成全局唯一 msgId**：
+    - `sqlite3_reset` 全局序列 stmt。
+    - `sqlite3_step` → INSERT 一行到 `msg_sequence`。
+    - `sqlite3_last_insert_rowid()` → 获得严格单调递增的 ID。
+03. **获取或创建 Room 缓存**：
+    - 以 `roomId % ROOM_STMT_BUCKETS` 查找哈希表。
+    - 若未命中：执行 `CREATE TABLE IF NOT EXISTS room_<roomId>` 及两条 `CREATE INDEX` SQL，随后 `sqlite3_prepare_v2` 编译 4 条 stmt 并插入缓存。
+04. 重置 INSERT stmt，绑定 `?1=msgId`、`?2=uid`、`?3=message`、`?4=timestamp`。
+05. `sqlite3_step` → 期望 `SQLITE_DONE`。
+06. **回填** `chatHistory->msgId = msgId`。
+
+**返回值**：
+
+* `DB_SUCC`：存入成功，`chatHistory->msgId` 已设置。
+* `DB_FAIL`：参数非法、序列号生成失败、表创建失败、或 INSERT 失败。
+
+**msgId 唯一递增保证**：全局序列表使用 `INTEGER PRIMARY KEY AUTOINCREMENT`，SQLite 保证：
+1. ID 严格单调递增（即使删除记录后也不回收）。
+2. 同一数据库内所有 room 表共享同一序列，因此 msgId 跨 room 全局唯一。
+3. 多次并发写入由 SQLite 的写锁串行化，不会产生重复 ID。
+
+#### `int queryChatByMsgId(DB *database, uint32_t roomId, uint64_t msgId, ChatHistory *out)`
+
+按全局唯一消息 ID 查询单条聊天记录。
+
+**参数约束**：
+
+* `database` 必须为 ChatHistoryDB 句柄。
+* `out` 不得为 `NULL`。
+
+**执行流程**：
+
+01. 校验参数与数据库类型。
+02. 获取或创建 Room 缓存。
+03. 重置 SELECT-by-id stmt，绑定 `?1=msgId`。
+04. `sqlite3_step`：
+    - `SQLITE_ROW`：提取各列填充 `out`。`out->message` 使用 `strdup` 复制（因为 SQLite 的列数据在下次 step/finalize 后失效）。
+    - `SQLITE_DONE`：记录不存在，返回 `DB_FAIL`。
+
+**返回值**：
+
+* `DB_SUCC`：查询成功，`out` 所有字段已填充。调用方须 `free(out->message)`。
+* `DB_FAIL`：记录不存在、参数非法、或 SQLite 错误。
+
+#### `int queryChatByTimeRange(DB *database, uint32_t roomId, uint32_t uid, time_t startTime, time_t endTime, ChatHistory **out, size_t *count)`
+
+查询指定时间范围内的聊天记录，支持按用户过滤。
+
+**参数约束**：
+
+* `database` 必须为 ChatHistoryDB 句柄。
+* `out` 和 `count` 不得为 `NULL`。
+* `uid == 0` 时查询所有用户；`uid != 0` 时仅查询该用户。
+* `startTime` 和 `endTime` 为闭区间 `[startTime, endTime]`。
+
+**执行流程**：
+
+01. 校验参数与数据库类型。初始化 `*out = NULL`、`*count = 0`。
+02. 获取或创建 Room 缓存。
+03. 根据 uid 选择 stmt：
+    - `uid == 0`：使用 `stmtSelectByTimeAll`，绑定 `?1=startTime`、`?2=endTime`。
+    - `uid != 0`：使用 `stmtSelectByTimeUid`，绑定 `?1=uid`、`?2=startTime`、`?3=endTime`。
+04. 循环 `sqlite3_step`：
+    - 每行 `SQLITE_ROW`：提取各列，`strdup` 复制 message，追加到动态数组。
+    - 数组使用倍增策略增长（初始容量 16），上限 100000 条防止 OOM。
+05. 循环结束（`SQLITE_DONE`）后设置 `*out` 和 `*count`。
+06. 若结果集为空，`free` 初始分配的数组，设 `*out = NULL`、`*count = 0`，返回 `DB_SUCC`。
+
+**返回值**：
+
+* `DB_SUCC`：查询成功（结果可能为 0 条）。调用方须遍历 `free` 每个 `out[i].message`，最后 `free(out)` 释放数组。
+* `DB_FAIL`：参数非法、Room 创建失败、或 SQLite 错误。失败时不会泄漏内存（所有中途分配的 message 和数组均被清理）。
+
+**结果排序**：结果按 `msgId ASC` 排序（即消息的全局时序顺序），保证调用方收到的数组与消息实际发生顺序一致。
+
+### Prepared Statement 缓存机制
+
+本模块的核心设计理念是**编译一次、复用多次**，避免每次操作都重新解析 SQL 文本：
+
+**UserDB**：三条固定 stmt 在 `dbInit` 时编译，通过 `sqlite3_reset` + `sqlite3_clear_bindings` 重复使用。
+
+**ChatHistoryDB**：由于表名包含动态 roomId（如 `room_1001`），无法在初始化时预编译。采用按需缓存策略：
+
+1. 首次访问某 room → `CREATE TABLE IF NOT EXISTS` + 编译 4 条 stmt → 存入哈希表。
+2. 后续访问同一 room → 直接从哈希表取出 stmt，`reset` 后使用。
+3. `dbClose` → 遍历整个哈希表，`sqlite3_finalize` 所有 stmt，释放所有节点。
+
+哈希函数为简单取模 `roomId % 32`，冲突以链表解决。对于典型的数十个聊天室场景，冲突率极低。
+
+### 跨平台设计
+
+* **目录创建**：使用条件编译宏 `PLATFORM_MKDIR`，在 POSIX 系统调用 `mkdir(path, mode)`，在 Windows 调用 `_mkdir(path)`。
+* **时间戳**：`time_t` 为 ISO C 标准类型，所有主流平台均支持。配合 `include/utils.h` 中的 `getCurrentTimestamp()` 使用。
+
+### 使用注意事项
+
+01. **内存所有权**：`queryChatByMsgId` 返回的 `out->message` 和 `queryChatByTimeRange` 返回的数组中每个 `message` 字段均为 `strdup` 分配，调用方必须逐一 `free`。
+02. **数据库类型检查**：所有操作函数内部严格校验 `database->type`，误用（如拿 ChatHistoryDB 句柄调 `createUser`）会立即返回 `DB_FAIL` 并记录错误日志。
+03. **线程安全**：SQLite 在 WAL 模式下支持并发读，但写操作仍被串行化。多线程环境中若需并发写同一数据库，须由调用方提供外部锁保护。
+04. **密码安全**：`createUser` 内部使用 `hashPassword`（SHA-256 + 128-bit 随机 salt），哈希字符串使用完毕后通过 `OPENSSL_cleanse` 安全擦除。数据库中不存储任何明文密码。
+05. **错误诊断**：所有操作在失败时通过 `LOG_ERROR` 或 `LOG_WARN` 输出详细的错误上下文，包括 SQLite 错误消息和返回码。
+06. **幂等性**：`dbInit` 的 schema 创建使用 `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`，重复调用不会报错，适合应用启动时无条件调用。
+07. **Room 表动态创建的安全性**：表名通过 `snprintf("room_%u", roomId)` 生成，`%u` 格式化保证输出仅含数字字符，不存在 SQL 注入风险。

@@ -23,6 +23,7 @@
  */
 
 #include "protocol.h"
-#include "client/communication.h"
+#include "server/communication.h"
+#include "server/database.h"
 
 int main() { return 0; }

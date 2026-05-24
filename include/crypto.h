@@ -56,6 +56,14 @@
 /** @brief GCM authentication tag size in bytes. */
 #define AES_GCM_TAG_LEN 16
 
+/* ──────────────────────── Password Hashing constants ───────────────────── */
+
+/** @brief Salt length in bytes for password hashing (128-bit). */
+#define HASH_SALT_LEN 16
+
+/** @brief SHA-256 digest length in bytes. */
+#define HASH_SHA256_LEN 32
+
 /* ──────────────────────── ECDH(X25519) constants ────────────────────────── */
 
 #define ECDH_SHARED_SECRET_SIZE 32
@@ -224,6 +232,43 @@ int deriveECDHSharedSecret(EVP_PKEY *localKey, EVP_PKEY *peerKey,
  */
 int deriveAESKey(const uint8_t *sharedSecret, size_t secretLen,
                  AESGCMKey *outKey);
+
+/* ──────────────────────── Password Hashing ─────────────────────────────── */
+
+/**
+ * @brief Hash a password with a randomly generated salt using SHA-256.
+ *
+ * Generates a cryptographically random salt of @c HASH_SALT_LEN bytes,
+ * computes SHA-256(password || salt), and returns the result as a
+ * heap-allocated hex string in the format "salt_hex:hash_hex".
+ *
+ * The caller is responsible for freeing the returned string with @c free().
+ * All intermediate sensitive data (salt, digest) is securely wiped before
+ * the function returns.
+ *
+ * @param password  Null-terminated password string. Must not be NULL.
+ * @return A newly allocated string "salt_hex:hash_hex" on success,
+ *         or @c NULL on failure (invalid input or internal crypto error).
+ */
+char *hashPassword(const char *password);
+
+/**
+ * @brief Verify a password against a stored hash string.
+ *
+ * Parses the salt from @p storedHash (format "salt_hex:hash_hex"),
+ * recomputes SHA-256(password || salt), and compares the result against
+ * the stored hash using constant-time comparison to prevent timing attacks.
+ *
+ * All intermediate sensitive data is securely wiped before the function
+ * returns.
+ *
+ * @param password    Null-terminated password to verify. Must not be NULL.
+ * @param storedHash  The stored hash string produced by @c hashPassword().
+ *                    Must not be NULL.
+ * @return @c CRYPTO_SUCC if the password matches, @c CRYPTO_FAIL otherwise
+ *         (mismatch, invalid format, or internal error).
+ */
+int verifyPassword(const char *password, const char *storedHash);
 
 /* ──────────────────────── utility ──────────────────────────────────────── */
 

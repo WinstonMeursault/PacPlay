@@ -6,7 +6,7 @@ MAKEFLAGS += -j $(shell nproc)
 ## Compiler and compilation flags
 CC := clang
 CFLAGS := -Wall -Wextra -Werror -g -Wno-unused-command-line-argument
-LDLIBS := -lssl -lcrypto
+LDLIBS := -lssl -lcrypto -lsqlite3
 ## Compiler flags for auto-generating dependency files (modern approach, replaces the old sed method)
 DEPFLAGS = -MMD -MP -MF $(@:%.o=%.d)
 
