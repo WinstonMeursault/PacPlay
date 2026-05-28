@@ -1,6 +1,6 @@
 /**
  * @file main.c
- * @brief
+ * @brief PacPlay server entrypoint.
  *
  * @date 2026-05-16
  * @copyright GPLv3 License
@@ -22,8 +22,21 @@
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
-#include "protocol.h"
-#include "server/communication.h"
-#include "server/database.h"
+#include "server.h"
 
-int main() { return 0; }
+#include <string.h>
+
+enum { ServerPort = 12345 };
+
+int main(void) {
+    Server server;
+    memset(&server, 0, sizeof(server));
+
+    if (serverInit(&server, ServerPort) != SERVER_SUCC) {
+        return 1;
+    }
+
+    serverRun(&server);
+    serverCleanup(&server);
+    return 0;
+}

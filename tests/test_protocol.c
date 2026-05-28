@@ -38,16 +38,14 @@
 /* ───────────── helper constants for readability ────────────────────────── */
 
 enum {
-    /** Expected PacketHeader total size (packed, 64-bit platform). */
-    ExpectedHeaderSize = sizeof(uint32_t) + sizeof(PacketType) +
-                         sizeof(MessageType) + sizeof(size_t) +
-                         sizeof(uint32_t),
+    /** Expected PacketHeader total size (packed, fixed-width types). */
+    ExpectedHeaderSize = sizeof(uint32_t) * 5,
 
     /** Individual field sizes for offset computation. */
     MagicFieldSize = sizeof(uint32_t),
-    PacketTypeFieldSize = sizeof(PacketType),
-    MessageTypeFieldSize = sizeof(MessageType),
-    PayloadLenFieldSize = sizeof(size_t),
+    PacketTypeFieldSize = sizeof(uint32_t),
+    MessageTypeFieldSize = sizeof(uint32_t),
+    PayloadLenFieldSize = sizeof(uint32_t),
 
     /** Expected field offsets (packed). */
     ExpectedMagicOffset = 0,
@@ -168,16 +166,23 @@ static void testPacketTypeValues(void) {
 
 /** @brief MessageType enum values are stable and complete. */
 static void testMessageTypeValues(void) {
-    ASSERT_INT_EQ(MsgLoginReq, 1);
-    ASSERT_INT_EQ(MsgLoginResp, 2);
-    ASSERT_INT_EQ(MsgKeyExchangeReq, 3);
-    ASSERT_INT_EQ(MsgKeyExchangeResp, 4);
-    ASSERT_INT_EQ(MsgChat, 5);
-    ASSERT_INT_EQ(MsgCreateRoom, 6);
-    ASSERT_INT_EQ(MsgJoinRoom, 7);
-    ASSERT_INT_EQ(MsgGameStart, 8);
-    ASSERT_INT_EQ(MsgGameStop, 9);
-    ASSERT_INT_EQ(MsgHeartbeat, 10);
+    ASSERT_INT_EQ(MsgKeyExchangeReq, 1);
+    ASSERT_INT_EQ(MsgKeyExchangeResp, 2);
+    ASSERT_INT_EQ(MsgLoginReq, 3);
+    ASSERT_INT_EQ(MsgLoginResp, 4);
+    ASSERT_INT_EQ(MsgRegisterReq, 5);
+    ASSERT_INT_EQ(MsgRegisterResp, 6);
+    ASSERT_INT_EQ(MsgRoomListReq, 7);
+    ASSERT_INT_EQ(MsgRoomListResp, 8);
+    ASSERT_INT_EQ(MsgCreateRoom, 9);
+    ASSERT_INT_EQ(MsgCreateRoomResp, 10);
+    ASSERT_INT_EQ(MsgJoinRoom, 11);
+    ASSERT_INT_EQ(MsgJoinRoomResp, 12);
+    ASSERT_INT_EQ(MsgChat, 13);
+    ASSERT_INT_EQ(MsgLogout, 14);
+    ASSERT_INT_EQ(MsgHeartbeat, 15);
+    ASSERT_INT_EQ(MsgGameStart, 16);
+    ASSERT_INT_EQ(MsgGameStop, 17);
 }
 
 /** @brief NULL_SOCKETFD sentinel value. */
@@ -228,6 +233,89 @@ static void testPacketHeaderFieldValues(void) {
     ASSERT_INT_EQ(hdr.messageType, MsgChat);
     ASSERT_UINT_EQ(hdr.payloadLength, TestLength);
     ASSERT_UINT_EQ(hdr.sequenceID, TestSeq);
+}
+
+/* ─── LoginRequestPayload layout ─────────────────────────────────────── */
+
+/** @brief LoginRequestPayload fixed-header fields are at deterministic offsets. */
+static void testLoginRequestPayloadOffsets(void) {
+    /* Login payload: username(32B) at offset 0, password(FAM) at offset 32. */
+    ASSERT_UINT_EQ(offsetof(LoginRequestPayload, username), (size_t)0);
+    ASSERT_UINT_EQ(offsetof(LoginRequestPayload, password),
+                   (size_t)LOGIN_USERNAME_LEN);
+}
+
+/** @brief sizeof(LoginRequestPayload) equals the fixed part (excludes FAM). */
+static void testLoginRequestPayloadSize(void) {
+    /* 32B username; FAM password[] adds no sizeof contribution. */
+    ASSERT_UINT_EQ(sizeof(LoginRequestPayload), (size_t)LOGIN_USERNAME_LEN);
+}
+
+/* ─── RegisterRequestPayload layout ──────────────────────────────────── */
+
+/** @brief RegisterRequestPayload fields are at deterministic offsets. */
+static void testRegisterRequestPayloadOffsets(void) {
+    ASSERT_UINT_EQ(offsetof(RegisterRequestPayload, username), (size_t)0);
+    ASSERT_UINT_EQ(offsetof(RegisterRequestPayload, nickname),
+                   (size_t)LOGIN_USERNAME_LEN);
+    ASSERT_UINT_EQ(offsetof(RegisterRequestPayload, password),
+                   (size_t)(LOGIN_USERNAME_LEN + LOGIN_NICKNAME_LEN));
+}
+
+/** @brief sizeof(RegisterRequestPayload) equals the fixed part (excludes FAM). */
+static void testRegisterRequestPayloadSize(void) {
+    ASSERT_UINT_EQ(sizeof(RegisterRequestPayload),
+                   (size_t)(LOGIN_USERNAME_LEN + LOGIN_NICKNAME_LEN));
+}
+
+/* ─── LoginResponsePayload layout ────────────────────────────────────── */
+
+/** @brief LoginResponsePayload is 68 bytes (uid + username + nickname). */
+static void testLoginResponsePayloadSize(void) {
+    ASSERT_UINT_EQ(sizeof(LoginResponsePayload),
+                   (size_t)(sizeof(uint32_t) + LOGIN_USERNAME_LEN +
+                            LOGIN_NICKNAME_LEN));
+}
+
+/** @brief LoginResponsePayload fields are at deterministic offsets. */
+static void testLoginResponsePayloadOffsets(void) {
+    ASSERT_UINT_EQ(offsetof(LoginResponsePayload, uid), (size_t)0);
+    ASSERT_UINT_EQ(offsetof(LoginResponsePayload, username),
+                   sizeof(uint32_t));
+    ASSERT_UINT_EQ(offsetof(LoginResponsePayload, nickname),
+                   sizeof(uint32_t) + LOGIN_USERNAME_LEN);
+}
+
+/* ─── ChatPacketPayload layout ───────────────────────────────────────── */
+
+/** @brief ChatPacketPayload timestamp is at offset 0. */
+static void testChatPacketPayloadOffsets(void) {
+    ASSERT_UINT_EQ(offsetof(ChatPacketPayload, timestamp), 0);
+    ASSERT_UINT_EQ(offsetof(ChatPacketPayload, message), sizeof(int64_t));
+}
+
+/** @brief sizeof(ChatPacketPayload) == sizeof(timestamp) (FAM excluded). */
+static void testChatPacketPayloadSize(void) {
+    ASSERT_UINT_EQ(sizeof(ChatPacketPayload), sizeof(int64_t));
+}
+
+/* ─── ChatBroadcastPayload layout ────────────────────────────────────── */
+
+/** @brief ChatBroadcastPayload fields are packed in order. */
+static void testChatBroadcastPayloadOffsets(void) {
+    ASSERT_UINT_EQ(offsetof(ChatBroadcastPayload, uid), 0);
+    ASSERT_UINT_EQ(offsetof(ChatBroadcastPayload, msgId), sizeof(uint32_t));
+    ASSERT_UINT_EQ(offsetof(ChatBroadcastPayload, timestamp),
+                   sizeof(uint32_t) + sizeof(uint64_t));
+    ASSERT_UINT_EQ(offsetof(ChatBroadcastPayload, message),
+                   sizeof(uint32_t) + sizeof(uint64_t) + sizeof(int64_t));
+}
+
+/** @brief sizeof(ChatBroadcastPayload) equals the fixed header (excludes FAM). */
+static void testChatBroadcastPayloadSize(void) {
+    /* 4B uid + 8B msgId + 8B timestamp = 20B fixed. */
+    enum { ExpectedFixedSize = 20 };
+    ASSERT_UINT_EQ(sizeof(ChatBroadcastPayload), ExpectedFixedSize);
 }
 
 /* ═══════════════════════  3. packetClear  ══════════════════════════════ */
@@ -693,12 +781,13 @@ static void testAESEncryptNullKey(void) {
     packetClear(&pkt);
 }
 
-/** @brief Encrypt fails with NULL payload. */
+/** @brief Encrypt fails with NULL payload and positive payloadLength. */
 static void testAESEncryptNullPayload(void) {
     Packet pkt;
     memset(&pkt, 0, sizeof(pkt));
     pkt.header.magic = PACKET_MAGIC;
     pkt.header.packetType = PlaintextPacket;
+    pkt.header.payloadLength = sizeof(testPayloadStr);
     pkt.payload = NULL;
 
     ASSERT_INT_EQ(packetAESEncrypt(&pkt, (uint8_t *)testAESKey), PROTOCOL_FAIL);
@@ -742,6 +831,23 @@ static void testAESEncryptExactlyMaxPayload(void) {
     packetClear(&pkt);
 }
 
+/** @brief Encrypt succeeds with zero-length payload (heartbeat case). */
+static void testAESEncryptZeroPayload(void) {
+    Packet pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    pkt.header.magic = PACKET_MAGIC;
+    pkt.header.packetType = PlaintextPacket;
+    pkt.header.payloadLength = 0;
+    pkt.payload = NULL;
+
+    int ret = packetAESEncrypt(&pkt, (uint8_t *)testAESKey);
+    ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
+    ASSERT_UINT_EQ(pkt.header.payloadLength,
+                   (size_t)AES_PACKET_EXTRA_LEN);
+
+    packetClear(&pkt);
+}
+
 /** @brief Encrypt preserves magic, messageType, and sequenceID. */
 static void testAESEncryptPreservesHeaderFields(void) {
     enum { TestSeq = 0xDEADBEEFU };
@@ -749,8 +855,7 @@ static void testAESEncryptPreservesHeaderFields(void) {
                                 sizeof(testPayloadStr));
 
     uint32_t magicBefore = pkt.header.magic;
-    int msgTypeBefore = pkt.header.messageType;
-    uint32_t seqBefore = pkt.header.sequenceID;
+    uint32_t msgTypeBefore = pkt.header.messageType;    uint32_t seqBefore = pkt.header.sequenceID;
 
     int ret = packetAESEncrypt(&pkt, (uint8_t *)testAESKey);
     ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
@@ -979,8 +1084,7 @@ static void testAESDecryptPreservesHeaderFields(void) {
     Packet pkt = makeTestPacket(MsgCreateRoom, TestSeq, testPayloadStr,
                                 sizeof(testPayloadStr));
     uint32_t magicBefore = pkt.header.magic;
-    int msgTypeBefore = pkt.header.messageType;
-
+    uint32_t msgTypeBefore = pkt.header.messageType;
     int ret = packetAESEncrypt(&pkt, (uint8_t *)testAESKey);
     ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
 
@@ -1347,7 +1451,7 @@ static void testSerializePayloadLengthOverflow(void) {
     pkt.header.magic = PACKET_MAGIC;
     pkt.header.packetType = PlaintextPacket;
     pkt.header.messageType = MsgChat;
-    pkt.header.payloadLength = SIZE_MAX; /* triggers overflow check */
+    pkt.header.payloadLength = UINT32_MAX; /* triggers overflow check */
     pkt.header.sequenceID = 0;
     pkt.payload = NULL;
 
@@ -1366,7 +1470,7 @@ static void testDeserializePayloadLengthOverflow(void) {
     hdr.magic = PACKET_MAGIC;
     hdr.packetType = PlaintextPacket;
     hdr.messageType = MsgChat;
-    hdr.payloadLength = SIZE_MAX;
+    hdr.payloadLength = UINT32_MAX;
     hdr.sequenceID = 0;
 
     uint8_t buffer[sizeof(PacketHeader)];
@@ -1376,6 +1480,196 @@ static void testDeserializePayloadLengthOverflow(void) {
     result.payload = NULL;
     ASSERT_INT_EQ(packetDeserialize(buffer, sizeof(buffer), &result),
                   PROTOCOL_FAIL);
+}
+
+/** @brief KeyExchangePacketPayload has correct size and layout. */
+static void testKeyExchangePayloadLayout(void) {
+    ASSERT_UINT_EQ(offsetof(KeyExchangePacketPayload, publicKey), (size_t)0);
+    ASSERT_UINT_EQ(sizeof(KeyExchangePacketPayload),
+                   (size_t)ECDH_PUBLIC_KEY_SIZE);
+}
+
+/** @brief LoginRequestPayload survives write-then-read roundtrip. */
+static void testLoginPayloadRoundtrip(void) {
+    enum { PwLen = 5 };
+    const char *un = "testuser";
+    const char *pw = "hello";
+    size_t totalLen = offsetof(LoginRequestPayload, password) + PwLen;
+    uint8_t *buf = calloc(1, totalLen);
+    ASSERT_TRUE(buf != NULL);
+
+    LoginRequestPayload *wr = (LoginRequestPayload *)buf;
+    memcpy(wr->username, un, strlen(un) + 1);
+    memcpy(wr->password, pw, PwLen);
+
+    LoginRequestPayload *rd = (LoginRequestPayload *)buf;
+    ASSERT_STR_EQ(rd->username, un);
+    ASSERT_MEM_EQ(rd->password, pw, PwLen);
+
+    free(buf);
+}
+
+/** @brief RegisterRequestPayload survives write-then-read roundtrip. */
+static void testRegisterPayloadRoundtrip(void) {
+    enum { PwLen = 5 };
+    const char *un = "reguser";
+    const char *nn = "MyNick";
+    const char *pw = "abcde";
+    size_t totalLen = offsetof(RegisterRequestPayload, password) + PwLen;
+    uint8_t *buf = calloc(1, totalLen);
+    ASSERT_TRUE(buf != NULL);
+
+    RegisterRequestPayload *wr = (RegisterRequestPayload *)buf;
+    memcpy(wr->username, un, strlen(un) + 1);
+    memcpy(wr->nickname, nn, strlen(nn) + 1);
+    memcpy(wr->password, pw, PwLen);
+
+    RegisterRequestPayload *rd = (RegisterRequestPayload *)buf;
+    ASSERT_STR_EQ(rd->username, un);
+    ASSERT_STR_EQ(rd->nickname, nn);
+    ASSERT_MEM_EQ(rd->password, pw, PwLen);
+
+    free(buf);
+}
+
+/** @brief LoginResponsePayload is 68 bytes with correct field layout. */
+static void testLoginResponsePayloadRoundtrip(void) {
+    const char *un = "user";
+    const char *nn = "tester";
+    const uint32_t testUid = 42;
+    LoginResponsePayload resp;
+    memset(&resp, 0, sizeof(resp));
+    resp.uid = testUid;
+    memcpy(resp.username, un, strlen(un) + 1);
+    memcpy(resp.nickname, nn, strlen(nn) + 1);
+
+    ASSERT_UINT_EQ(resp.uid, testUid);
+    ASSERT_STR_EQ(resp.username, un);
+    ASSERT_STR_EQ(resp.nickname, nn);
+}
+
+/** @brief LoginRequestPayload survives packetInit → serialize → deserialize
+ *  protocol roundtrip with all fields intact. */
+static void testLoginPayloadProtocolRoundtrip(void) {
+    enum { PwLen = 6 };
+    const char *un = "proto_user";
+    const char *pw = "secret";
+    size_t payloadLen = offsetof(LoginRequestPayload, password) + PwLen;
+    LoginRequestPayload *pl = calloc(1, payloadLen);
+    ASSERT_TRUE(pl != NULL);
+    memcpy(pl->username, un, strlen(un) + 1);
+    memcpy(pl->password, pw, PwLen);
+
+    Packet pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    ASSERT_INT_EQ(packetInit(&pkt, MsgLoginReq, 5, PlaintextPacket, pl,
+                             payloadLen),
+                  PROTOCOL_SUCC);
+
+    /* Serialize to wire format */
+    uint8_t buf[TestSerBufSize];
+    size_t serLen = 0;
+    ASSERT_INT_EQ(packetSerialize(&pkt, buf, sizeof(buf), &serLen),
+                  PROTOCOL_SUCC);
+    packetClear(&pkt);
+
+    /* Deserialize back — verify header and payload match */
+    Packet pkt2;
+    memset(&pkt2, 0, sizeof(pkt2));
+    ASSERT_INT_EQ(packetDeserialize(buf, serLen, &pkt2), PROTOCOL_SUCC);
+    ASSERT_INT_EQ(pkt2.header.messageType, MsgLoginReq);
+    ASSERT_UINT_EQ(pkt2.header.payloadLength, (uint32_t)payloadLen);
+
+    LoginRequestPayload *rd = (LoginRequestPayload *)pkt2.payload;
+    ASSERT_STR_EQ(rd->username, un);
+    ASSERT_MEM_EQ(rd->password, pw, PwLen);
+
+    packetClear(&pkt2);
+    free(pl);
+}
+
+/** @brief RegisterRequestPayload survives packetInit → serialize → deserialize
+ *  protocol roundtrip with all fields intact. */
+static void testRegisterPayloadProtocolRoundtrip(void) {
+    enum { PwLen = 6 };
+    const char *un = "reg_proto";
+    const char *nn = "RegNick";
+    const char *pw = "abcdef";
+    size_t payloadLen = offsetof(RegisterRequestPayload, password) + PwLen;
+    RegisterRequestPayload *pl = calloc(1, payloadLen);
+    ASSERT_TRUE(pl != NULL);
+    memcpy(pl->username, un, strlen(un) + 1);
+    memcpy(pl->nickname, nn, strlen(nn) + 1);
+    memcpy(pl->password, pw, PwLen);
+
+    Packet pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    ASSERT_INT_EQ(packetInit(&pkt, MsgRegisterReq, 7, PlaintextPacket, pl,
+                             payloadLen),
+                  PROTOCOL_SUCC);
+
+    uint8_t buf[TestSerBufSize];
+    size_t serLen = 0;
+    ASSERT_INT_EQ(packetSerialize(&pkt, buf, sizeof(buf), &serLen),
+                  PROTOCOL_SUCC);
+    packetClear(&pkt);
+
+    Packet pkt2;
+    memset(&pkt2, 0, sizeof(pkt2));
+    ASSERT_INT_EQ(packetDeserialize(buf, serLen, &pkt2), PROTOCOL_SUCC);
+    ASSERT_INT_EQ(pkt2.header.messageType, MsgRegisterReq);
+    ASSERT_UINT_EQ(pkt2.header.payloadLength, (uint32_t)payloadLen);
+
+    RegisterRequestPayload *rd = (RegisterRequestPayload *)pkt2.payload;
+    ASSERT_STR_EQ(rd->username, un);
+    ASSERT_STR_EQ(rd->nickname, nn);
+    ASSERT_MEM_EQ(rd->password, pw, PwLen);
+
+    packetClear(&pkt2);
+    free(pl);
+}
+
+/** @brief LoginResponsePayload (fixed 68 bytes) survives packetInit →
+ *  serialize → deserialize protocol roundtrip. */
+static void testLoginResponsePayloadProtocolRoundtrip(void) {
+    const char *un = "luser";
+    const char *nn = "lnick";
+    const uint32_t testUid = 77;
+    LoginResponsePayload resp;
+    memset(&resp, 0, sizeof(resp));
+    resp.uid = testUid;
+    memcpy(resp.username, un, strlen(un) + 1);
+    memcpy(resp.nickname, nn, strlen(nn) + 1);
+
+    Packet pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    ASSERT_INT_EQ(packetInit(&pkt, MsgLoginResp, 3, PlaintextPacket, &resp,
+                             sizeof(resp)),
+                  PROTOCOL_SUCC);
+
+    uint8_t buf[TestSerBufSize];
+    size_t serLen = 0;
+    ASSERT_INT_EQ(packetSerialize(&pkt, buf, sizeof(buf), &serLen),
+                  PROTOCOL_SUCC);
+    packetClear(&pkt);
+
+    Packet pkt2;
+    memset(&pkt2, 0, sizeof(pkt2));
+    ASSERT_INT_EQ(packetDeserialize(buf, serLen, &pkt2), PROTOCOL_SUCC);
+    ASSERT_INT_EQ(pkt2.header.messageType, MsgLoginResp);
+    ASSERT_UINT_EQ(pkt2.header.payloadLength, sizeof(LoginResponsePayload));
+
+    LoginResponsePayload *rd = (LoginResponsePayload *)pkt2.payload;
+    ASSERT_UINT_EQ(rd->uid, testUid);
+    ASSERT_STR_EQ(rd->username, un);
+    ASSERT_STR_EQ(rd->nickname, nn);
+
+    packetClear(&pkt2);
+}
+
+/** @brief MessageType enum has exactly 15 values. */
+static void testMessageTypeCount(void) {
+    ASSERT_INT_EQ(MsgGameStop, 17);
 }
 
 /* ═══════════════════════  main  ════════════════════════════════════════ */
@@ -1401,6 +1695,18 @@ int main(void) {
     RUN_TEST(testPacketHeaderSize);
     RUN_TEST(testPacketHeaderFieldOffsets);
     RUN_TEST(testPacketHeaderFieldValues);
+
+    /* 2.5. Application Payload Struct Layouts */
+    RUN_TEST(testLoginRequestPayloadOffsets);
+    RUN_TEST(testLoginRequestPayloadSize);
+    RUN_TEST(testRegisterRequestPayloadOffsets);
+    RUN_TEST(testRegisterRequestPayloadSize);
+    RUN_TEST(testLoginResponsePayloadSize);
+    RUN_TEST(testLoginResponsePayloadOffsets);
+    RUN_TEST(testChatPacketPayloadOffsets);
+    RUN_TEST(testChatPacketPayloadSize);
+    RUN_TEST(testChatBroadcastPayloadOffsets);
+    RUN_TEST(testChatBroadcastPayloadSize);
 
     /* 3. packetClear */
     RUN_TEST(testPacketClearFreesPayload);
@@ -1443,6 +1749,7 @@ int main(void) {
     RUN_TEST(testAESEncryptWrongPacketType);
     RUN_TEST(testAESEncryptPayloadTooLarge);
     RUN_TEST(testAESEncryptExactlyMaxPayload);
+    RUN_TEST(testAESEncryptZeroPayload);
     RUN_TEST(testAESEncryptPreservesHeaderFields);
 
     /* 8. packetAESDecrypt */
@@ -1495,6 +1802,16 @@ int main(void) {
     RUN_TEST(testDeserializePayloadLengthExceedsMax);
     RUN_TEST(testSerializePayloadLengthOverflow);
     RUN_TEST(testDeserializePayloadLengthOverflow);
+
+    /* 14. Additional Layout & Roundtrip */
+    RUN_TEST(testKeyExchangePayloadLayout);
+    RUN_TEST(testLoginPayloadRoundtrip);
+    RUN_TEST(testRegisterPayloadRoundtrip);
+    RUN_TEST(testLoginResponsePayloadRoundtrip);
+    RUN_TEST(testLoginPayloadProtocolRoundtrip);
+    RUN_TEST(testRegisterPayloadProtocolRoundtrip);
+    RUN_TEST(testLoginResponsePayloadProtocolRoundtrip);
+    RUN_TEST(testMessageTypeCount);
 
     return TEST_REPORT();
 }

@@ -55,11 +55,16 @@
 
 /* ──────────────────────── SQL schema definitions ──────────────────────── */
 
-/** @brief SQL statement to create the users table. */
+/** @brief SQL statement to create the users table.
+ *
+ * uid is server-assigned via random generation with uniqueness check;
+ * AUTOINCREMENT is intentionally not used so that the server controls
+ * the ID space. */
 #define SQL_CREATE_USERS_TABLE                                                 \
     "CREATE TABLE IF NOT EXISTS users ("                                       \
     "uid INTEGER PRIMARY KEY, "                                                \
     "username TEXT UNIQUE NOT NULL, "                                          \
+    "nickname TEXT NOT NULL, "                                                 \
     "password TEXT NOT NULL"                                                   \
     ");"
 
@@ -71,21 +76,51 @@
 
 /* ──────────────────────── UserDB prepared SQL ───────────────────────────── */
 
-/** @brief INSERT a user record. Params: ?1=uid, ?2=username, ?3=password. */
+/** @brief INSERT a user record. Params: ?1=uid, ?2=username, ?3=nickname,
+    ?4=password. uid is server-generated and validated as unique before insert. */
 #define SQL_INSERT_USER                                                        \
-    "INSERT INTO users (uid, username, password) VALUES (?, ?, ?);"
+    "INSERT INTO users (uid, username, nickname, password) VALUES (?, ?, ?, ?);"
 
 /** @brief DELETE a user by uid. Params: ?1=uid. */
 #define SQL_DELETE_USER "DELETE FROM users WHERE uid = ?;"
 
-/** @brief SELECT password by username+uid. Params: ?1=username, ?2=uid. */
+/** @brief SELECT uid, nickname, password by username (uid is no longer
+    required for authentication — the server assigns it on registration and
+    returns it on login). Params: ?1=username.
+    Columns: 0=uid, 1=nickname, 2=password. */
 #define SQL_SELECT_USER_PASSWORD                                               \
-    "SELECT password FROM users WHERE username = ? AND uid = ?;"
+    "SELECT uid, nickname, password FROM users WHERE username = ?;"
+
+/** @brief Check whether a uid already exists. Params: ?1=uid. */
+#define SQL_UID_CHECK "SELECT 1 FROM users WHERE uid = ?;"
 
 /* ──────────────────────── ChatHistoryDB prepared SQL ────────────────────── */
 
 /** @brief INSERT into global sequence to generate next msgId. */
 #define SQL_INSERT_SEQUENCE "INSERT INTO msg_sequence DEFAULT VALUES;"
+
+/* ──────────────────────── GameDB prepared SQL ────────────────────────────── */
+
+/** @brief CREATE the rooms table for GameDB. */
+#define SQL_CREATE_ROOMS_TABLE                                                  \
+    "CREATE TABLE IF NOT EXISTS rooms ("                                        \
+    "roomId INTEGER PRIMARY KEY, "                                              \
+    "creatorUid INTEGER NOT NULL, "                                             \
+    "createdAt INTEGER NOT NULL"                                                \
+    ");"
+
+/** @brief INSERT a room. Params: ?1=roomId, ?2=creatorUid, ?3=createdAt. */
+#define SQL_INSERT_ROOM                                                         \
+    "INSERT INTO rooms (roomId, creatorUid, createdAt) VALUES (?, ?, ?);"
+
+/** @brief DELETE a room by roomId. Params: ?1=roomId. */
+#define SQL_DELETE_ROOM "DELETE FROM rooms WHERE roomId = ?;"
+
+/** @brief SELECT all room IDs ordered ascending. */
+#define SQL_LIST_ROOMS "SELECT roomId FROM rooms ORDER BY roomId ASC;"
+
+/** @brief SELECT 1 to check room existence. Params: ?1=roomId. */
+#define SQL_EXISTS_ROOM "SELECT 1 FROM rooms WHERE roomId = ?;"
 
 /* ──────────────────────── misc constants ────────────────────────────────── */
 
@@ -438,6 +473,18 @@ static int initChatHistoryDBSchema(sqlite3 *dbHandle) {
                     "CREATE TABLE msg_sequence");
 }
 
+/**
+ * @brief Initialize the schema for the game database.
+ *
+ * Creates the rooms table.
+ *
+ * @param dbHandle  Raw sqlite3 handle.
+ * @return @c DB_SUCC on success, @c DB_FAIL on failure.
+ */
+static int initGameDBSchema(sqlite3 *dbHandle) {
+    return execStmt(dbHandle, SQL_CREATE_ROOMS_TABLE, "CREATE TABLE rooms");
+}
+
 /* ──────────────────────── UserDB stmt preparation ─────────────────────── */
 
 /**
@@ -473,6 +520,14 @@ static int prepareUserStmts(DB *database) {
         return DB_FAIL;
     }
 
+    rc = sqlite3_prepare_v2(database->handle, SQL_UID_CHECK, -1,
+                            &database->stmtUidCheck, NULL);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("prepareUserStmts: UID check prepare failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
     return DB_SUCC;
 }
 
@@ -495,6 +550,52 @@ static int prepareChatGlobalStmts(DB *database) {
     return DB_SUCC;
 }
 
+/* ──────────────────────── GameDB stmt preparation ──────────────────────── */
+
+/**
+ * @brief Prepare the cached statements for a GameDB handle.
+ *
+ * @param database  The DB handle to populate.
+ * @return @c DB_SUCC on success, @c DB_FAIL on failure.
+ */
+static int prepareGameDBStmts(DB *database) {
+    int rc;
+
+    rc = sqlite3_prepare_v2(database->handle, SQL_INSERT_ROOM, -1,
+                            &database->stmtInsert, NULL);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("prepareGameDBStmts: INSERT prepare failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_prepare_v2(database->handle, SQL_DELETE_ROOM, -1,
+                            &database->stmtDelete, NULL);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("prepareGameDBStmts: DELETE prepare failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_prepare_v2(database->handle, SQL_LIST_ROOMS, -1,
+                            &database->stmtSelect, NULL);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("prepareGameDBStmts: SELECT prepare failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_prepare_v2(database->handle, SQL_EXISTS_ROOM, -1,
+                            &database->stmtRoomExists, NULL);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("prepareGameDBStmts: EXISTS prepare failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    return DB_SUCC;
+}
+
 /* ──────────────────────── public API: lifecycle ───────────────────────── */
 
 DB *dbInit(DBType dbType) {
@@ -506,6 +607,9 @@ DB *dbInit(DBType dbType) {
         break;
     case ChatHistoryDB:
         dbPath = CHAT_HISTORY_DB_PATH;
+        break;
+    case GameDB:
+        dbPath = GAME_DB_PATH;
         break;
     default:
         LOG_ERROR("dbInit: unknown DBType %d", (int)dbType);
@@ -556,6 +660,9 @@ DB *dbInit(DBType dbType) {
     case ChatHistoryDB:
         schemaResult = initChatHistoryDBSchema(database->handle);
         break;
+    case GameDB:
+        schemaResult = initGameDBSchema(database->handle);
+        break;
     default:
         break;
     }
@@ -584,6 +691,9 @@ DB *dbInit(DBType dbType) {
             }
         }
         break;
+    case GameDB:
+        stmtResult = prepareGameDBStmts(database);
+        break;
     default:
         break;
     }
@@ -593,6 +703,8 @@ DB *dbInit(DBType dbType) {
         finalizeStmt(&database->stmtInsert);
         finalizeStmt(&database->stmtDelete);
         finalizeStmt(&database->stmtSelect);
+        finalizeStmt(&database->stmtRoomExists);
+        finalizeStmt(&database->stmtUidCheck);
         finalizeStmt(&database->stmtSeq);
         roomCacheDestroy(database->roomCache);
         sqlite3_close(database->handle);
@@ -613,6 +725,8 @@ void dbClose(DB *database) {
     finalizeStmt(&database->stmtInsert);
     finalizeStmt(&database->stmtDelete);
     finalizeStmt(&database->stmtSelect);
+    finalizeStmt(&database->stmtRoomExists);
+    finalizeStmt(&database->stmtUidCheck);
 
     /* Finalize ChatHistoryDB cached statements */
     finalizeStmt(&database->stmtSeq);
@@ -649,8 +763,54 @@ int createUser(DB *database, User *user) {
         LOG_ERROR("createUser: username is empty");
         return DB_FAIL;
     }
-    if (user->uid == 0) {
-        LOG_ERROR("createUser: uid zero is reserved");
+    if (user->nickname[0] == '\0') {
+        LOG_ERROR("createUser: nickname is empty");
+        return DB_FAIL;
+    }
+
+    /* Generate a unique random uid.  Loop with a hard limit to prevent
+     * theoretical infinite spinning when the ID space is nearly exhausted. */
+    enum { MaxAttempts = 10 };
+    int found = 0;
+    for (int attempt = 0; attempt < MaxAttempts; attempt++) {
+        uint32_t candidate = 0;
+        /* RAND_bytes is cryptographically strong and seeded by the OS. */
+        if (RAND_bytes((unsigned char *)&candidate, (int)sizeof(candidate)) !=
+            1) {
+            LOG_ERROR("createUser: RAND_bytes failed on attempt %d", attempt);
+            continue;
+        }
+        /* uid 0 is reserved for the "no user" sentinel. */
+        if (candidate == 0) {
+            continue;
+        }
+
+        sqlite3_stmt *checkStmt = database->stmtUidCheck;
+        sqlite3_reset(checkStmt);
+        sqlite3_clear_bindings(checkStmt);
+        int rc = sqlite3_bind_int64(checkStmt, 1, (sqlite3_int64)candidate);
+        if (rc != SQLITE_OK) {
+            LOG_ERROR("createUser: bind uid check failed: %s (rc=%d)",
+                      sqlite3_errmsg(database->handle), rc);
+            continue;
+        }
+        rc = sqlite3_step(checkStmt);
+        if (rc == SQLITE_DONE) {
+            /* No row returned — uid is unique. */
+            user->uid = candidate;
+            found = 1;
+            break;
+        }
+        if (rc != SQLITE_ROW) {
+            LOG_ERROR("createUser: uid check step failed: %s (rc=%d)",
+                      sqlite3_errmsg(database->handle), rc);
+        }
+        /* UID collision — loop and try another random value. */
+    }
+
+    if (!found) {
+        LOG_ERROR("createUser: failed to generate unique uid after %d attempts",
+                  MaxAttempts);
         return DB_FAIL;
     }
 
@@ -665,7 +825,7 @@ int createUser(DB *database, User *user) {
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
 
-    int rc = sqlite3_bind_int(stmt, 1, (int)user->uid);
+    int rc = sqlite3_bind_int64(stmt, 1, (sqlite3_int64)user->uid);
     if (rc != SQLITE_OK) {
         LOG_ERROR("createUser: bind uid failed: %s (rc=%d)",
                   sqlite3_errmsg(database->handle), rc);
@@ -683,7 +843,16 @@ int createUser(DB *database, User *user) {
         return DB_FAIL;
     }
 
-    rc = sqlite3_bind_text(stmt, 3, hashed, -1, SQLITE_TRANSIENT);
+    rc = sqlite3_bind_text(stmt, 3, user->nickname, -1, SQLITE_STATIC);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("createUser: bind nickname failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        OPENSSL_cleanse(hashed, strlen(hashed));
+        free(hashed);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_bind_text(stmt, 4, hashed, -1, SQLITE_TRANSIENT);
     if (rc != SQLITE_OK) {
         LOG_ERROR("createUser: bind password failed: %s (rc=%d)",
                   sqlite3_errmsg(database->handle), rc);
@@ -723,7 +892,7 @@ int deleteUser(DB *database, User *user) {
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
 
-    int rc = sqlite3_bind_int(stmt, 1, (int)user->uid);
+    int rc = sqlite3_bind_int64(stmt, 1, (sqlite3_int64)user->uid);
     if (rc != SQLITE_OK) {
         LOG_ERROR("deleteUser: bind uid failed: %s (rc=%d)",
                   sqlite3_errmsg(database->handle), rc);
@@ -770,16 +939,11 @@ int verifyUser(DB *database, User *user) {
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
 
+    /* Look up by username only — UID is server-assigned and the client
+     * does not know it before a successful login. */
     int rc = sqlite3_bind_text(stmt, 1, user->username, -1, SQLITE_STATIC);
     if (rc != SQLITE_OK) {
         LOG_ERROR("verifyUser: bind username failed: %s (rc=%d)",
-                  sqlite3_errmsg(database->handle), rc);
-        return DB_FAIL;
-    }
-
-    rc = sqlite3_bind_int(stmt, 2, (int)user->uid);
-    if (rc != SQLITE_OK) {
-        LOG_ERROR("verifyUser: bind uid failed: %s (rc=%d)",
                   sqlite3_errmsg(database->handle), rc);
         return DB_FAIL;
     }
@@ -793,15 +957,28 @@ int verifyUser(DB *database, User *user) {
         return DB_FAIL;
     }
 
-    const char *storedHash = (const char *)sqlite3_column_text(stmt, 0);
+    /* Columns: 0=uid, 1=nickname, 2=password */
+    user->uid = (uint32_t)sqlite3_column_int64(stmt, 0);
+
+    const char *storedNickname = (const char *)sqlite3_column_text(stmt, 1);
+    if (storedNickname == NULL) {
+        LOG_ERROR("verifyUser: stored nickname is NULL");
+        return DB_FAIL;
+    }
+
+    const char *storedHash = (const char *)sqlite3_column_text(stmt, 2);
     if (storedHash == NULL) {
         LOG_ERROR("verifyUser: stored password hash is NULL");
         return DB_FAIL;
     }
 
     int result = verifyPassword(user->password, storedHash);
+    if (result != CRYPTO_SUCC) {
+        return DB_FAIL;
+    }
 
-    return (result == CRYPTO_SUCC) ? DB_SUCC : DB_FAIL;
+    memcpy(user->nickname, storedNickname, NICKNAME_MAX_LEN);
+    return DB_SUCC;
 }
 
 /* ──────────────────────── public API: chat history ────────────────────── */
@@ -832,20 +1009,20 @@ static int generateMsgId(DB *database, uint64_t *outMsgId) {
     return DB_SUCC;
 }
 
-int storeChatHistory(DB *database, uint32_t roomId, ChatHistory *chatHistory) {
-    if (database == NULL || chatHistory == NULL) {
-        LOG_ERROR("storeChatHistory: NULL argument (database=%p, chat=%p)",
-                  (void *)database, (void *)chatHistory);
+int storeChat(DB *database, uint32_t roomId, Chat *chat) {
+    if (database == NULL || chat == NULL) {
+        LOG_ERROR("storeChat: NULL argument (database=%p, chat=%p)",
+                  (void *)database, (void *)chat);
         return DB_FAIL;
     }
     if (database->type != ChatHistoryDB) {
         LOG_ERROR(
-            "storeChatHistory: wrong database type %d (expected ChatHistoryDB)",
+            "storeChat: wrong database type %d (expected ChatHistoryDB)",
             (int)database->type);
         return DB_FAIL;
     }
-    if (chatHistory->message == NULL || chatHistory->message[0] == '\0') {
-        LOG_ERROR("storeChatHistory: message is NULL or empty");
+    if (chat->message == NULL || chat->message[0] == '\0') {
+        LOG_ERROR("storeChat: message is NULL or empty");
         return DB_FAIL;
     }
 
@@ -868,47 +1045,47 @@ int storeChatHistory(DB *database, uint32_t roomId, ChatHistory *chatHistory) {
     /* Bind: ?1=msgId, ?2=uid, ?3=message, ?4=timestamp */
     int rc = sqlite3_bind_int64(stmt, 1, (sqlite3_int64)msgId);
     if (rc != SQLITE_OK) {
-        LOG_ERROR("storeChatHistory: bind msgId failed: %s (rc=%d)",
+        LOG_ERROR("storeChat: bind msgId failed: %s (rc=%d)",
                   sqlite3_errmsg(database->handle), rc);
         return DB_FAIL;
     }
 
-    rc = sqlite3_bind_int(stmt, 2, (int)chatHistory->uid);
+    rc = sqlite3_bind_int64(stmt, 2, (sqlite3_int64)chat->uid);
     if (rc != SQLITE_OK) {
-        LOG_ERROR("storeChatHistory: bind uid failed: %s (rc=%d)",
+        LOG_ERROR("storeChat: bind uid failed: %s (rc=%d)",
                   sqlite3_errmsg(database->handle), rc);
         return DB_FAIL;
     }
 
-    rc = sqlite3_bind_text(stmt, 3, chatHistory->message, -1, SQLITE_STATIC);
+    rc = sqlite3_bind_text(stmt, 3, chat->message, -1, SQLITE_STATIC);
     if (rc != SQLITE_OK) {
-        LOG_ERROR("storeChatHistory: bind message failed: %s (rc=%d)",
+        LOG_ERROR("storeChat: bind message failed: %s (rc=%d)",
                   sqlite3_errmsg(database->handle), rc);
         return DB_FAIL;
     }
 
-    rc = sqlite3_bind_int64(stmt, 4, (sqlite3_int64)chatHistory->timestamp);
+    rc = sqlite3_bind_int64(stmt, 4, (sqlite3_int64)chat->timestamp);
     if (rc != SQLITE_OK) {
-        LOG_ERROR("storeChatHistory: bind timestamp failed: %s (rc=%d)",
+        LOG_ERROR("storeChat: bind timestamp failed: %s (rc=%d)",
                   sqlite3_errmsg(database->handle), rc);
         return DB_FAIL;
     }
 
     rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-        LOG_ERROR("storeChatHistory: step failed: %s (rc=%d)",
+        LOG_ERROR("storeChat: step failed: %s (rc=%d)",
                   sqlite3_errmsg(database->handle), rc);
         return DB_FAIL;
     }
 
     /* Populate the generated msgId back into the caller's struct */
-    chatHistory->msgId = msgId;
+    chat->msgId = msgId;
     return DB_SUCC;
 }
 
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int queryChatByMsgId(DB *database, uint32_t roomId, uint64_t msgId,
-                     ChatHistory *out) {
+                     Chat *out) {
     if (database == NULL || out == NULL) {
         LOG_ERROR("queryChatByMsgId: NULL argument (database=%p, out=%p)",
                   (void *)database, (void *)out);
@@ -971,7 +1148,7 @@ int queryChatByMsgId(DB *database, uint32_t roomId, uint64_t msgId,
 
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int queryChatByTimeRange(DB *database, uint32_t roomId, uint32_t uid,
-                         time_t startTime, time_t endTime, ChatHistory **out,
+                         time_t startTime, time_t endTime, Chat **out,
                          size_t *count) {
     if (database == NULL || out == NULL || count == NULL) {
         LOG_ERROR("queryChatByTimeRange: NULL argument "
@@ -1021,7 +1198,7 @@ int queryChatByTimeRange(DB *database, uint32_t roomId, uint32_t uid,
         sqlite3_reset(stmt);
         sqlite3_clear_bindings(stmt);
 
-        int rc = sqlite3_bind_int(stmt, 1, (int)uid);
+        int rc = sqlite3_bind_int64(stmt, 1, (sqlite3_int64)uid);
         if (rc != SQLITE_OK) {
             LOG_ERROR("queryChatByTimeRange: bind uid failed: %s (rc=%d)",
                       sqlite3_errmsg(database->handle), rc);
@@ -1044,7 +1221,7 @@ int queryChatByTimeRange(DB *database, uint32_t roomId, uint32_t uid,
     /* Iterate result rows and build the output array */
     size_t capacity = QUERY_INITIAL_CAPACITY;
     size_t n = 0;
-    ChatHistory *results = malloc(capacity * sizeof(ChatHistory));
+    Chat *results = malloc(capacity * sizeof(Chat));
     if (results == NULL) {
         LOG_ERROR("queryChatByTimeRange: malloc failed (errno=%d)", errno);
         return DB_FAIL;
@@ -1061,8 +1238,8 @@ int queryChatByTimeRange(DB *database, uint32_t roomId, uint32_t uid,
         /* Grow the array if needed (doubling strategy) */
         if (n >= capacity) {
             size_t newCapacity = capacity * 2;
-            ChatHistory *tmp =
-                realloc(results, newCapacity * sizeof(ChatHistory));
+            Chat *tmp =
+                realloc(results, newCapacity * sizeof(Chat));
             if (tmp == NULL) {
                 LOG_ERROR("queryChatByTimeRange: realloc failed (errno=%d)",
                           errno);
@@ -1126,4 +1303,475 @@ int queryChatByTimeRange(DB *database, uint32_t roomId, uint32_t uid,
     *out = results;
     *count = n;
     return DB_SUCC;
+}
+
+/* ──────────────────────── queryChatByUserAllRooms ─────────────────────── */
+
+/** @brief SQL to discover all room tables from the schema. */
+#define SQL_SELECT_ROOM_TABLES                                                 \
+    "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE "         \
+    "'room_%';"
+
+/**
+ * @brief Comparison function for qsort: order Chat by msgId ascending.
+ */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int compareChatByMsgId(const void *a, const void *b) {
+    const Chat *ha = (const Chat *)a;
+    const Chat *hb = (const Chat *)b;
+    if (ha->msgId < hb->msgId) {
+        return -1;
+    }
+    if (ha->msgId > hb->msgId) {
+        return 1;
+    }
+    return 0;
+}
+
+/**
+ * @brief Collect chat records from one room's stmtSelectByTimeUid into array.
+ *
+ * Resets and binds the statement, then iterates rows appending to the
+ * dynamic array. The caller provides the current array state and this
+ * function updates it in place.
+ *
+ * @param database   The DB handle.
+ * @param entry      Room statement cache entry.
+ * @param uid        User ID to filter by.
+ * @param startTime  Start of range (inclusive).
+ * @param endTime    End of range (inclusive).
+ * @param results    Pointer to current results array (may be reallocated).
+ * @param n          Pointer to current count of collected results.
+ * @param capacity   Pointer to current array capacity.
+ * @return @c DB_SUCC on success, @c DB_FAIL on error.
+ */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int collectRoomResults(DB *database, RoomStmtEntry *entry, uint32_t uid,
+                              time_t startTime, time_t endTime,
+                              Chat **results, size_t *n,
+                              size_t *capacity) {
+    sqlite3_stmt *stmt = entry->stmtSelectByTimeUid;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    /* Bind: ?1=uid, ?2=startTime, ?3=endTime */
+    int rc = sqlite3_bind_int64(stmt, 1, (sqlite3_int64)uid);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("collectRoomResults: bind uid failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+    rc = sqlite3_bind_int64(stmt, 2, (sqlite3_int64)startTime);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("collectRoomResults: bind startTime failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+    rc = sqlite3_bind_int64(stmt, 3, (sqlite3_int64)endTime);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("collectRoomResults: bind endTime failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        if (*n >= QUERY_MAX_RESULTS) {
+            LOG_WARN("collectRoomResults: global result limit reached (%d)",
+                     QUERY_MAX_RESULTS);
+            break;
+        }
+
+        /* Grow the array if needed (doubling strategy) */
+        if (*n >= *capacity) {
+            size_t newCapacity = (*capacity) * 2;
+            Chat *tmp =
+                realloc(*results, newCapacity * sizeof(Chat));
+            if (tmp == NULL) {
+                LOG_ERROR("collectRoomResults: realloc failed (errno=%d)",
+                          errno);
+                return DB_FAIL;
+            }
+            *results = tmp;
+            *capacity = newCapacity;
+        }
+
+        /* Columns: 0=msgId, 1=uid, 2=message, 3=timestamp */
+        (*results)[*n].msgId = (uint64_t)sqlite3_column_int64(stmt, 0);
+        (*results)[*n].uid = (uint32_t)sqlite3_column_int(stmt, 1);
+
+        const char *msgText = (const char *)sqlite3_column_text(stmt, 2);
+        if (msgText == NULL) {
+            LOG_ERROR("collectRoomResults: message column is NULL at row %zu",
+                      *n);
+            return DB_FAIL;
+        }
+        (*results)[*n].message = strdup(msgText);
+        if ((*results)[*n].message == NULL) {
+            LOG_ERROR("collectRoomResults: strdup failed (errno=%d)", errno);
+            return DB_FAIL;
+        }
+
+        (*results)[*n].timestamp = (time_t)sqlite3_column_int64(stmt, 3);
+        (*n)++;
+    }
+
+    if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
+        LOG_ERROR("collectRoomResults: step failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    return DB_SUCC;
+}
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+int queryChatByUserAllRooms(DB *database, uint32_t uid, time_t startTime,
+                            time_t endTime, Chat **out, size_t *count) {
+    if (database == NULL || out == NULL || count == NULL) {
+        LOG_ERROR("queryChatByUserAllRooms: NULL argument "
+                  "(database=%p, out=%p, count=%p)",
+                  (void *)database, (void *)out, (void *)count);
+        return DB_FAIL;
+    }
+    if (database->type != ChatHistoryDB) {
+        LOG_ERROR("queryChatByUserAllRooms: wrong database type %d "
+                  "(expected ChatHistoryDB)",
+                  (int)database->type);
+        return DB_FAIL;
+    }
+    if (uid == 0) {
+        LOG_ERROR("queryChatByUserAllRooms: uid must be non-zero");
+        return DB_FAIL;
+    }
+
+    /* Initialize outputs */
+    *out = NULL;
+    *count = 0;
+
+    /* Discover all room tables via sqlite_master */
+    sqlite3_stmt *stmtMaster = NULL;
+    int rc = sqlite3_prepare_v2(database->handle, SQL_SELECT_ROOM_TABLES, -1,
+                                &stmtMaster, NULL);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("queryChatByUserAllRooms: prepare sqlite_master query "
+                  "failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    /* Collect room IDs first, then finalize the master statement before
+     * executing per-room queries (avoids nested statement issues). */
+    size_t roomCount = 0;
+    size_t roomCapacity = QUERY_INITIAL_CAPACITY;
+    uint32_t *roomIds = malloc(roomCapacity * sizeof(uint32_t));
+    if (roomIds == NULL) {
+        LOG_ERROR("queryChatByUserAllRooms: malloc roomIds failed (errno=%d)",
+                  errno);
+        sqlite3_finalize(stmtMaster);
+        return DB_FAIL;
+    }
+
+    while ((rc = sqlite3_step(stmtMaster)) == SQLITE_ROW) {
+        const char *tableName =
+            (const char *)sqlite3_column_text(stmtMaster, 0);
+        if (tableName == NULL) {
+            continue;
+        }
+
+        /* Parse roomId from table name "room_<uint32>" using strtoul */
+        const char *numStart = tableName + strlen("room_");
+        char *endPtr = NULL;
+        enum { DecimalBase = 10 };
+        unsigned long parsed = strtoul(numStart, &endPtr, DecimalBase);
+        if (endPtr == numStart || *endPtr != '\0' || parsed > UINT32_MAX) {
+            /* Table name does not match expected format; skip */
+            continue;
+        }
+        uint32_t roomId = (uint32_t)parsed;
+
+        /* Grow roomIds array if needed */
+        if (roomCount >= roomCapacity) {
+            size_t newCapacity = roomCapacity * 2;
+            uint32_t *tmp = realloc(roomIds, newCapacity * sizeof(uint32_t));
+            if (tmp == NULL) {
+                LOG_ERROR("queryChatByUserAllRooms: realloc roomIds failed "
+                          "(errno=%d)",
+                          errno);
+                free(roomIds);
+                sqlite3_finalize(stmtMaster);
+                return DB_FAIL;
+            }
+            roomIds = tmp;
+            roomCapacity = newCapacity;
+        }
+
+        roomIds[roomCount] = roomId;
+        roomCount++;
+    }
+
+    sqlite3_finalize(stmtMaster);
+
+    if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
+        LOG_ERROR("queryChatByUserAllRooms: sqlite_master step failed: %s "
+                  "(rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        free(roomIds);
+        return DB_FAIL;
+    }
+
+    /* No rooms exist yet — empty result */
+    if (roomCount == 0) {
+        free(roomIds);
+        return DB_SUCC;
+    }
+
+    /* Allocate result array and iterate over each room */
+    size_t capacity = QUERY_INITIAL_CAPACITY;
+    size_t n = 0;
+    Chat *results = malloc(capacity * sizeof(Chat));
+    if (results == NULL) {
+        LOG_ERROR("queryChatByUserAllRooms: malloc results failed (errno=%d)",
+                  errno);
+        free(roomIds);
+        return DB_FAIL;
+    }
+
+    for (size_t i = 0; i < roomCount; i++) {
+        RoomStmtEntry *entry = getOrCreateRoomStmts(database, roomIds[i]);
+        if (entry == NULL) {
+            LOG_ERROR("queryChatByUserAllRooms: getOrCreateRoomStmts failed "
+                      "for room %u",
+                      roomIds[i]);
+            /* Clean up and fail */
+            for (size_t j = 0; j < n; j++) {
+                free(results[j].message);
+            }
+            free(results);
+            free(roomIds);
+            return DB_FAIL;
+        }
+
+        if (collectRoomResults(database, entry, uid, startTime, endTime,
+                               &results, &n, &capacity) != DB_SUCC) {
+            for (size_t j = 0; j < n; j++) {
+                free(results[j].message);
+            }
+            free(results);
+            free(roomIds);
+            return DB_FAIL;
+        }
+
+        if (n >= QUERY_MAX_RESULTS) {
+            break;
+        }
+    }
+
+    free(roomIds);
+
+    /* Handle empty result set */
+    if (n == 0) {
+        free(results);
+        *out = NULL;
+        *count = 0;
+        return DB_SUCC;
+    }
+
+    /* Sort results globally by msgId for chronological order */
+    qsort(results, n, sizeof(Chat), compareChatByMsgId);
+
+    *out = results;
+    *count = n;
+    return DB_SUCC;
+}
+
+/* ──────────────────────── public API: game (room) operations ──────────── */
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+int createRoom(DB *database, uint32_t roomId, uint32_t creatorUid) {
+    if (database == NULL) {
+        LOG_ERROR("createRoom: NULL database");
+        return DB_FAIL;
+    }
+    if (database->type != GameDB) {
+        LOG_ERROR("createRoom: wrong database type %d (expected GameDB)",
+                  (int)database->type);
+        return DB_FAIL;
+    }
+    if (roomId == 0) {
+        LOG_ERROR("createRoom: roomId zero is reserved");
+        return DB_FAIL;
+    }
+
+    time_t now = time(NULL);
+
+    sqlite3_stmt *stmt = database->stmtInsert;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    /* Bind: ?1=roomId, ?2=creatorUid, ?3=createdAt */
+    int rc = sqlite3_bind_int64(stmt, 1, (sqlite3_int64)roomId);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("createRoom: bind roomId failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_bind_int64(stmt, 2, (sqlite3_int64)creatorUid);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("createRoom: bind creatorUid failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_bind_int64(stmt, 3, (sqlite3_int64)now);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("createRoom: bind createdAt failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        LOG_ERROR("createRoom: step failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    return DB_SUCC;
+}
+
+int deleteRoom(DB *database, uint32_t roomId) {
+    if (database == NULL) {
+        LOG_ERROR("deleteRoom: NULL database");
+        return DB_FAIL;
+    }
+    if (database->type != GameDB) {
+        LOG_ERROR("deleteRoom: wrong database type %d (expected GameDB)",
+                  (int)database->type);
+        return DB_FAIL;
+    }
+
+    sqlite3_stmt *stmt = database->stmtDelete;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    int rc = sqlite3_bind_int64(stmt, 1, (sqlite3_int64)roomId);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("deleteRoom: bind roomId failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        LOG_ERROR("deleteRoom: step failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    /* Strict mode: fail if no rows were affected */
+    if (sqlite3_changes(database->handle) == 0) {
+        LOG_WARN("deleteRoom: roomId %u not found", roomId);
+        return DB_FAIL;
+    }
+
+    return DB_SUCC;
+}
+
+int listRooms(DB *database, uint32_t **outRoomIds, size_t *count) {
+    if (database == NULL || outRoomIds == NULL || count == NULL) {
+        LOG_ERROR("listRooms: NULL argument (database=%p, out=%p, count=%p)",
+                  (void *)database, (void *)outRoomIds, (void *)count);
+        return DB_FAIL;
+    }
+    if (database->type != GameDB) {
+        LOG_ERROR("listRooms: wrong database type %d (expected GameDB)",
+                  (int)database->type);
+        return DB_FAIL;
+    }
+
+    *outRoomIds = NULL;
+    *count = 0;
+
+    sqlite3_stmt *stmt = database->stmtSelect;
+    sqlite3_reset(stmt);
+
+    size_t capacity = QUERY_INITIAL_CAPACITY;
+    size_t n = 0;
+    uint32_t *results = malloc(capacity * sizeof(uint32_t));
+    if (results == NULL) {
+        LOG_ERROR("listRooms: malloc failed (errno=%d)", errno);
+        return DB_FAIL;
+    }
+
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        if (n >= QUERY_MAX_RESULTS) {
+            LOG_WARN("listRooms: result limit reached (%d)", QUERY_MAX_RESULTS);
+            break;
+        }
+
+        if (n >= capacity) {
+            size_t newCapacity = capacity * 2;
+            uint32_t *tmp =
+                realloc(results, newCapacity * sizeof(uint32_t));
+            if (tmp == NULL) {
+                LOG_ERROR("listRooms: realloc failed (errno=%d)", errno);
+                free(results);
+                return DB_FAIL;
+            }
+            results = tmp;
+            capacity = newCapacity;
+        }
+
+        results[n] = (uint32_t)sqlite3_column_int(stmt, 0);
+        n++;
+    }
+
+    if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
+        LOG_ERROR("listRooms: step failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        free(results);
+        return DB_FAIL;
+    }
+
+    if (n == 0) {
+        free(results);
+        *outRoomIds = NULL;
+        *count = 0;
+        return DB_SUCC;
+    }
+
+    *outRoomIds = results;
+    *count = n;
+    return DB_SUCC;
+}
+
+int roomExists(DB *database, uint32_t roomId) {
+    if (database == NULL) {
+        LOG_ERROR("roomExists: NULL database");
+        return DB_FAIL;
+    }
+    if (database->type != GameDB) {
+        LOG_ERROR("roomExists: wrong database type %d (expected GameDB)",
+                  (int)database->type);
+        return DB_FAIL;
+    }
+    if (roomId == 0) {
+        return DB_FAIL;
+    }
+
+    sqlite3_stmt *stmt = database->stmtRoomExists;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    int rc = sqlite3_bind_int64(stmt, 1, (sqlite3_int64)roomId);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("roomExists: bind roomId failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_step(stmt);
+    return (rc == SQLITE_ROW) ? DB_SUCC : DB_FAIL;
 }

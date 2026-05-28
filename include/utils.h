@@ -30,6 +30,8 @@
 
 #include <time.h>
 
+#include <stddef.h>
+
 /* ──────────────────────── generic macros ───────────────────────────────── */
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -47,5 +49,25 @@
  *         or @c (time_t)-1 on failure.
  */
 time_t getCurrentTimestamp(void);
+
+/**
+ * @brief Read a password from stdin with masked input (asterisks).
+ *
+ * When stdin is a terminal, disables echo, reads up to
+ * @p bufsize - 1 characters, displays @c '*' for each keystroke,
+ * handles backspace, and restores terminal settings on completion.
+ * When stdin is not a terminal (pipe / redirect), falls back to a
+ * single @c fgets() call without masking.
+ *
+ * The buffer is always NUL-terminated.  The trailing newline is
+ * consumed but **not** stored.  Callers should @c printf(@"\\n")
+ * afterwards to advance the cursor.
+ *
+ * @param buf      Output buffer (must be at least @p bufsize bytes).
+ * @param bufsize  Size of @p buf in bytes.
+ * @return Length of the password read (excluding NUL), or @c 0 on EOF
+ *         or error.
+ */
+size_t readPasswordMasked(char *buf, size_t bufsize);
 
 #endif /* UTILS_H */

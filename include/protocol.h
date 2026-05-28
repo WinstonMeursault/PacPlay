@@ -43,10 +43,16 @@
 
 #define MAX_PAYLOAD_LEN 1024
 
+/** @brief Fixed username length in login request payload (NUL-terminated). */
+#define LOGIN_USERNAME_LEN 32
+
+/** @brief Fixed nickname length in login request payload (NUL-terminated). */
+#define LOGIN_NICKNAME_LEN 32
+
 /** @brief Extra bytes added by AES-256-GCM encryption: nonce + tag. */
 #define AES_PACKET_EXTRA_LEN (AES_GCM_NONCE_LEN + AES_GCM_TAG_LEN)
 
-#define BACKLOG 5
+#define BACKLOG 1024
 
 /* When the value of a socket fd is NULL_SOCKETFD, the exception should have
    been already handled if any error occurred. */
@@ -63,35 +69,53 @@ typedef enum {
 } PacketType;
 
 typedef enum {
-    MsgLoginReq = 1,
-    MsgLoginResp,
-
-    MsgKeyExchangeReq,
+    /* Phase 1: key exchange (plaintext, happens before any encryption). */
+    MsgKeyExchangeReq = 1,
     MsgKeyExchangeResp,
 
+    /* Phase 2: authentication. */
+    MsgLoginReq,
+    MsgLoginResp,
+    MsgRegisterReq,
+    MsgRegisterResp,
+
+    /* Phase 3: room management. */
+    MsgRoomListReq,
+    MsgRoomListResp,
+    MsgCreateRoom,
+    MsgCreateRoomResp,
+    MsgJoinRoom,
+    MsgJoinRoomResp,
+
+    /* Phase 4: in-room chat. */
     MsgChat,
 
-    MsgCreateRoom,
-    MsgJoinRoom,
+    /* Session lifecycle. */
+    MsgLogout,
+    MsgHeartbeat,
 
+    /* Phase 5: game control (future). */
     MsgGameStart,
-    MsgGameStop,
-
-    MsgHeartbeat
+    MsgGameStop
 } MessageType;
 
 #pragma pack(push, 1)
 
+/* All fields use fixed-width types so the wire format is platform-independent.
+ * Enums (PacketType, MessageType) are used only as named constants; the wire
+ * stores uint32_t values for deterministic width. */
 typedef struct {
     uint32_t magic;
-    PacketType packetType;
-    MessageType messageType;
-    size_t payloadLength;
+    uint32_t packetType;
+    uint32_t messageType;
+    uint32_t payloadLength;
     uint32_t sequenceID;
 } PacketHeader;
 
 #pragma pack(pop)
 
+/* Packet itself is never serialised directly — header and payload are sent
+ * separately.  Therefore it does not need #pragma pack. */
 typedef struct {
     PacketHeader header;
     uint8_t *payload;
@@ -103,6 +127,76 @@ typedef struct {
     uint8_t publicKey[ECDH_PUBLIC_KEY_SIZE];
 } KeyExchangePacketPayload;
 
+#pragma pack(pop)
+
+/** @brief Login request payload sent from client to server.
+ *
+ *  Used by @c MsgLoginReq.  Contains only the username and password — UID is
+ *  assigned by the server on registration and returned to the client in a
+ *  @c LoginResponsePayload upon successful login.  username is a fixed-length
+ *  NUL-terminated / NUL-padded array.  password is a flexible array member
+ *  whose length is derived from PacketHeader::payloadLength minus
+ *  @c LOGIN_USERNAME_LEN.  The caller is responsible for ensuring the password
+ *  is NUL-terminated within the total payload. */
+#pragma pack(push, 1)
+typedef struct {
+    char username[LOGIN_USERNAME_LEN];
+    char password[];
+} LoginRequestPayload;
+#pragma pack(pop)
+
+/** @brief Registration request payload sent from client to server.
+ *
+ *  Used by @c MsgRegisterReq.  username and nickname are fixed-length
+ *  NUL-terminated / NUL-padded arrays.  password is a flexible array member
+ *  whose length is derived from PacketHeader::payloadLength minus
+ *  @c LOGIN_USERNAME_LEN minus @c LOGIN_NICKNAME_LEN.  The caller is
+ *  responsible for ensuring the password is NUL-terminated within the total
+ *  payload.  UID is server-assigned — the client does not send one. */
+#pragma pack(push, 1)
+typedef struct {
+    char username[LOGIN_USERNAME_LEN];
+    char nickname[LOGIN_NICKNAME_LEN];
+    char password[];
+} RegisterRequestPayload;
+#pragma pack(pop)
+
+/** @brief Login response payload sent from server to client.
+ *
+ *  Sent as the payload of @c MsgLoginResp.  On success, all three fields are
+ *  populated with the authenticated user's canonical record from the database.
+ *  On failure, @c uid is 0 and the string fields are zero-filled.  The client
+ *  must check @c uid @c != @c 0 to determine success. */
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t uid;
+    char username[LOGIN_USERNAME_LEN];
+    char nickname[LOGIN_NICKNAME_LEN];
+} LoginResponsePayload;
+#pragma pack(pop)
+
+/** @brief Chat message payload sent from client to server.
+ *
+ *  message is a FAM whose length = payloadLength - sizeof(timestamp).
+ *  The server infers the room from the sender's session state. */
+#pragma pack(push, 1)
+typedef struct {
+    int64_t timestamp;
+    uint8_t message[];
+} ChatPacketPayload;
+#pragma pack(pop)
+
+/** @brief Chat broadcast payload forwarded from server to room members.
+ *
+ *  Includes the server-assigned msgId and originating uid so clients
+ *  can display sender identity and track message ordering. */
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t uid;
+    uint64_t msgId;
+    int64_t timestamp;
+    uint8_t message[];
+} ChatBroadcastPayload;
 #pragma pack(pop)
 
 /**

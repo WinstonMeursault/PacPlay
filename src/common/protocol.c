@@ -50,7 +50,7 @@
  * @param sequenceID    The packet sequence ID.
  * @return The AAD as a @c uint64_t.
  */
-static uint64_t buildAAD(size_t payloadLength, uint32_t sequenceID) {
+static uint64_t buildAAD(uint32_t payloadLength, uint32_t sequenceID) {
     return ((uint64_t)payloadLength << AAD_PAYLOAD_SHIFT) |
            (uint64_t)sequenceID;
 }
@@ -293,7 +293,7 @@ int packetSerialize(const Packet *packet, uint8_t *buffer, size_t bufferSize,
     }
 
     /* Guard against integer overflow in size calculation. */
-    if (packet->header.payloadLength > SIZE_MAX - sizeof(PacketHeader)) {
+    if (packet->header.payloadLength > UINT32_MAX - sizeof(PacketHeader)) {
         LOG_ERROR("Payload length overflow in serialize");
         return PROTOCOL_FAIL;
     }
@@ -347,7 +347,7 @@ int packetDeserialize(const uint8_t *buffer, size_t bufferSize,
     }
 
     /* Guard against integer overflow in size calculation. */
-    if (packet->header.payloadLength > SIZE_MAX - sizeof(PacketHeader)) {
+    if (packet->header.payloadLength > UINT32_MAX - sizeof(PacketHeader)) {
         LOG_ERROR("Payload length overflow in deserialize");
         return PROTOCOL_FAIL;
     }
@@ -377,7 +377,7 @@ int packetDeserialize(const uint8_t *buffer, size_t bufferSize,
 /* ──────────────── public API: AES-256-GCM encrypt / decrypt ────────────── */
 
 int packetAESEncrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
-    if (packet == NULL || packet->payload == NULL || key == NULL) {
+    if (packet == NULL || key == NULL) {
         return PROTOCOL_FAIL;
     }
 
@@ -389,6 +389,11 @@ int packetAESEncrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
     if (packet->header.payloadLength > MAX_PAYLOAD_LEN) {
         LOG_ERROR("Payload too large for encryption (%zu > %d)",
                   packet->header.payloadLength, MAX_PAYLOAD_LEN);
+        return PROTOCOL_FAIL;
+    }
+
+    if (packet->header.payloadLength > 0 && packet->payload == NULL) {
+        LOG_ERROR("Cannot encrypt: payload is NULL with positive payloadLength");
         return PROTOCOL_FAIL;
     }
 
@@ -408,8 +413,11 @@ int packetAESEncrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
         .data = (uint8_t *)&aadValue, .capacity = AAD_LEN, .len = AAD_LEN};
 
     /* 3. Prepare plaintext buffer (references existing payload, no copy). */
+    static const uint8_t emptyPayload;
     AESGCMBuffer plaintext = {
-        .data = packet->payload, .capacity = plaintextLen, .len = plaintextLen};
+        .data = (packet->payload != NULL) ? (uint8_t *)packet->payload
+                                          : (uint8_t *)&emptyPayload,
+        .capacity = plaintextLen, .len = plaintextLen};
 
     /* 4. Allocate ciphertext output buffer. */
     AESGCMCipher cipher;

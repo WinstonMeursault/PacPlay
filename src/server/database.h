@@ -34,6 +34,8 @@
 
 #include <sqlite3.h>
 
+#include "server.h"
+
 /* ──────────────────────── constants ────────────────────────────────────── */
 
 /** @brief File path for the user database. */
@@ -42,11 +44,11 @@
 /** @brief File path for the chat history database. */
 #define CHAT_HISTORY_DB_PATH "db/chatHistory.db"
 
+/** @brief File path for the game database. */
+#define GAME_DB_PATH "db/game.db"
+
 /** @brief Directory containing all database files. */
 #define DB_DIRECTORY "db"
-
-/** @brief Maximum username length (including NUL terminator). */
-#define DB_USERNAME_MAX_LEN 32
 
 /* ──────────────────────── return codes ─────────────────────────────────── */
 
@@ -56,22 +58,7 @@
 /* ──────────────────────── types ────────────────────────────────────────── */
 
 /** @brief Identifies which database to open. */
-typedef enum { UserDB = 1, ChatHistoryDB } DBType;
-
-/** @brief Represents a user record in the user database. */
-typedef struct {
-    char username[DB_USERNAME_MAX_LEN];
-    uint32_t uid;
-    char *password; /**< Plaintext password (hashed internally on storage). */
-} User;
-
-/** @brief Represents a single chat message record. */
-typedef struct {
-    uint32_t uid;
-    uint64_t msgId; /**< Globally unique, monotonically increasing ID. */
-    char *message;
-    time_t timestamp; /**< UNIX timestamp (seconds since epoch, UTC). */
-} ChatHistory;
+typedef enum { UserDB = 1, ChatHistoryDB, GameDB } DBType;
 
 /* ──────────────────────── room statement cache ────────────────────────── */
 
@@ -113,13 +100,15 @@ typedef struct {
  * For ChatHistoryDB: uses roomCache (per-room hash table) and stmtSeq
  * for the global message sequence generator.
  */
-typedef struct {
+typedef struct DB {
     sqlite3 *handle; /**< Underlying sqlite3 connection. */
     DBType type;     /**< Type of database this handle serves. */
     /* UserDB cached statements */
-    sqlite3_stmt *stmtInsert; /**< Cached INSERT statement (UserDB). */
-    sqlite3_stmt *stmtDelete; /**< Cached DELETE statement (UserDB). */
-    sqlite3_stmt *stmtSelect; /**< Cached SELECT statement (UserDB). */
+    sqlite3_stmt *stmtInsert; /**< Cached INSERT statement (UserDB / GameDB). */
+    sqlite3_stmt *stmtDelete; /**< Cached DELETE statement (UserDB / GameDB). */
+    sqlite3_stmt *stmtSelect; /**< Cached SELECT statement (UserDB / GameDB). */
+    sqlite3_stmt *stmtRoomExists; /**< cached SELECT 1 FROM rooms WHERE roomId=? (GameDB). */
+    sqlite3_stmt *stmtUidCheck; /**< Cached SELECT 1 FROM users WHERE uid=? (UserDB). */
     /* ChatHistoryDB cached statements */
     sqlite3_stmt *stmtSeq; /**< Global msg sequence INSERT (ChatHistoryDB). */
     RoomStmtCache *roomCache; /**< Per-room statement cache (ChatHistoryDB). */
@@ -136,12 +125,12 @@ typedef struct {
  *
  * Schema for UserDB:
  *   - users(uid INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL,
- *           password TEXT NOT NULL)
+ *           nickname TEXT NOT NULL, password TEXT NOT NULL)
  *
  * Schema for ChatHistoryDB:
  *   - msg_sequence(id INTEGER PRIMARY KEY AUTOINCREMENT)
  *     Provides globally unique, monotonically increasing message IDs.
- *   - Per-room tables (created on demand via storeChatHistory):
+ *   - Per-room tables (created on demand via storeChat):
  *     room_<roomId>(msgId INTEGER PRIMARY KEY, uid INTEGER NOT NULL,
  *                   message TEXT NOT NULL, timestamp INTEGER NOT NULL)
  *
@@ -205,17 +194,17 @@ int verifyUser(DB *database, User *user);
  * Inserts a new record into the table for @p roomId. If the room table
  * does not yet exist, it is created automatically (along with indices).
  *
- * The @c msgId field of @p chatHistory is ignored on input; after a
+ * The @c msgId field of @p chat is ignored on input; after a
  * successful insert, it is populated with the globally unique,
  * monotonically increasing message ID assigned by the database.
  *
  * @param database     An open ChatHistoryDB handle.
  * @param roomId       The room to store the message in.
- * @param chatHistory  Chat record to store. @c uid, @c message, and
+ * @param chat         Chat record to store. @c uid, @c message, and
  *                     @c timestamp must be set. Must not be NULL.
  * @return @c DB_SUCC on success, @c DB_FAIL on failure.
  */
-int storeChatHistory(DB *database, uint32_t roomId, ChatHistory *chatHistory);
+int storeChat(DB *database, uint32_t roomId, Chat *chat);
 
 /**
  * @brief Query a single chat message by its globally unique message ID.
@@ -231,7 +220,7 @@ int storeChatHistory(DB *database, uint32_t roomId, ChatHistory *chatHistory);
  * @return @c DB_SUCC on success, @c DB_FAIL if not found or on error.
  */
 int queryChatByMsgId(DB *database, uint32_t roomId, uint64_t msgId,
-                     ChatHistory *out);
+                     Chat *out);
 
 /**
  * @brief Query chat messages within a time range, optionally filtered by uid.
@@ -240,7 +229,7 @@ int queryChatByMsgId(DB *database, uint32_t roomId, uint64_t msgId,
  * [@p startTime, @p endTime] (inclusive). If @p uid is 0, messages from
  * all users are returned; otherwise only messages from that uid.
  *
- * On success, @p *out is set to a newly allocated array of ChatHistory
+ * On success, @p *out is set to a newly allocated array of Chat
  * records and @p *count is set to the number of results. Each entry's
  * @c message field is a separate allocation; the caller must free each
  * @c message and the array itself.
@@ -258,7 +247,88 @@ int queryChatByMsgId(DB *database, uint32_t roomId, uint64_t msgId,
  * @return @c DB_SUCC on success, @c DB_FAIL on error.
  */
 int queryChatByTimeRange(DB *database, uint32_t roomId, uint32_t uid,
-                         time_t startTime, time_t endTime, ChatHistory **out,
+                         time_t startTime, time_t endTime, Chat **out,
                          size_t *count);
+
+/**
+ * @brief Query all chat messages from a user across all rooms in a time range.
+ *
+ * Iterates over every existing room table (discovered via sqlite_master)
+ * and retrieves messages where uid matches and timestamp falls within
+ * [@p startTime, @p endTime] (inclusive). Results are sorted globally by
+ * msgId (ascending), providing a unified chronological view.
+ *
+ * On success, @p *out is set to a newly allocated array of Chat
+ * records and @p *count is set to the number of results. Each entry's
+ * @c message field is a separate allocation; the caller must free each
+ * @c message and the array itself.
+ *
+ * An empty result set (no matching records) is considered success:
+ * returns @c DB_SUCC with @p *count = 0 and @p *out = NULL.
+ *
+ * @param database   An open ChatHistoryDB handle.
+ * @param uid        User ID to query (must be non-zero).
+ * @param startTime  Start of the time range (inclusive).
+ * @param endTime    End of the time range (inclusive).
+ * @param out        Output pointer to the result array. Must not be NULL.
+ * @param count      Output pointer to the result count. Must not be NULL.
+ * @return @c DB_SUCC on success, @c DB_FAIL on error.
+ */
+int queryChatByUserAllRooms(DB *database, uint32_t uid, time_t startTime,
+                            time_t endTime, Chat **out, size_t *count);
+
+/* ──────────────────────── game (room) operations ─────────────────────── */
+
+/**
+ * @brief Create a new game room record.
+ *
+ * Inserts a row into the rooms table with the current UNIX timestamp.
+ * @p roomId must be non-zero and must not already exist.
+ *
+ * @param database    An open GameDB handle.
+ * @param roomId      The room identifier (must be > 0).
+ * @param creatorUid  The uid of the user creating the room.
+ * @return @c DB_SUCC on success, @c DB_FAIL if @p roomId already exists
+ *         or on error.
+ */
+int createRoom(DB *database, uint32_t roomId, uint32_t creatorUid);
+
+/**
+ * @brief Delete a room record from the game database.
+ *
+ * Fails in strict mode: if @p roomId does not exist the call returns
+ * @c DB_FAIL.
+ *
+ * @param database  An open GameDB handle.
+ * @param roomId    The room to delete.
+ * @return @c DB_SUCC on success, @c DB_FAIL if not found or on error.
+ */
+int deleteRoom(DB *database, uint32_t roomId);
+
+/**
+ * @brief List all room IDs in the game database.
+ *
+ * On success @p *outRoomIds is set to a newly allocated array of
+ * @c uint32_t and @p *count is set to the number of rooms.  The caller
+ * must @c free(*outRoomIds).
+ *
+ * An empty database is considered success: returns @c DB_SUCC with
+ * @p *count = 0 and @p *outRoomIds = NULL.
+ *
+ * @param database    An open GameDB handle.
+ * @param outRoomIds  Output array of room IDs. Must not be NULL.
+ * @param count       Output count of rooms. Must not be NULL.
+ * @return @c DB_SUCC on success, @c DB_FAIL on error.
+ */
+int listRooms(DB *database, uint32_t **outRoomIds, size_t *count);
+
+/**
+ * @brief Check whether a room exists in the game database.
+ *
+ * @param database  An open GameDB handle.
+ * @param roomId    The room to check.
+ * @return @c DB_SUCC if the room exists, @c DB_FAIL if not found or on error.
+ */
+int roomExists(DB *database, uint32_t roomId);
 
 #endif /* SERVER_DATABASE_H */

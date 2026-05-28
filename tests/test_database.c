@@ -53,7 +53,7 @@ enum { RoomMaxVal = 0xFFFFFFFF };
 enum { TimeBase = 1700000000, TimeOffset1 = 100, TimeOffset2 = 200 };
 enum { TimeOffset3 = 300, TimeOffset4 = 400 };
 enum { TimeOffset5 = 500 };
-enum { LongStrLen = 1024, MaxUserLen31 = DB_USERNAME_MAX_LEN - 1 };
+enum { LongStrLen = 1024, MaxUserLen31 = USERNAME_MAX_LEN - 1 };
 enum { TimeSecsPerDay = 86400 };
 enum { NonexistentUid = 99999 };
 enum { TestSentinelPtr = 1 };
@@ -73,12 +73,15 @@ static void removeDBFiles(void) {
     remove("db/chatHistory.db");
     remove("db/chatHistory.db-wal");
     remove("db/chatHistory.db-shm");
+    remove("db/game.db");
+    remove("db/game.db-wal");
+    remove("db/game.db-shm");
 }
 
 /**
- * @brief Free a dynamically allocated ChatHistory result array.
+ * @brief Free a dynamically allocated Chat result array.
  */
-static void freeChatHistoryArray(ChatHistory *arr, size_t count) {
+static void freeChatArray(Chat *arr, size_t count) {
     for (size_t i = 0; i < count; i++) {
         free(arr[i].message);
     }
@@ -148,7 +151,7 @@ static void testDbInitMultipleHandles(void) {
 
 /** @brief createUser rejects NULL database. */
 static void testCreateUserNullDB(void) {
-    User u = {"alice", TestUidAlpha, "plaintext"};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "plaintext"};
     ASSERT_INT_EQ(createUser(NULL, &u), DB_FAIL);
 }
 
@@ -166,7 +169,17 @@ static void testCreateUserEmptyUsername(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"", TestUidAlpha, "pass"};
+    User u = { .username = "", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
+    ASSERT_INT_EQ(createUser(db, &u), DB_FAIL);
+    dbClose(db);
+}
+
+/** @brief createUser rejects empty nickname. */
+static void testCreateUserEmptyNickname(void) {
+    removeDBFiles();
+    DB *db = dbInit(UserDB);
+    ASSERT_TRUE(db != NULL);
+    User u = { .username = "alice", .nickname = "", .uid = 0, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_FAIL);
     dbClose(db);
 }
@@ -176,7 +189,7 @@ static void testCreateUserNullPassword(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"alice", TestUidAlpha, NULL};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = NULL};
     ASSERT_INT_EQ(createUser(db, &u), DB_FAIL);
     dbClose(db);
 }
@@ -186,7 +199,7 @@ static void testCreateUserEmptyPassword(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"alice", TestUidAlpha, ""};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = ""};
     ASSERT_INT_EQ(createUser(db, &u), DB_FAIL);
     dbClose(db);
 }
@@ -196,7 +209,7 @@ static void testCreateUserWrongDBType(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"alice", TestUidAlpha, "pass"};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_FAIL);
     dbClose(db);
 }
@@ -206,20 +219,24 @@ static void testCreateUserBasic(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"alice", TestUidAlpha, "secret123"};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "secret123"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
     dbClose(db);
 }
 
-/** @brief createUser: duplicate uid (different username) must fail. */
+/** @brief createUser: duplicate uid (different username) now succeeds
+ *  because uid is server-assigned — each call gets a unique random value. */
 static void testCreateUserDuplicateUID(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u1 = {"alice", TestUidAlpha, "pass1"};
+    User u1 = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass1"};
     ASSERT_INT_EQ(createUser(db, &u1), DB_SUCC);
-    User u2 = {"bob", TestUidAlpha, "pass2"};
-    ASSERT_INT_EQ(createUser(db, &u2), DB_FAIL);
+    User u2 = { .username = "bob", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass2"};
+    ASSERT_INT_EQ(createUser(db, &u2), DB_SUCC);
+    /* Verify both users independently */
+    ASSERT_INT_EQ(verifyUser(db, &u1), DB_SUCC);
+    ASSERT_INT_EQ(verifyUser(db, &u2), DB_SUCC);
     dbClose(db);
 }
 
@@ -228,9 +245,9 @@ static void testCreateUserDuplicateUsername(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u1 = {"eve", TestUidAlpha, "pass1"};
+    User u1 = { .username = "eve", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass1"};
     ASSERT_INT_EQ(createUser(db, &u1), DB_SUCC);
-    User u2 = {"eve", TestUidBravo, "pass2"};
+    User u2 = { .username = "eve", .nickname = "TestNick", .uid = TestUidBravo, .password = "pass2"};
     ASSERT_INT_EQ(createUser(db, &u2), DB_FAIL);
     dbClose(db);
 }
@@ -240,22 +257,35 @@ static void testCreateUserMaxLenUsername(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u;
-    u.uid = TestUidAlpha;
-    u.password = "pass";
+    User u = {.uid = TestUidAlpha, .password = "pass", .nickname = "TestNick"};
     memset(u.username, 'X', (size_t)MaxUserLen31);
     u.username[MaxUserLen31] = '\0';
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
     dbClose(db);
 }
 
-/** @brief createUser: uid = 0 is reserved and must be rejected. */
+/** @brief createUser: nickname at maximum length (31 non-NUL chars) works. */
+static void testCreateUserMaxLenNickname(void) {
+    removeDBFiles();
+    DB *db = dbInit(UserDB);
+    ASSERT_TRUE(db != NULL);
+    enum { MaxNickLen31 = NICKNAME_MAX_LEN - 1 };
+    User u = {.username = "nickmax", .uid = 0, .password = "pass"};
+    memset(u.nickname, 'N', (size_t)MaxNickLen31);
+    u.nickname[MaxNickLen31] = '\0';
+    ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+    dbClose(db);
+}
+
+/** @brief createUser: uid=0 is now valid — the server assigns a random
+ *  non-zero uid and populates user->uid. */
 static void testCreateUserUidZero(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"uidzero", 0, "pass"};
-    ASSERT_INT_EQ(createUser(db, &u), DB_FAIL);
+    User u = { .username = "uidzero", .nickname = "TestNick", .uid = 0, .password = "pass"};
+    ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+    ASSERT_TRUE(u.uid != 0);
     dbClose(db);
 }
 
@@ -264,8 +294,36 @@ static void testCreateUserUidMax(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"uidmax", TestUidMax, "pass"};
+    User u = { .username = "uidmax", .nickname = "TestNick", .uid = TestUidMax, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+    dbClose(db);
+}
+
+/** @brief createUser: 20 sequential calls all succeed with pairwise unique
+ *  uids.  This validates the RAND_bytes + uniqueness-check retry loop
+ *  under normal load and guarantees no collisions within a small set. */
+static void testCreateUserMultipleUniqueUids(void) {
+    removeDBFiles();
+    DB *db = dbInit(UserDB);
+    ASSERT_TRUE(db != NULL);
+    enum { UserCount = 20 };
+    uint32_t uids[UserCount];
+    for (int i = 0; i < UserCount; i++) {
+        char nameBuf[USERNAME_MAX_LEN];
+        snprintf(nameBuf, sizeof(nameBuf), "bulk%02d", i);
+        User u = {.username = "", .nickname = "TestNick", .uid = 0,
+                  .password = "pass"};
+        memcpy(u.username, nameBuf, strlen(nameBuf) + 1);
+        ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+        ASSERT_TRUE(u.uid != 0);
+        uids[i] = u.uid;
+    }
+    /* Verify pairwise uniqueness */
+    for (int i = 0; i < UserCount; i++) {
+        for (int j = i + 1; j < UserCount; j++) {
+            ASSERT_TRUE(uids[i] != uids[j]);
+        }
+    }
     dbClose(db);
 }
 
@@ -274,8 +332,8 @@ static void testCreateUserSpecialCharsPassword(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"spec", TestUidAlpha,
-              "!@#$%^&*()_+{}|:\"<>?`~[\\];',./\x01\x1F\x7F"};
+    User u = {.username = "spec", .nickname = "TestNick", .uid = TestUidAlpha,
+              .password = "!@#$%^&*()_+{}|:\"<>?`~[\\];',./\x01\x1F\x7F"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
     /* Verify we can still verify */
     ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
@@ -292,7 +350,7 @@ static void testCreateUserLongPassword(void) {
     ASSERT_TRUE(longPass != NULL);
     memset(longPass, 'P', passLen - 1);
     longPass[passLen - 1] = '\0';
-    User u = {"longpass", TestUidAlpha, longPass};
+    User u = { .username = "longpass", .nickname = "TestNick", .uid = TestUidAlpha, .password = longPass};
     int result = createUser(db, &u);
     ASSERT_INT_EQ(result, DB_SUCC);
     /* Verify the long password works */
@@ -306,7 +364,7 @@ static void testCreateUserLongPassword(void) {
 
 /** @brief deleteUser rejects NULL database. */
 static void testDeleteUserNullDB(void) {
-    User u = {"alice", TestUidAlpha, NULL};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = NULL};
     ASSERT_INT_EQ(deleteUser(NULL, &u), DB_FAIL);
 }
 
@@ -324,7 +382,7 @@ static void testDeleteUserWrongDBType(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"alice", TestUidAlpha, NULL};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = NULL};
     ASSERT_INT_EQ(deleteUser(db, &u), DB_FAIL);
     dbClose(db);
 }
@@ -334,7 +392,7 @@ static void testDeleteUserNonexistent(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"ghost", NonexistentUid, NULL};
+    User u = { .username = "ghost", .nickname = "TestNick", .uid = NonexistentUid, .password = NULL};
     ASSERT_INT_EQ(deleteUser(db, &u), DB_FAIL);
     dbClose(db);
 }
@@ -344,7 +402,7 @@ static void testDeleteUserBasic(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"delme", TestUidAlpha, "pass"};
+    User u = { .username = "delme", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
     ASSERT_INT_EQ(deleteUser(db, &u), DB_SUCC);
     dbClose(db);
@@ -355,7 +413,7 @@ static void testDeleteUserTwice(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"delme2", TestUidAlpha, "pass"};
+    User u = { .username = "delme2", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
     ASSERT_INT_EQ(deleteUser(db, &u), DB_SUCC);
     ASSERT_INT_EQ(deleteUser(db, &u), DB_FAIL);
@@ -368,11 +426,12 @@ static void testDeleteUserUidZero(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    /* Create a valid user to ensure DB operations work, but uid=0 is rejected */
-    User u = {"valid", TestUidAlpha, "pass"};
+    /* Create a valid user to ensure DB operations work, but uid=0 is rejected
+     */
+    User u = { .username = "valid", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
     /* uid=0 cannot be created, so deletion must fail */
-    User uZero = {"zero", 0, "pass"};
+    User uZero = { .username = "zero", .nickname = "TestNick", .uid = 0, .password = "pass"};
     ASSERT_INT_EQ(deleteUser(db, &uZero), DB_FAIL);
     dbClose(db);
 }
@@ -382,7 +441,7 @@ static void testDeleteUserUidMax(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"max", TestUidMax, "pass"};
+    User u = { .username = "max", .nickname = "TestNick", .uid = TestUidMax, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
     ASSERT_INT_EQ(deleteUser(db, &u), DB_SUCC);
     dbClose(db);
@@ -392,7 +451,7 @@ static void testDeleteUserUidMax(void) {
 
 /** @brief verifyUser rejects NULL database. */
 static void testVerifyUserNullDB(void) {
-    User u = {"alice", TestUidAlpha, "pass"};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(verifyUser(NULL, &u), DB_FAIL);
 }
 
@@ -410,7 +469,7 @@ static void testVerifyUserEmptyUsername(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"", TestUidAlpha, "pass"};
+    User u = { .username = "", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(verifyUser(db, &u), DB_FAIL);
     dbClose(db);
 }
@@ -420,7 +479,7 @@ static void testVerifyUserNullPassword(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"alice", TestUidAlpha, NULL};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = NULL};
     ASSERT_INT_EQ(verifyUser(db, &u), DB_FAIL);
     dbClose(db);
 }
@@ -430,7 +489,7 @@ static void testVerifyUserEmptyPassword(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"alice", TestUidAlpha, ""};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = ""};
     ASSERT_INT_EQ(verifyUser(db, &u), DB_FAIL);
     dbClose(db);
 }
@@ -440,7 +499,7 @@ static void testVerifyUserWrongDBType(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"alice", TestUidAlpha, "pass"};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(verifyUser(db, &u), DB_FAIL);
     dbClose(db);
 }
@@ -450,7 +509,7 @@ static void testVerifyUserNonexistent(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"ghost", NonexistentUid, "pass"};
+    User u = { .username = "ghost", .nickname = "TestNick", .uid = NonexistentUid, .password = "pass"};
     ASSERT_INT_EQ(verifyUser(db, &u), DB_FAIL);
     dbClose(db);
 }
@@ -460,7 +519,7 @@ static void testVerifyUserWrongPassword(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"alice", TestUidAlpha, "correct"};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "correct"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
     u.password = "wrongpass";
     ASSERT_INT_EQ(verifyUser(db, &u), DB_FAIL);
@@ -472,7 +531,7 @@ static void testVerifyUserWrongUsername(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"alice", TestUidAlpha, "secret"};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "secret"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
     u.password = "secret";
     strncpy(u.username, "bob", sizeof(u.username));
@@ -480,16 +539,21 @@ static void testVerifyUserWrongUsername(void) {
     dbClose(db);
 }
 
-/** @brief verifyUser: correct username but wrong uid fails. */
+/** @brief verifyUser: UID is not part of authentication — changing uid
+ *  while keeping correct username+password should still succeed. */
 static void testVerifyUserWrongUID(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"alice", TestUidAlpha, "secret"};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "secret"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+    /* save the server-assigned uid so we can demonstrate it changed */
+    uint32_t assignedUid = u.uid;
     u.password = "secret";
     u.uid = NonexistentUid;
-    ASSERT_INT_EQ(verifyUser(db, &u), DB_FAIL);
+    ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
+    /* verifyUser must still return the canonical uid from the database */
+    ASSERT_UINT_EQ(u.uid, assignedUid);
     dbClose(db);
 }
 
@@ -498,7 +562,7 @@ static void testVerifyUserBasic(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"alice", TestUidAlpha, "secret123"};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "secret123"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
     ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
     dbClose(db);
@@ -509,7 +573,7 @@ static void testVerifyUserAfterDelete(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"todelete", TestUidAlpha, "pass"};
+    User u = { .username = "todelete", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
     ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
     ASSERT_INT_EQ(deleteUser(db, &u), DB_SUCC);
@@ -523,13 +587,13 @@ static void testVerifyUserNoEnumeration(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"alice", TestUidAlpha, "realpass"};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "realpass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
     /* Wrong password */
     u.password = "wrong";
     int resultWrong = verifyUser(db, &u);
     /* Non-existent user */
-    User ghost = {"ghost", NonexistentUid, "any"};
+    User ghost = { .username = "ghost", .nickname = "TestNick", .uid = NonexistentUid, .password = "any"};
     int resultGhost = verifyUser(db, &ghost);
     /* Both must return DB_FAIL; attacker cannot distinguish */
     ASSERT_INT_EQ(resultWrong, DB_FAIL);
@@ -542,7 +606,7 @@ static void testVerifyUserSimilarPassword(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"alice", TestUidAlpha, "Password123"};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "Password123"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
     /* Case difference */
     u.password = "password123";
@@ -556,125 +620,125 @@ static void testVerifyUserSimilarPassword(void) {
     dbClose(db);
 }
 
-/* ═══════════════════════  5. storeChatHistory  ════════════════════════════ */
+/* ═══════════════════════  5. storeChat  ════════════════════════════ */
 
-/** @brief storeChatHistory rejects NULL database. */
+/** @brief storeChat rejects NULL database. */
 static void testStoreChatNullDB(void) {
-    ChatHistory ch = {TestUidAlpha, 0, "hello", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(NULL, RoomTestA, &ch), DB_FAIL);
+    Chat ch = {TestUidAlpha, 0, "hello", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(NULL, RoomTestA, &ch), DB_FAIL);
 }
 
-/** @brief storeChatHistory rejects NULL ChatHistory pointer. */
+/** @brief storeChat rejects NULL Chat pointer. */
 static void testStoreChatNullChat(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, NULL), DB_FAIL);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, NULL), DB_FAIL);
     dbClose(db);
 }
 
-/** @brief storeChatHistory rejects NULL message. */
+/** @brief storeChat rejects NULL message. */
 static void testStoreChatNullMessage(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch = {TestUidAlpha, 0, NULL, (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_FAIL);
+    Chat ch = {TestUidAlpha, 0, NULL, (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_FAIL);
     dbClose(db);
 }
 
-/** @brief storeChatHistory rejects empty message. */
+/** @brief storeChat rejects empty message. */
 static void testStoreChatEmptyMessage(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch = {TestUidAlpha, 0, "", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_FAIL);
+    Chat ch = {TestUidAlpha, 0, "", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_FAIL);
     dbClose(db);
 }
 
-/** @brief storeChatHistory rejects wrong database type. */
+/** @brief storeChat rejects wrong database type. */
 static void testStoreChatWrongDBType(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch = {TestUidAlpha, 0, "msg", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_FAIL);
+    Chat ch = {TestUidAlpha, 0, "msg", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_FAIL);
     dbClose(db);
 }
 
-/** @brief storeChatHistory: basic success, msgId is populated. */
+/** @brief storeChat: basic success, msgId is populated. */
 static void testStoreChatBasic(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch = {TestUidAlpha, 0, "Hello, world!", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_SUCC);
+    Chat ch = {TestUidAlpha, 0, "Hello, world!", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
     /* msgId must have been populated (non-zero) */
     ASSERT_TRUE(ch.msgId > 0);
     dbClose(db);
 }
 
-/** @brief storeChatHistory: msgId is strictly monotonically increasing. */
+/** @brief storeChat: msgId is strictly monotonically increasing. */
 static void testStoreChatMsgIdMonotonic(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch1 = {TestUidAlpha, 0, "msg1", (time_t)TimeBase};
-    ChatHistory ch2 = {TestUidAlpha, 0, "msg2", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch1), DB_SUCC);
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch2), DB_SUCC);
+    Chat ch1 = {TestUidAlpha, 0, "msg1", (time_t)TimeBase};
+    Chat ch2 = {TestUidAlpha, 0, "msg2", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch1), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch2), DB_SUCC);
     ASSERT_TRUE(ch2.msgId > ch1.msgId);
     dbClose(db);
 }
 
-/** @brief storeChatHistory: msgId is unique across different rooms. */
+/** @brief storeChat: msgId is unique across different rooms. */
 static void testStoreChatCrossRoomUnique(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory chA = {TestUidAlpha, 0, "roomA", (time_t)TimeBase};
-    ChatHistory chB = {TestUidAlpha, 0, "roomB", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &chA), DB_SUCC);
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestB, &chB), DB_SUCC);
+    Chat chA = {TestUidAlpha, 0, "roomA", (time_t)TimeBase};
+    Chat chB = {TestUidAlpha, 0, "roomB", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &chA), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestB, &chB), DB_SUCC);
     /* msgIds must be distinct */
     ASSERT_TRUE(chA.msgId != chB.msgId);
     dbClose(db);
 }
 
-/** @brief storeChatHistory: roomId = 0 works. */
+/** @brief storeChat: roomId = 0 works. */
 static void testStoreChatRoomIdZero(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch = {TestUidAlpha, 0, "room zero", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, 0, &ch), DB_SUCC);
+    Chat ch = {TestUidAlpha, 0, "room zero", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, 0, &ch), DB_SUCC);
     ASSERT_TRUE(ch.msgId > 0);
     dbClose(db);
 }
 
-/** @brief storeChatHistory: roomId = UINT32_MAX works. */
+/** @brief storeChat: roomId = UINT32_MAX works. */
 static void testStoreChatRoomIdMax(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch = {TestUidAlpha, 0, "room max", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomMaxVal, &ch), DB_SUCC);
+    Chat ch = {TestUidAlpha, 0, "room max", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomMaxVal, &ch), DB_SUCC);
     ASSERT_TRUE(ch.msgId > 0);
     dbClose(db);
 }
 
-/** @brief storeChatHistory: special characters in message are preserved. */
+/** @brief storeChat: special characters in message are preserved. */
 static void testStoreChatSpecialChars(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch = {TestUidAlpha, 0,
+    Chat ch = {TestUidAlpha, 0,
                       "'; DROP TABLE users; -- \n\r\t\x01\x1F\x7F\xFF",
                       (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
     /* Verify roundtrip preserves the string */
-    ChatHistory retrieved;
+    Chat retrieved;
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, ch.msgId, &retrieved),
                   DB_SUCC);
     ASSERT_STR_EQ(retrieved.message,
@@ -683,13 +747,13 @@ static void testStoreChatSpecialChars(void) {
     dbClose(db);
 }
 
-/** @brief storeChatHistory: timestamp = 0 (epoch) is accepted. */
+/** @brief storeChat: timestamp = 0 (epoch) is accepted. */
 static void testStoreChatTimestampZero(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch = {TestUidAlpha, 0, "epoch msg", (time_t)0};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_SUCC);
+    Chat ch = {TestUidAlpha, 0, "epoch msg", (time_t)0};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
     ASSERT_TRUE(ch.msgId > 0);
     dbClose(db);
 }
@@ -698,7 +762,7 @@ static void testStoreChatTimestampZero(void) {
 
 /** @brief queryChatByMsgId rejects NULL database. */
 static void testQueryMsgIdNullDB(void) {
-    ChatHistory out;
+    Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(NULL, RoomTestA, 1, &out), DB_FAIL);
 }
 
@@ -716,7 +780,7 @@ static void testQueryMsgIdWrongDBType(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory out;
+    Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, 1, &out), DB_FAIL);
     dbClose(db);
 }
@@ -726,7 +790,7 @@ static void testQueryMsgIdNonexistent(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory out;
+    Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, LargeNonexistentMsgId, &out),
                   DB_FAIL);
     dbClose(db);
@@ -737,7 +801,7 @@ static void testQueryMsgIdNonexistentRoom(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory out;
+    Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(db, 9999, 1, &out), DB_FAIL);
     dbClose(db);
 }
@@ -747,9 +811,9 @@ static void testQueryMsgIdRoundtrip(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory in = {TestUidAlpha, 0, "roundtrip test!", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &in), DB_SUCC);
-    ChatHistory out;
+    Chat in = {TestUidAlpha, 0, "roundtrip test!", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &in), DB_SUCC);
+    Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, in.msgId, &out), DB_SUCC);
     ASSERT_UINT_EQ(out.msgId, in.msgId);
     ASSERT_UINT_EQ(out.uid, in.uid);
@@ -765,16 +829,16 @@ static void testQueryMsgIdZeroSearch(void) {
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
     /* Store a message and note its msgId, then query by that exact id */
-    ChatHistory in = {TestUidAlpha, 0, "zero test", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &in), DB_SUCC);
-    ChatHistory out;
+    Chat in = {TestUidAlpha, 0, "zero test", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &in), DB_SUCC);
+    Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, in.msgId, &out), DB_SUCC);
     free(out.message);
     /* msgId=0 before any store should fail */
     removeDBFiles();
     DB *db2 = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db2 != NULL);
-    ChatHistory out2;
+    Chat out2;
     ASSERT_INT_EQ(queryChatByMsgId(db2, RoomTestA, 0, &out2), DB_FAIL);
     dbClose(db2);
 }
@@ -784,7 +848,7 @@ static void testQueryMsgIdMax(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory out;
+    Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, UINT64_MAX, &out), DB_FAIL);
     dbClose(db);
 }
@@ -794,7 +858,7 @@ static void testQueryMsgIdOutNotTouchedOnFailure(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory out;
+    Chat out;
     memset(&out, 0, sizeof(out));
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, NonexistentMsgId, &out),
                   DB_FAIL);
@@ -807,7 +871,7 @@ static void testQueryMsgIdOutNotTouchedOnFailure(void) {
 
 /** @brief queryChatByTimeRange rejects NULL database. */
 static void testQueryTimeNullDB(void) {
-    ChatHistory *out = NULL;
+    Chat *out = NULL;
     size_t count = 0;
     ASSERT_INT_EQ(queryChatByTimeRange(NULL, RoomTestA, 0, (time_t)0, (time_t)1,
                                        &out, &count),
@@ -831,7 +895,7 @@ static void testQueryTimeNullCount(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory *out = NULL;
+    Chat *out = NULL;
     ASSERT_INT_EQ(queryChatByTimeRange(db, RoomTestA, 0, (time_t)0, (time_t)1,
                                        &out, NULL),
                   DB_FAIL);
@@ -843,7 +907,7 @@ static void testQueryTimeWrongDBType(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory *out = NULL;
+    Chat *out = NULL;
     size_t count = 0;
     ASSERT_INT_EQ(queryChatByTimeRange(db, RoomTestA, 0, (time_t)0, (time_t)1,
                                        &out, &count),
@@ -856,7 +920,7 @@ static void testQueryTimeEmptyRoom(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory *out = (ChatHistory *)(uintptr_t)TestSentinelPtr;
+    Chat *out = (Chat *)(uintptr_t)TestSentinelPtr;
     size_t count = TestCountSentinel;
     ASSERT_INT_EQ(queryChatByTimeRange(db, RoomTestA, 0, (time_t)0,
                                        (time_t)TimeBase + TimeOffset5, &out,
@@ -873,12 +937,12 @@ static void testQueryTimeUIDFilter(void) {
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
     /* Store messages from two different users */
-    ChatHistory ch1 = {TestUidAlpha, 0, "alpha msg", (time_t)TimeBase};
-    ChatHistory ch2 = {TestUidBravo, 0, "bravo msg", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch1), DB_SUCC);
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch2), DB_SUCC);
+    Chat ch1 = {TestUidAlpha, 0, "alpha msg", (time_t)TimeBase};
+    Chat ch2 = {TestUidBravo, 0, "bravo msg", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch1), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch2), DB_SUCC);
     /* Query only TestUidAlpha's messages */
-    ChatHistory *out = NULL;
+    Chat *out = NULL;
     size_t count = 0;
     ASSERT_INT_EQ(queryChatByTimeRange(db, RoomTestA, TestUidAlpha, (time_t)0,
                                        (time_t)TimeBase + TimeOffset5, &out,
@@ -887,7 +951,7 @@ static void testQueryTimeUIDFilter(void) {
     ASSERT_UINT_EQ(count, (unsigned long long)1);
     ASSERT_UINT_EQ(out[0].uid, TestUidAlpha);
     ASSERT_STR_EQ(out[0].message, "alpha msg");
-    freeChatHistoryArray(out, count);
+    freeChatArray(out, count);
     dbClose(db);
 }
 
@@ -896,20 +960,20 @@ static void testQueryTimeAllUids(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch1 = {TestUidAlpha, 0, "A", (time_t)TimeBase};
-    ChatHistory ch2 = {TestUidBravo, 0, "B", (time_t)TimeBase};
-    ChatHistory ch3 = {TestUidCharlie, 0, "C", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch1), DB_SUCC);
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch2), DB_SUCC);
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch3), DB_SUCC);
-    ChatHistory *out = NULL;
+    Chat ch1 = {TestUidAlpha, 0, "A", (time_t)TimeBase};
+    Chat ch2 = {TestUidBravo, 0, "B", (time_t)TimeBase};
+    Chat ch3 = {TestUidCharlie, 0, "C", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch1), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch2), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch3), DB_SUCC);
+    Chat *out = NULL;
     size_t count = 0;
     ASSERT_INT_EQ(queryChatByTimeRange(db, RoomTestA, 0, (time_t)0,
                                        (time_t)TimeBase + TimeOffset5, &out,
                                        &count),
                   DB_SUCC);
     ASSERT_UINT_EQ(count, (unsigned long long)3);
-    freeChatHistoryArray(out, count);
+    freeChatArray(out, count);
     dbClose(db);
 }
 
@@ -918,10 +982,10 @@ static void testQueryTimeNoMatch(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch = {TestUidAlpha, 0, "msg", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_SUCC);
+    Chat ch = {TestUidAlpha, 0, "msg", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
     /* Query a time range entirely after the message */
-    ChatHistory *out = NULL;
+    Chat *out = NULL;
     size_t count = 0;
     ASSERT_INT_EQ(
         queryChatByTimeRange(db, RoomTestA, 0, (time_t)(TimeBase + TimeOffset5),
@@ -938,9 +1002,9 @@ static void testQueryTimeInvertedRange(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch = {TestUidAlpha, 0, "msg", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_SUCC);
-    ChatHistory *out = NULL;
+    Chat ch = {TestUidAlpha, 0, "msg", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
+    Chat *out = NULL;
     size_t count = 0;
     ASSERT_INT_EQ(
         queryChatByTimeRange(db, RoomTestA, 0, (time_t)TimeBase + TimeOffset2,
@@ -956,19 +1020,19 @@ static void testQueryTimeEqualRange(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch1 = {TestUidAlpha, 0, "exact", (time_t)TimeBase};
-    ChatHistory ch2 = {TestUidAlpha, 0, "after",
+    Chat ch1 = {TestUidAlpha, 0, "exact", (time_t)TimeBase};
+    Chat ch2 = {TestUidAlpha, 0, "after",
                        (time_t)(TimeBase + TimeOffset1)};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch1), DB_SUCC);
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch2), DB_SUCC);
-    ChatHistory *out = NULL;
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch1), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch2), DB_SUCC);
+    Chat *out = NULL;
     size_t count = 0;
     ASSERT_INT_EQ(queryChatByTimeRange(db, RoomTestA, 0, (time_t)TimeBase,
                                        (time_t)TimeBase, &out, &count),
                   DB_SUCC);
     ASSERT_UINT_EQ(count, (unsigned long long)1);
     ASSERT_STR_EQ(out[0].message, "exact");
-    freeChatHistoryArray(out, count);
+    freeChatArray(out, count);
     dbClose(db);
 }
 
@@ -977,17 +1041,17 @@ static void testQueryTimeOrdering(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch1 = {TestUidAlpha, 0, "third",
+    Chat ch1 = {TestUidAlpha, 0, "third",
                        (time_t)(TimeBase + TimeOffset3)};
-    ChatHistory ch2 = {TestUidAlpha, 0, "first",
+    Chat ch2 = {TestUidAlpha, 0, "first",
                        (time_t)(TimeBase + TimeOffset1)};
-    ChatHistory ch3 = {TestUidAlpha, 0, "second",
+    Chat ch3 = {TestUidAlpha, 0, "second",
                        (time_t)(TimeBase + TimeOffset2)};
     /* Store out of timestamp order */
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch1), DB_SUCC);
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch2), DB_SUCC);
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch3), DB_SUCC);
-    ChatHistory *out = NULL;
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch1), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch2), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch3), DB_SUCC);
+    Chat *out = NULL;
     size_t count = 0;
     ASSERT_INT_EQ(queryChatByTimeRange(db, RoomTestA, 0, (time_t)0,
                                        (time_t)TimeBase + TimeOffset5, &out,
@@ -997,7 +1061,7 @@ static void testQueryTimeOrdering(void) {
     /* Results must be ordered by msgId ASC (which is insert order) */
     ASSERT_TRUE(out[0].msgId < out[1].msgId);
     ASSERT_TRUE(out[1].msgId < out[2].msgId);
-    freeChatHistoryArray(out, count);
+    freeChatArray(out, count);
     dbClose(db);
 }
 
@@ -1008,11 +1072,11 @@ static void testQueryTimeManyMessages(void) {
     ASSERT_TRUE(db != NULL);
     enum { MsgCount = 50 };
     for (int i = 0; i < MsgCount; i++) {
-        ChatHistory ch = {TestUidAlpha, 0, "msg",
+        Chat ch = {TestUidAlpha, 0, "msg",
                           (time_t)(TimeBase + i * TimeOffset1)};
-        ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_SUCC);
+        ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
     }
-    ChatHistory *out = NULL;
+    Chat *out = NULL;
     size_t count = 0;
     ASSERT_INT_EQ(
         queryChatByTimeRange(db, RoomTestA, 0, (time_t)0,
@@ -1024,7 +1088,7 @@ static void testQueryTimeManyMessages(void) {
     for (size_t i = 0; i < count; i++) {
         ASSERT_TRUE(out[i].message != NULL);
     }
-    freeChatHistoryArray(out, count);
+    freeChatArray(out, count);
     dbClose(db);
 }
 
@@ -1034,12 +1098,12 @@ static void testQueryTimeCrossRoomIsolation(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory chA = {TestUidAlpha, 0, "roomA", (time_t)TimeBase};
-    ChatHistory chB = {TestUidAlpha, 0, "roomB", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &chA), DB_SUCC);
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestB, &chB), DB_SUCC);
+    Chat chA = {TestUidAlpha, 0, "roomA", (time_t)TimeBase};
+    Chat chB = {TestUidAlpha, 0, "roomB", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &chA), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestB, &chB), DB_SUCC);
     /* Query room A — should NOT see room B's message */
-    ChatHistory *out = NULL;
+    Chat *out = NULL;
     size_t count = 0;
     ASSERT_INT_EQ(queryChatByTimeRange(db, RoomTestA, 0, (time_t)0,
                                        (time_t)TimeBase + TimeOffset5, &out,
@@ -1047,7 +1111,7 @@ static void testQueryTimeCrossRoomIsolation(void) {
                   DB_SUCC);
     ASSERT_UINT_EQ(count, (unsigned long long)1);
     ASSERT_STR_EQ(out[0].message, "roomA");
-    freeChatHistoryArray(out, count);
+    freeChatArray(out, count);
     dbClose(db);
 }
 
@@ -1059,14 +1123,14 @@ static void testPersistenceUserDB(void) {
     {
         DB *db = dbInit(UserDB);
         ASSERT_TRUE(db != NULL);
-        User u = {"persist", TestUidAlpha, "mysecret"};
+        User u = { .username = "persist", .nickname = "TestNick", .uid = TestUidAlpha, .password = "mysecret"};
         ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
         dbClose(db);
     }
     {
         DB *db = dbInit(UserDB);
         ASSERT_TRUE(db != NULL);
-        User u = {"persist", TestUidAlpha, "mysecret"};
+        User u = { .username = "persist", .nickname = "TestNick", .uid = TestUidAlpha, .password = "mysecret"};
         ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
         dbClose(db);
     }
@@ -1079,15 +1143,15 @@ static void testPersistenceChatDB(void) {
     {
         DB *db = dbInit(ChatHistoryDB);
         ASSERT_TRUE(db != NULL);
-        ChatHistory ch = {TestUidAlpha, 0, "persistent msg", (time_t)TimeBase};
-        ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_SUCC);
+        Chat ch = {TestUidAlpha, 0, "persistent msg", (time_t)TimeBase};
+        ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
         savedMsgId = ch.msgId;
         dbClose(db);
     }
     {
         DB *db2 = dbInit(ChatHistoryDB);
         ASSERT_TRUE(db2 != NULL);
-        ChatHistory out;
+        Chat out;
         ASSERT_INT_EQ(queryChatByMsgId(db2, RoomTestA, savedMsgId, &out),
                       DB_SUCC);
         ASSERT_STR_EQ(out.message, "persistent msg");
@@ -1103,16 +1167,16 @@ static void testPersistenceMsgSeqContinues(void) {
     {
         DB *db = dbInit(ChatHistoryDB);
         ASSERT_TRUE(db != NULL);
-        ChatHistory ch = {TestUidAlpha, 0, "pre-close", (time_t)TimeBase};
-        ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_SUCC);
+        Chat ch = {TestUidAlpha, 0, "pre-close", (time_t)TimeBase};
+        ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
         lastBeforeClose = ch.msgId;
         dbClose(db);
     }
     {
         DB *db = dbInit(ChatHistoryDB);
         ASSERT_TRUE(db != NULL);
-        ChatHistory ch = {TestUidAlpha, 0, "post-close", (time_t)TimeBase};
-        ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_SUCC);
+        Chat ch = {TestUidAlpha, 0, "post-close", (time_t)TimeBase};
+        ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
         /* New msgId must be greater than the one before close */
         ASSERT_TRUE(ch.msgId > lastBeforeClose);
         dbClose(db);
@@ -1132,12 +1196,12 @@ static void testSQLInjectionUsername(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"'; DROP TABLE users; --", TestUidAlpha, "pass"};
+    User u = { .username = "'; DROP TABLE users; --", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
     /* Verify the exact string was stored */
     ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
     /* The users table must still exist (no DROP was executed) */
-    User v = {"normal", TestUidBravo, "pass"};
+    User v = { .username = "normal", .nickname = "TestNick", .uid = TestUidBravo, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &v), DB_SUCC);
     dbClose(db);
 }
@@ -1151,13 +1215,13 @@ static void testSQLInjectionMessage(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch = {TestUidAlpha, 0,
+    Chat ch = {TestUidAlpha, 0,
                       "'); DELETE FROM room_1; INSERT INTO room_1 "
                       "VALUES(9999,1,'hacked',0); --",
                       (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
     /* Retrieve and verify exact string */
-    ChatHistory out;
+    Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, ch.msgId, &out), DB_SUCC);
     ASSERT_STR_EQ(out.message, "'); DELETE FROM room_1; INSERT INTO room_1 "
                                "VALUES(9999,1,'hacked',0); --");
@@ -1167,17 +1231,17 @@ static void testSQLInjectionMessage(void) {
 }
 
 /**
- * @brief Calling all ChatHistory operations on a UserDB handle must fail.
+ * @brief Calling all Chat operations on a UserDB handle must fail.
  */
 static void testCrossTypeChatOnUserDB(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch = {TestUidAlpha, 0, "msg", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_FAIL);
-    ChatHistory out;
+    Chat ch = {TestUidAlpha, 0, "msg", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_FAIL);
+    Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, 1, &out), DB_FAIL);
-    ChatHistory *arr = NULL;
+    Chat *arr = NULL;
     size_t count = 0;
     ASSERT_INT_EQ(queryChatByTimeRange(db, RoomTestA, 0, (time_t)0, (time_t)1,
                                        &arr, &count),
@@ -1192,7 +1256,7 @@ static void testCrossTypeUserOnChatDB(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"alice", TestUidAlpha, "pass"};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_FAIL);
     ASSERT_INT_EQ(deleteUser(db, &u), DB_FAIL);
     ASSERT_INT_EQ(verifyUser(db, &u), DB_FAIL);
@@ -1205,7 +1269,7 @@ static void testUsernameEmbeddedNul(void) {
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
     /* First char \0 → empty string, must be rejected */
-    User u = {"\0hidden", TestUidAlpha, "pass"};
+    User u = { .username = "\0hidden", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_FAIL);
     dbClose(db);
 }
@@ -1236,15 +1300,16 @@ static void testPasswordNotPlaintextInDB(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"alice", TestUidAlpha, "secret123"};
+    User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "secret123"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
-    /* Directly query the raw stored password — must NOT equal plaintext */
+    /* Directly query the raw stored password — must NOT equal plaintext.
+     * Use the uid that createUser assigned (no longer TestUidAlpha). */
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(db->handle,
                                 "SELECT password FROM users WHERE uid = ?;", -1,
                                 &stmt, NULL);
     ASSERT_INT_EQ(rc, SQLITE_OK);
-    rc = sqlite3_bind_int(stmt, 1, (int)TestUidAlpha);
+    rc = sqlite3_bind_int64(stmt, 1, (sqlite3_int64)u.uid);
     ASSERT_INT_EQ(rc, SQLITE_OK);
     rc = sqlite3_step(stmt);
     ASSERT_INT_EQ(rc, SQLITE_ROW);
@@ -1268,8 +1333,8 @@ static void testPasswordHashSamePasswordDifferentUsers(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u1 = {"hash1", TestUidAlpha, "samepass"};
-    User u2 = {"hash2", TestUidBravo, "samepass"};
+    User u1 = { .username = "hash1", .nickname = "TestNick", .uid = TestUidAlpha, .password = "samepass"};
+    User u2 = { .username = "hash2", .nickname = "TestNick", .uid = TestUidBravo, .password = "samepass"};
     ASSERT_INT_EQ(createUser(db, &u1), DB_SUCC);
     ASSERT_INT_EQ(createUser(db, &u2), DB_SUCC);
     /* Both users can verify independently with the same password */
@@ -1286,54 +1351,76 @@ static void testPasswordHashSamePasswordDifferentUsers(void) {
 
 /* ═══════════════════════  11. additional coverage gaps  ══════════════════ */
 
-/** @brief uid=0 cannot be created, therefore verifyUser with uid=0 must
- *  fail (no such user can exist). */
+/** @brief uid=0 users are now allowed — the server generates a random
+ *  uid and verifyUser returns the canonical uid from the database. */
 static void testVerifyUserUidZero(void) {
     removeDBFiles();
     DB *db = dbInit(UserDB);
     ASSERT_TRUE(db != NULL);
-    User u = {"zero", 0, "pass"};
-    ASSERT_INT_EQ(createUser(db, &u), DB_FAIL);
-    ASSERT_INT_EQ(verifyUser(db, &u), DB_FAIL);
+    User u = { .username = "zero", .nickname = "TestNick", .uid = 0, .password = "pass"};
+    ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+    ASSERT_TRUE(u.uid != 0);
+    ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
     dbClose(db);
 }
 
-/** @brief storeChatHistory: negative timestamp (time_t)-1 works. */
+/** @brief verifyUser returns the same canonical uid from the database
+ *  on repeated calls, and fills the nickname field from the stored record. */
+static void testVerifyUserUidConsistency(void) {
+    removeDBFiles();
+    DB *db = dbInit(UserDB);
+    ASSERT_TRUE(db != NULL);
+    User u = {.username = "stable", .nickname = "TestNick", .uid = 0,
+              .password = "stablepw"};
+    ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+    uint32_t firstUid = u.uid;
+    ASSERT_TRUE(firstUid != 0);
+    /* First verifyUser call must return the canonical uid from DB */
+    ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
+    ASSERT_UINT_EQ(u.uid, firstUid);
+    ASSERT_STR_EQ(u.nickname, "TestNick");
+    /* Second call must also return the same uid */
+    ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
+    ASSERT_UINT_EQ(u.uid, firstUid);
+    dbClose(db);
+}
+
+/** @brief storeChat: negative timestamp (time_t)-1 works. */
 static void testStoreChatTimestampNegative(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch = {TestUidAlpha, 0, "neg time", (time_t)-1};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_SUCC);
-    ChatHistory out;
+    Chat ch = {TestUidAlpha, 0, "neg time", (time_t)-1};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
+    Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, ch.msgId, &out), DB_SUCC);
     ASSERT_INT_EQ(out.timestamp, (time_t)-1);
     free(out.message);
     dbClose(db);
 }
 
-/** @brief storeChatHistory: LONG_MAX timestamp works. */
+/** @brief storeChat: LONG_MAX timestamp works. */
 static void testStoreChatTimestampLongMax(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch = {TestUidAlpha, 0, "max time", (time_t)LONG_MAX};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_SUCC);
-    ChatHistory out;
+    Chat ch = {TestUidAlpha, 0, "max time", (time_t)LONG_MAX};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
+    Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, ch.msgId, &out), DB_SUCC);
     ASSERT_INT_EQ(out.timestamp, (time_t)LONG_MAX);
     free(out.message);
     dbClose(db);
 }
 
-/** @brief storeChatHistory: UINT32_MAX uid works. */
+/** @brief storeChat: UINT32_MAX uid works. */
 static void testStoreChatUidMax(void) {
     removeDBFiles();
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
-    ChatHistory ch = {TestUidMax, 0, "max uid msg", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_SUCC);
-    ChatHistory out;
+    Chat ch = {TestUidMax, 0, "max uid msg", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
+    Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, ch.msgId, &out), DB_SUCC);
     ASSERT_UINT_EQ(out.uid, TestUidMax);
     free(out.message);
@@ -1348,8 +1435,8 @@ static void testStoreChatCrossRoomUniqueMulti(void) {
     enum { MultiRoomCount = 5 };
     uint64_t msgIds[MultiRoomCount];
     for (uint32_t r = 0; r < MultiRoomCount; r++) {
-        ChatHistory ch = {TestUidAlpha, 0, "multi", (time_t)TimeBase};
-        ASSERT_INT_EQ(storeChatHistory(db, r, &ch), DB_SUCC);
+        Chat ch = {TestUidAlpha, 0, "multi", (time_t)TimeBase};
+        ASSERT_INT_EQ(storeChat(db, r, &ch), DB_SUCC);
         msgIds[r] = ch.msgId;
     }
     /* All msgIds must be pairwise distinct */
@@ -1370,17 +1457,507 @@ static void testQueryTimeExactCapacity(void) {
     enum { InitCap = 16, /* matches database.c QUERY_INITIAL_CAPACITY */ };
     enum { ExactCount = InitCap };
     for (int i = 0; i < ExactCount; i++) {
-        ChatHistory ch = {TestUidAlpha, 0, "exact cap", (time_t)(TimeBase + i)};
-        ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_SUCC);
+        Chat ch = {TestUidAlpha, 0, "exact cap", (time_t)(TimeBase + i)};
+        ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
     }
-    ChatHistory *out = NULL;
+    Chat *out = NULL;
     size_t count = 0;
     ASSERT_INT_EQ(queryChatByTimeRange(db, RoomTestA, 0, (time_t)0,
                                        (time_t)TimeBase + ExactCount, &out,
                                        &count),
                   DB_SUCC);
     ASSERT_UINT_EQ(count, (unsigned long long)ExactCount);
-    freeChatHistoryArray(out, count);
+    freeChatArray(out, count);
+    dbClose(db);
+}
+
+/* ═══════════════════════  7b. queryChatByUserAllRooms  ══════════════════ */
+
+/** @brief queryChatByUserAllRooms rejects NULL database. */
+static void testQueryUserAllNullDB(void) {
+    Chat *out = (Chat *)(uintptr_t)TestSentinelPtr;
+    size_t count = TestCountSentinel;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(NULL, TestUidAlpha, (time_t)0,
+                                          (time_t)1, &out, &count),
+                  DB_FAIL);
+    ASSERT_TRUE(out == (Chat *)(uintptr_t)TestSentinelPtr);
+    ASSERT_UINT_EQ(count, (unsigned long long)TestCountSentinel);
+}
+
+/** @brief queryChatByUserAllRooms rejects NULL out. */
+static void testQueryUserAllNullOut(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    size_t count = TestCountSentinel;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)0,
+                                          (time_t)1, NULL, &count),
+                  DB_FAIL);
+    ASSERT_UINT_EQ(count, (unsigned long long)TestCountSentinel);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms rejects NULL count. */
+static void testQueryUserAllNullCount(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    Chat *out = (Chat *)(uintptr_t)TestSentinelPtr;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)0,
+                                          (time_t)1, &out, NULL),
+                  DB_FAIL);
+    ASSERT_TRUE(out == (Chat *)(uintptr_t)TestSentinelPtr);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms rejects wrong database type. */
+static void testQueryUserAllWrongDBType(void) {
+    removeDBFiles();
+    DB *db = dbInit(UserDB);
+    ASSERT_TRUE(db != NULL);
+    Chat *out = (Chat *)(uintptr_t)TestSentinelPtr;
+    size_t count = TestCountSentinel;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)0,
+                                          (time_t)1, &out, &count),
+                  DB_FAIL);
+    ASSERT_TRUE(out == (Chat *)(uintptr_t)TestSentinelPtr);
+    ASSERT_UINT_EQ(count, (unsigned long long)TestCountSentinel);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms rejects uid=0. */
+static void testQueryUserAllUidZero(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    Chat *out = (Chat *)(uintptr_t)TestSentinelPtr;
+    size_t count = TestCountSentinel;
+    ASSERT_INT_EQ(
+        queryChatByUserAllRooms(db, 0, (time_t)0, (time_t)1, &out, &count),
+        DB_FAIL);
+    ASSERT_TRUE(out == (Chat *)(uintptr_t)TestSentinelPtr);
+    ASSERT_UINT_EQ(count, (unsigned long long)TestCountSentinel);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms: no rooms exist → empty result (SUCC). */
+static void testQueryUserAllNoRooms(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    Chat *out = (Chat *)(uintptr_t)TestSentinelPtr;
+    size_t count = TestCountSentinel;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)0,
+                                          (time_t)1, &out, &count),
+                  DB_SUCC);
+    ASSERT_UINT_EQ(count, (unsigned long long)0);
+    ASSERT_TRUE(out == NULL);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms: rooms exist but no user messages →
+ *  empty result. */
+static void testQueryUserAllNoMatch(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    /* Store messages for TestUidBravo only */
+    Chat ch = {TestUidBravo, 0, "bravo msg", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
+    /* Query TestUidAlpha — none of their messages exist */
+    Chat *out = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)0,
+                                          (time_t)TimeBase + TimeOffset5, &out,
+                                          &count),
+                  DB_SUCC);
+    ASSERT_UINT_EQ(count, (unsigned long long)0);
+    ASSERT_TRUE(out == NULL);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms: single room — results match
+ *  queryChatByTimeRange. */
+static void testQueryUserAllSingleRoom(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    /* Store 3 messages from same user in one room */
+    Chat ch1 = {TestUidAlpha, 0, "first", (time_t)TimeBase};
+    Chat ch2 = {TestUidAlpha, 0, "second",
+                       (time_t)(TimeBase + TimeOffset1)};
+    Chat ch3 = {TestUidAlpha, 0, "third",
+                       (time_t)(TimeBase + TimeOffset2)};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch1), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch2), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch3), DB_SUCC);
+
+    Chat *outAll = NULL;
+    size_t countAll = 0;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)0,
+                                          (time_t)TimeBase + TimeOffset5,
+                                          &outAll, &countAll),
+                  DB_SUCC);
+    ASSERT_UINT_EQ(countAll, (unsigned long long)3);
+
+    /* Compare with per-room query */
+    Chat *outRoom = NULL;
+    size_t countRoom = 0;
+    ASSERT_INT_EQ(queryChatByTimeRange(db, RoomTestA, TestUidAlpha, (time_t)0,
+                                       (time_t)TimeBase + TimeOffset5, &outRoom,
+                                       &countRoom),
+                  DB_SUCC);
+    ASSERT_UINT_EQ(countRoom, (unsigned long long)3);
+    ASSERT_UINT_EQ(outAll[0].msgId, outRoom[0].msgId);
+    ASSERT_UINT_EQ(outAll[1].msgId, outRoom[1].msgId);
+    ASSERT_UINT_EQ(outAll[2].msgId, outRoom[2].msgId);
+
+    freeChatArray(outAll, countAll);
+    freeChatArray(outRoom, countRoom);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms: multiple rooms — aggregates all user
+ *  messages. */
+static void testQueryUserAllMultiRoom(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    /* Store TestUidAlpha messages in 3 different rooms */
+    Chat chA = {TestUidAlpha, 0, "room-A", (time_t)(TimeBase)};
+    Chat chB = {TestUidAlpha, 0, "room-B", (time_t)(TimeBase)};
+    Chat chC = {TestUidAlpha, 0, "room-C", (time_t)(TimeBase)};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &chA), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestB, &chB), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestC, &chC), DB_SUCC);
+
+    Chat *out = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)0,
+                                          (time_t)TimeBase + TimeOffset5, &out,
+                                          &count),
+                  DB_SUCC);
+    ASSERT_UINT_EQ(count, (unsigned long long)3);
+    /* All uids must be TestUidAlpha */
+    for (size_t i = 0; i < count; i++) {
+        ASSERT_UINT_EQ(out[i].uid, TestUidAlpha);
+    }
+    /* At least one message from each room should be present */
+    enum { ExpectedMatchCount = 3 };
+    int match = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(out[i].message, "room-A") == 0 ||
+            strcmp(out[i].message, "room-B") == 0 ||
+            strcmp(out[i].message, "room-C") == 0) {
+            match++;
+        }
+    }
+    ASSERT_INT_EQ(match, ExpectedMatchCount);
+    freeChatArray(out, count);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms: only target user's messages; other
+ *  users' are excluded. */
+static void testQueryUserAllUidIsolation(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    /* Interleave messages from 3 users across 2 rooms */
+    Chat chA1 = {TestUidAlpha, 0, "A-room1", (time_t)TimeBase};
+    Chat chA2 = {TestUidAlpha, 0, "A-room2", (time_t)TimeBase};
+    Chat chB1 = {TestUidBravo, 0, "B-room1", (time_t)TimeBase};
+    Chat chC1 = {TestUidCharlie, 0, "C-room1", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &chA1), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &chB1), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &chC1), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestB, &chA2), DB_SUCC);
+
+    Chat *out = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)0,
+                                          (time_t)TimeBase + TimeOffset5, &out,
+                                          &count),
+                  DB_SUCC);
+    ASSERT_UINT_EQ(count, (unsigned long long)2);
+    enum { RoomPrefixLen = 5 };
+    for (size_t i = 0; i < count; i++) {
+        ASSERT_UINT_EQ(out[i].uid, TestUidAlpha);
+        ASSERT_TRUE(strncmp(out[i].message, "A-room", (size_t)RoomPrefixLen) ==
+                    0);
+    }
+    freeChatArray(out, count);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms: results sorted globally by msgId ASC. */
+static void testQueryUserAllOrdering(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    /* Store messages across rooms in non-ordered room sequence */
+    Chat ch1 = {TestUidAlpha, 0, "m1", (time_t)(TimeBase + TimeOffset3)};
+    Chat ch2 = {TestUidAlpha, 0, "m2", (time_t)(TimeBase + TimeOffset1)};
+    Chat ch3 = {TestUidAlpha, 0, "m3", (time_t)(TimeBase + TimeOffset2)};
+    ASSERT_INT_EQ(storeChat(db, RoomTestB, &ch1), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch2), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestC, &ch3), DB_SUCC);
+
+    Chat *out = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)0,
+                                          (time_t)TimeBase + TimeOffset5, &out,
+                                          &count),
+                  DB_SUCC);
+    ASSERT_UINT_EQ(count, (unsigned long long)3);
+    /* msgId must be strictly ascending */
+    ASSERT_TRUE(out[0].msgId < out[1].msgId);
+    ASSERT_TRUE(out[1].msgId < out[2].msgId);
+    freeChatArray(out, count);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms: time range filters correctly. */
+static void testQueryUserAllTimeRange(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    Chat inside = {TestUidAlpha, 0, "inside",
+                          (time_t)(TimeBase + TimeOffset1)};
+    Chat before = {TestUidAlpha, 0, "before",
+                          (time_t)(TimeBase - TimeSecsPerDay)};
+    Chat after = {TestUidAlpha, 0, "after",
+                         (time_t)(TimeBase + TimeSecsPerDay)};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &inside), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &before), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &after), DB_SUCC);
+
+    Chat *out = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)TimeBase,
+                                          (time_t)(TimeBase + TimeOffset5),
+                                          &out, &count),
+                  DB_SUCC);
+    ASSERT_UINT_EQ(count, (unsigned long long)1);
+    ASSERT_STR_EQ(out[0].message, "inside");
+    freeChatArray(out, count);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms: startTime == endTime (single-point). */
+static void testQueryUserAllEqualRange(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    Chat exact = {TestUidAlpha, 0, "exact", (time_t)TimeBase};
+    Chat near = {TestUidAlpha, 0, "near",
+                        (time_t)(TimeBase + TimeOffset1)};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &exact), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &near), DB_SUCC);
+
+    Chat *out = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)TimeBase,
+                                          (time_t)TimeBase, &out, &count),
+                  DB_SUCC);
+    ASSERT_UINT_EQ(count, (unsigned long long)1);
+    ASSERT_STR_EQ(out[0].message, "exact");
+    freeChatArray(out, count);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms: startTime > endTime → empty result. */
+static void testQueryUserAllInvertedRange(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    Chat ch = {TestUidAlpha, 0, "msg", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
+
+    Chat *out = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(
+                      db, TestUidAlpha, (time_t)(TimeBase + TimeOffset2),
+                      (time_t)(TimeBase + TimeOffset1), &out, &count),
+                  DB_SUCC);
+    ASSERT_UINT_EQ(count, (unsigned long long)0);
+    ASSERT_TRUE(out == NULL);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms: message in matching time range but
+ *  different room — must be found. */
+static void testQueryUserAllCrossRoomTimeMatch(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    Chat chA = {TestUidAlpha, 0, "roomA-ts1",
+                       (time_t)(TimeBase + TimeOffset1)};
+    Chat chB = {TestUidAlpha, 0, "roomB-ts2",
+                       (time_t)(TimeBase + TimeOffset2)};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &chA), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestB, &chB), DB_SUCC);
+
+    /* Range covers both */
+    Chat *out = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)TimeBase,
+                                          (time_t)(TimeBase + TimeOffset5),
+                                          &out, &count),
+                  DB_SUCC);
+    ASSERT_UINT_EQ(count, (unsigned long long)2);
+    freeChatArray(out, count);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms: large number of messages across rooms. */
+static void testQueryUserAllManyMessages(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    enum { MsgPerRoom = 20, RoomCount = 3, TotalMsgs = MsgPerRoom * RoomCount };
+    for (uint32_t r = 0; r < RoomCount; r++) {
+        for (int m = 0; m < MsgPerRoom; m++) {
+            Chat ch = {TestUidAlpha, 0, "bulk", (time_t)(TimeBase + m)};
+            ASSERT_INT_EQ(storeChat(db, r, &ch), DB_SUCC);
+        }
+    }
+    Chat *out = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)0,
+                                          (time_t)(TimeBase + MsgPerRoom), &out,
+                                          &count),
+                  DB_SUCC);
+    ASSERT_UINT_EQ(count, (unsigned long long)TotalMsgs);
+    /* Verify all messages have non-NULL payload and correct uid */
+    for (size_t i = 0; i < count; i++) {
+        ASSERT_TRUE(out[i].message != NULL);
+        ASSERT_UINT_EQ(out[i].uid, TestUidAlpha);
+    }
+    /* Global msgId ordering */
+    for (size_t i = 1; i < count; i++) {
+        ASSERT_TRUE(out[i - 1].msgId < out[i].msgId);
+    }
+    freeChatArray(out, count);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms: output is correctly set on success
+ *  even when results exist. */
+static void testQueryUserAllOutputSetOnSuccess(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    Chat ch = {TestUidAlpha, 0, "msg", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
+
+    Chat *out = (Chat *)(uintptr_t)TestSentinelPtr;
+    size_t count = TestCountSentinel;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)0,
+                                          (time_t)TimeBase + TimeOffset5, &out,
+                                          &count),
+                  DB_SUCC);
+    ASSERT_TRUE(out != NULL);
+    ASSERT_TRUE(out != (Chat *)(uintptr_t)TestSentinelPtr);
+    ASSERT_UINT_EQ(count, (unsigned long long)1);
+    ASSERT_STR_EQ(out[0].message, "msg");
+    freeChatArray(out, count);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms: roomId=0 and roomId=UINT32_MAX rooms
+ *  are discoverable. */
+static void testQueryUserAllRoomIdBoundaries(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    enum { RoomZero = 0 };
+    Chat chZero = {TestUidAlpha, 0, "rm-zero", (time_t)TimeBase};
+    Chat chMax = {TestUidAlpha, 0, "rm-max", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomZero, &chZero), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomMaxVal, &chMax), DB_SUCC);
+
+    Chat *out = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)0,
+                                          (time_t)TimeBase + TimeOffset5, &out,
+                                          &count),
+                  DB_SUCC);
+    ASSERT_UINT_EQ(count, (unsigned long long)2);
+    enum { ExpectedMatchCount = 2 };
+    int match = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(out[i].message, "rm-zero") == 0 ||
+            strcmp(out[i].message, "rm-max") == 0) {
+            match++;
+        }
+    }
+    ASSERT_INT_EQ(match, ExpectedMatchCount);
+    freeChatArray(out, count);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms: empty message text is not stored but
+ *  if other rooms have data, result is correct. */
+static void testQueryUserAllOneRoomEmpty(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    /* Room A has messages, Room B has none (table never created) */
+    Chat chA = {TestUidAlpha, 0, "only-roomA", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &chA), DB_SUCC);
+
+    Chat *out = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)0,
+                                          (time_t)TimeBase + TimeOffset5, &out,
+                                          &count),
+                  DB_SUCC);
+    ASSERT_UINT_EQ(count, (unsigned long long)1);
+    ASSERT_STR_EQ(out[0].message, "only-roomA");
+    freeChatArray(out, count);
+    dbClose(db);
+}
+
+/** @brief queryChatByUserAllRooms: handles multiple users simultaneously
+ *  querying across rooms without cross-contamination. */
+static void testQueryUserAllMultiUserCrossRoom(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    /* Alice in rooms A and B; Bob in room B only */
+    Chat aA = {TestUidAlpha, 0, "A-in-A", (time_t)TimeBase};
+    Chat aB = {TestUidAlpha, 0, "A-in-B", (time_t)TimeBase};
+    Chat bB = {TestUidBravo, 0, "B-in-B", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &aA), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestB, &aB), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, RoomTestB, &bB), DB_SUCC);
+
+    /* Alice's query */
+    Chat *outA = NULL;
+    size_t countA = 0;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)0,
+                                          (time_t)TimeBase + TimeOffset5, &outA,
+                                          &countA),
+                  DB_SUCC);
+    ASSERT_UINT_EQ(countA, (unsigned long long)2);
+    for (size_t i = 0; i < countA; i++) {
+        ASSERT_UINT_EQ(outA[i].uid, TestUidAlpha);
+        ASSERT_TRUE(strstr(outA[i].message, "A-in") == outA[i].message);
+    }
+    freeChatArray(outA, countA);
+
+    /* Bob's query */
+    Chat *outB = NULL;
+    size_t countB = 0;
+    ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidBravo, (time_t)0,
+                                          (time_t)TimeBase + TimeOffset5, &outB,
+                                          &countB),
+                  DB_SUCC);
+    ASSERT_UINT_EQ(countB, (unsigned long long)1);
+    ASSERT_UINT_EQ(outB[0].uid, TestUidBravo);
+    ASSERT_STR_EQ(outB[0].message, "B-in-B");
+    freeChatArray(outB, countB);
     dbClose(db);
 }
 
@@ -1394,12 +1971,12 @@ static void testRoomStmtCacheCollision(void) {
     ASSERT_TRUE(db != NULL);
     /* room 0 and ROOM_STMT_BUCKETS share bucket index 0 */
     enum { CollideA = 0, CollideB = ROOM_STMT_BUCKETS };
-    ChatHistory chA = {TestUidAlpha, 0, "room A", (time_t)TimeBase};
-    ChatHistory chB = {TestUidBravo, 0, "room B", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, CollideA, &chA), DB_SUCC);
-    ASSERT_INT_EQ(storeChatHistory(db, CollideB, &chB), DB_SUCC);
+    Chat chA = {TestUidAlpha, 0, "room A", (time_t)TimeBase};
+    Chat chB = {TestUidBravo, 0, "room B", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, CollideA, &chA), DB_SUCC);
+    ASSERT_INT_EQ(storeChat(db, CollideB, &chB), DB_SUCC);
     /* Both independently retrievable */
-    ChatHistory outA, outB;
+    Chat outA, outB;
     ASSERT_INT_EQ(queryChatByMsgId(db, CollideA, chA.msgId, &outA), DB_SUCC);
     ASSERT_INT_EQ(queryChatByMsgId(db, CollideB, chB.msgId, &outB), DB_SUCC);
     ASSERT_STR_EQ(outA.message, "room A");
@@ -1409,7 +1986,7 @@ static void testRoomStmtCacheCollision(void) {
     free(outA.message);
     free(outB.message);
     /* Time range query also respects room isolation */
-    ChatHistory *arr = NULL;
+    Chat *arr = NULL;
     size_t n = 0;
     ASSERT_INT_EQ(queryChatByTimeRange(db, CollideA, 0, (time_t)0,
                                        (time_t)TimeBase + TimeOffset5, &arr,
@@ -1417,7 +1994,7 @@ static void testRoomStmtCacheCollision(void) {
                   DB_SUCC);
     ASSERT_UINT_EQ(n, (unsigned long long)1);
     ASSERT_STR_EQ(arr[0].message, "room A");
-    freeChatHistoryArray(arr, n);
+    freeChatArray(arr, n);
     dbClose(db);
 }
 
@@ -1430,8 +2007,8 @@ static void testChatSchemaExists(void) {
     DB *db = dbInit(ChatHistoryDB);
     ASSERT_TRUE(db != NULL);
     /* Store a message which triggers room table creation */
-    ChatHistory ch = {TestUidAlpha, 0, "schema", (time_t)TimeBase};
-    ASSERT_INT_EQ(storeChatHistory(db, RoomTestA, &ch), DB_SUCC);
+    Chat ch = {TestUidAlpha, 0, "schema", (time_t)TimeBase};
+    ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
     /* Verify msg_sequence exists */
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(
@@ -1466,6 +2043,290 @@ static void testChatSchemaExists(void) {
     dbClose(db);
 }
 
+/* ═══════════════════  GameDB: room persistence tests  ═══════════════════ */
+
+static void testGameDbInitBasic(void) {
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+    ASSERT_INT_EQ(db->type, GameDB);
+    dbClose(db);
+}
+
+static void testGameDbInitInvalidType(void) {
+    DB *db = dbInit((DBType)(-1));
+    ASSERT_TRUE(db == NULL);
+}
+
+static void testCreateRoomBasic(void) {
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+
+    ASSERT_INT_EQ(createRoom(db, 1001, 42), DB_SUCC);
+    ASSERT_INT_EQ(roomExists(db, 1001), DB_SUCC);
+
+    dbClose(db);
+}
+
+static void testCreateRoomDuplicateRejected(void) {
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+
+    ASSERT_INT_EQ(createRoom(db, 2001, 42), DB_SUCC);
+    ASSERT_INT_EQ(createRoom(db, 2001, 99), DB_FAIL);
+
+    dbClose(db);
+}
+
+static void testCreateRoomNullDB(void) {
+    ASSERT_INT_EQ(createRoom(NULL, 1001, 42), DB_FAIL);
+}
+
+static void testCreateRoomWrongDBType(void) {
+    DB *db = dbInit(UserDB);
+    ASSERT_TRUE(db != NULL);
+    ASSERT_INT_EQ(createRoom(db, 1001, 42), DB_FAIL);
+    dbClose(db);
+}
+
+static void testCreateRoomIdZero(void) {
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+    ASSERT_INT_EQ(createRoom(db, 0, 42), DB_FAIL);
+    dbClose(db);
+}
+
+static void testDeleteRoomBasic(void) {
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+
+    ASSERT_INT_EQ(createRoom(db, 3001, 42), DB_SUCC);
+    ASSERT_INT_EQ(deleteRoom(db, 3001), DB_SUCC);
+    ASSERT_INT_EQ(roomExists(db, 3001), DB_FAIL);
+
+    dbClose(db);
+}
+
+static void testDeleteRoomNonexistent(void) {
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+
+    ASSERT_INT_EQ(deleteRoom(db, 9999), DB_FAIL);
+
+    dbClose(db);
+}
+
+static void testListRoomsEmpty(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+
+    uint32_t *ids = (uint32_t *)(uintptr_t)1;
+    size_t count = 1;
+    int ret = listRooms(db, &ids, &count);
+    ASSERT_INT_EQ(ret, DB_SUCC);
+    ASSERT_UINT_EQ(count, (size_t)0);
+    ASSERT_TRUE(ids == NULL);
+
+    dbClose(db);
+}
+
+static void testListRoomsSingle(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+
+    ASSERT_INT_EQ(createRoom(db, 4001, 42), DB_SUCC);
+
+    uint32_t *ids = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(listRooms(db, &ids, &count), DB_SUCC);
+    ASSERT_UINT_EQ(count, (size_t)1);
+    ASSERT_UINT_EQ(ids[0], (uint32_t)4001);
+    free(ids);
+
+    dbClose(db);
+}
+
+static void testListRoomsMultiple(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+
+    ASSERT_INT_EQ(createRoom(db, 5001, 42), DB_SUCC);
+    ASSERT_INT_EQ(createRoom(db, 5003, 42), DB_SUCC);
+    ASSERT_INT_EQ(createRoom(db, 5002, 42), DB_SUCC);
+
+    uint32_t *ids = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(listRooms(db, &ids, &count), DB_SUCC);
+    ASSERT_UINT_EQ(count, (size_t)3);
+    /* Verify sorted order */
+    ASSERT_UINT_EQ(ids[0], (uint32_t)5001);
+    ASSERT_UINT_EQ(ids[1], (uint32_t)5002);
+    ASSERT_UINT_EQ(ids[2], (uint32_t)5003);
+    free(ids);
+
+    dbClose(db);
+}
+
+static void testListRoomsNullOut(void) {
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+    ASSERT_INT_EQ(listRooms(db, NULL, NULL), DB_FAIL);
+    dbClose(db);
+}
+
+static void testListRoomsWrongDBType(void) {
+    DB *db = dbInit(UserDB);
+    ASSERT_TRUE(db != NULL);
+    uint32_t *ids = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(listRooms(db, &ids, &count), DB_FAIL);
+    dbClose(db);
+}
+
+static void testRoomExistsBasic(void) {
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+
+    ASSERT_INT_EQ(createRoom(db, 6001, 42), DB_SUCC);
+    ASSERT_INT_EQ(roomExists(db, 6001), DB_SUCC);
+
+    dbClose(db);
+}
+
+static void testRoomExistsNotFound(void) {
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+
+    ASSERT_INT_EQ(roomExists(db, 9999), DB_FAIL);
+    ASSERT_INT_EQ(roomExists(db, 0), DB_FAIL);
+
+    dbClose(db);
+}
+
+static void testCreateDeleteRecreate(void) {
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+
+    ASSERT_INT_EQ(createRoom(db, 7001, 42), DB_SUCC);
+    ASSERT_INT_EQ(deleteRoom(db, 7001), DB_SUCC);
+    ASSERT_INT_EQ(createRoom(db, 7001, 99), DB_SUCC);
+    ASSERT_INT_EQ(roomExists(db, 7001), DB_SUCC);
+
+    dbClose(db);
+}
+
+/** @brief deleteRoom rejects NULL database. */
+static void testDeleteRoomNullDB(void) {
+    ASSERT_INT_EQ(deleteRoom(NULL, 1001), DB_FAIL);
+}
+
+/** @brief deleteRoom rejects wrong database type (UserDB). */
+static void testDeleteRoomWrongDBType(void) {
+    DB *db = dbInit(UserDB);
+    ASSERT_TRUE(db != NULL);
+    ASSERT_INT_EQ(deleteRoom(db, 1001), DB_FAIL);
+    dbClose(db);
+}
+
+/** @brief Deleting same room twice fails on second attempt. */
+static void testDeleteRoomTwice(void) {
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+    ASSERT_INT_EQ(createRoom(db, 8001, 42), DB_SUCC);
+    ASSERT_INT_EQ(deleteRoom(db, 8001), DB_SUCC);
+    ASSERT_INT_EQ(deleteRoom(db, 8001), DB_FAIL);
+    dbClose(db);
+}
+
+/** @brief roomExists rejects NULL database. */
+static void testRoomExistsNullDB(void) {
+    ASSERT_INT_EQ(roomExists(NULL, 1001), DB_FAIL);
+}
+
+/** @brief roomExists rejects wrong database type (UserDB). */
+static void testRoomExistsWrongDBType(void) {
+    DB *db = dbInit(UserDB);
+    ASSERT_TRUE(db != NULL);
+    ASSERT_INT_EQ(roomExists(db, 1001), DB_FAIL);
+    dbClose(db);
+}
+
+/** @brief RoomExists returns DB_FAIL for deleted room. */
+static void testRoomExistsAfterDelete(void) {
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+    ASSERT_INT_EQ(createRoom(db, 9001, 42), DB_SUCC);
+    ASSERT_INT_EQ(deleteRoom(db, 9001), DB_SUCC);
+    ASSERT_INT_EQ(roomExists(db, 9001), DB_FAIL);
+    dbClose(db);
+}
+
+/** @brief GameDB persists rooms across close and reopen. */
+static void testGameDBPersistence(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+    ASSERT_INT_EQ(createRoom(db, 11001, 42), DB_SUCC);
+    ASSERT_INT_EQ(createRoom(db, 11002, 99), DB_SUCC);
+    dbClose(db);
+
+    DB *db2 = dbInit(GameDB);
+    ASSERT_TRUE(db2 != NULL);
+    ASSERT_INT_EQ(roomExists(db2, 11001), DB_SUCC);
+    ASSERT_INT_EQ(roomExists(db2, 11002), DB_SUCC);
+    ASSERT_INT_EQ(roomExists(db2, 9999), DB_FAIL);
+    dbClose(db2);
+}
+
+/** @brief createRoom fails on ChatHistoryDB (cross-type misuse). */
+static void testCreateRoomOnChatHistoryDB(void) {
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    ASSERT_INT_EQ(createRoom(db, 1001, 42), DB_FAIL);
+    dbClose(db);
+}
+
+/** @brief listRooms reflects deletions. */
+static void testListRoomsAfterDelete(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+    ASSERT_INT_EQ(createRoom(db, 12001, 42), DB_SUCC);
+    ASSERT_INT_EQ(createRoom(db, 12002, 99), DB_SUCC);
+    ASSERT_INT_EQ(createRoom(db, 12003, 42), DB_SUCC);
+    ASSERT_INT_EQ(deleteRoom(db, 12002), DB_SUCC);
+    uint32_t *ids = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(listRooms(db, &ids, &count), DB_SUCC);
+    ASSERT_UINT_EQ(count, (size_t)2);
+    ASSERT_UINT_EQ(ids[0], (uint32_t)12001);
+    ASSERT_UINT_EQ(ids[1], (uint32_t)12003);
+    free(ids);
+    dbClose(db);
+}
+
+/** @brief listRooms triggers realloc when exceeding QUERY_INITIAL_CAPACITY. */
+static void testListRoomsReallocTrigger(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB);
+    ASSERT_TRUE(db != NULL);
+    enum { RoomCount = 20, BaseRoomRealloc = 13001 };
+    for (uint32_t i = 0; i < RoomCount; i++) {
+        ASSERT_INT_EQ(createRoom(db, BaseRoomRealloc + i, 42), DB_SUCC);
+    }
+    uint32_t *ids = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(listRooms(db, &ids, &count), DB_SUCC);
+    ASSERT_UINT_EQ(count, (size_t)RoomCount);
+    for (size_t i = 0; i < RoomCount; i++) {
+        ASSERT_UINT_EQ(ids[i], BaseRoomRealloc + (uint32_t)i);
+    }
+    free(ids);
+    dbClose(db);
+}
+
 /* ═══════════════════════  main  ══════════════════════════════════════════ */
 
 int main(void) {
@@ -1486,6 +2347,7 @@ int main(void) {
     RUN_TEST(testCreateUserNullDB);
     RUN_TEST(testCreateUserNullUser);
     RUN_TEST(testCreateUserEmptyUsername);
+    RUN_TEST(testCreateUserEmptyNickname);
     RUN_TEST(testCreateUserNullPassword);
     RUN_TEST(testCreateUserEmptyPassword);
     RUN_TEST(testCreateUserWrongDBType);
@@ -1493,8 +2355,10 @@ int main(void) {
     RUN_TEST(testCreateUserDuplicateUID);
     RUN_TEST(testCreateUserDuplicateUsername);
     RUN_TEST(testCreateUserMaxLenUsername);
+    RUN_TEST(testCreateUserMaxLenNickname);
     RUN_TEST(testCreateUserUidZero);
     RUN_TEST(testCreateUserUidMax);
+    RUN_TEST(testCreateUserMultipleUniqueUids);
     RUN_TEST(testCreateUserSpecialCharsPassword);
     RUN_TEST(testCreateUserLongPassword);
 
@@ -1524,8 +2388,9 @@ int main(void) {
     RUN_TEST(testVerifyUserNoEnumeration);
     RUN_TEST(testVerifyUserSimilarPassword);
     RUN_TEST(testVerifyUserUidZero);
+    RUN_TEST(testVerifyUserUidConsistency);
 
-    /* ──────────── storeChatHistory ──────────────────── */
+    /* ──────────── storeChat ──────────────────── */
     RUN_TEST(testStoreChatNullDB);
     RUN_TEST(testStoreChatNullChat);
     RUN_TEST(testStoreChatNullMessage);
@@ -1570,6 +2435,28 @@ int main(void) {
     RUN_TEST(testQueryTimeCrossRoomIsolation);
     RUN_TEST(testQueryTimeExactCapacity);
 
+    /* ──────────── queryChatByUserAllRooms ───────────── */
+    RUN_TEST(testQueryUserAllNullDB);
+    RUN_TEST(testQueryUserAllNullOut);
+    RUN_TEST(testQueryUserAllNullCount);
+    RUN_TEST(testQueryUserAllWrongDBType);
+    RUN_TEST(testQueryUserAllUidZero);
+    RUN_TEST(testQueryUserAllNoRooms);
+    RUN_TEST(testQueryUserAllNoMatch);
+    RUN_TEST(testQueryUserAllSingleRoom);
+    RUN_TEST(testQueryUserAllMultiRoom);
+    RUN_TEST(testQueryUserAllUidIsolation);
+    RUN_TEST(testQueryUserAllOrdering);
+    RUN_TEST(testQueryUserAllTimeRange);
+    RUN_TEST(testQueryUserAllEqualRange);
+    RUN_TEST(testQueryUserAllInvertedRange);
+    RUN_TEST(testQueryUserAllCrossRoomTimeMatch);
+    RUN_TEST(testQueryUserAllManyMessages);
+    RUN_TEST(testQueryUserAllOutputSetOnSuccess);
+    RUN_TEST(testQueryUserAllRoomIdBoundaries);
+    RUN_TEST(testQueryUserAllOneRoomEmpty);
+    RUN_TEST(testQueryUserAllMultiUserCrossRoom);
+
     /* ──────────── persistence ───────────────────────── */
     RUN_TEST(testPersistenceUserDB);
     RUN_TEST(testPersistenceChatDB);
@@ -1586,6 +2473,41 @@ int main(void) {
     RUN_TEST(testPasswordHashSamePasswordDifferentUsers);
     RUN_TEST(testRoomStmtCacheCollision);
     RUN_TEST(testChatSchemaExists);
+
+    /* ──────────── GameDB: room persistence ──────────── */
+    removeDBFiles();
+    RUN_TEST(testGameDbInitBasic);
+    RUN_TEST(testGameDbInitInvalidType);
+
+    /* List rooms must run first (on empty DB) */
+    RUN_TEST(testListRoomsEmpty);
+    RUN_TEST(testListRoomsSingle);
+    RUN_TEST(testListRoomsMultiple);
+    RUN_TEST(testListRoomsNullOut);
+    RUN_TEST(testListRoomsWrongDBType);
+
+    RUN_TEST(testCreateRoomBasic);
+    RUN_TEST(testCreateRoomDuplicateRejected);
+    RUN_TEST(testCreateRoomNullDB);
+    RUN_TEST(testCreateRoomWrongDBType);
+    RUN_TEST(testCreateRoomIdZero);
+    RUN_TEST(testDeleteRoomBasic);
+    RUN_TEST(testDeleteRoomNonexistent);
+    RUN_TEST(testRoomExistsBasic);
+    RUN_TEST(testRoomExistsNotFound);
+    RUN_TEST(testCreateDeleteRecreate);
+    RUN_TEST(testDeleteRoomNullDB);
+    RUN_TEST(testDeleteRoomWrongDBType);
+    RUN_TEST(testDeleteRoomTwice);
+    RUN_TEST(testRoomExistsNullDB);
+    RUN_TEST(testRoomExistsWrongDBType);
+    RUN_TEST(testRoomExistsAfterDelete);
+    RUN_TEST(testGameDBPersistence);
+    RUN_TEST(testCreateRoomOnChatHistoryDB);
+    RUN_TEST(testListRoomsAfterDelete);
+    RUN_TEST(testListRoomsReallocTrigger);
+
+    removeDBFiles();
 
     return TEST_REPORT();
 }

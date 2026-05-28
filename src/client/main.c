@@ -1,6 +1,6 @@
 /**
  * @file main.c
- * @brief
+ * @brief PacPlay client entrypoint.
  *
  * @date 2026-05-16
  * @copyright GPLv3 License
@@ -22,7 +22,66 @@
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
-#include "protocol.h"
-#include "client/communication.h"
+#include "client.h"
 
-int main() { return 0; }
+#include <stdio.h>
+#include <string.h>
+
+enum {
+    ServerPort = 12345
+};
+
+static const char *serverAddr = "127.0.0.1";
+
+int main(void) {
+    Client client;
+    memset(&client, 0, sizeof(client));
+
+    if (clientConnect(&client, serverAddr, ServerPort) != CLIENT_SUCC) {
+        return 1;
+    }
+
+    for (;;) {
+        printf("\n[L]ogin or [R]egister? ");
+        fflush(stdout);
+        char choice = (char)getchar();
+        int cc;
+        while ((cc = getchar()) != '\n' && cc != EOF) {
+        }
+
+        if (choice == 'r' || choice == 'R') {
+            if (clientRegister(&client) == CLIENT_SUCC) {
+                printf("\n");
+                /* fall through to login after successful registration */
+            }
+            continue;
+        }
+
+        if (choice != 'l' && choice != 'L') {
+            printf("Invalid choice.\n");
+            continue;
+        }
+
+        if (clientLogin(&client) == CLIENT_SUCC) {
+            break;
+        }
+        printf("Login failed. Try again? [y/n]: ");
+        fflush(stdout);
+        char c = (char)getchar();
+        while ((cc = getchar()) != '\n' && cc != EOF) {
+        }
+        if (c != 'y' && c != 'Y') {
+            clientDisconnect(&client);
+            return 1;
+        }
+    }
+
+    if (clientRoomMenu(&client) != CLIENT_SUCC) {
+        clientDisconnect(&client);
+        return 0;
+    }
+
+    clientChatLoop(&client);
+    clientDisconnect(&client);
+    return 0;
+}
