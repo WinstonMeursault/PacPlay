@@ -17,17 +17,17 @@
 
 #### 1.1.1 常量与宏
 
-| 宏 | 值 | 说明 |
-|---|---|---|
-| `CRYPTO_SUCC` | `0` | 函数执行成功 |
-| `CRYPTO_FAIL` | `-1` | 通用失败 |
-| `CRYPTO_AUTH_FAIL` | `-2` | AES-GCM 认证标签校验失败 |
-| `AES_GCM_KEY_LEN` | `32` | AES-256 对称密钥长度（字节） |
-| `AES_GCM_NONCE_LEN` | `12` | GCM 模式 nonce 长度（字节） |
-| `AES_GCM_TAG_LEN` | `16` | GCM 认证标签长度（字节） |
-| `ECDH_SHARED_SECRET_SIZE` | `32` | X25519 ECDH 协商后的共享密钥长度（字节） |
-| `ECDH_PUBLIC_KEY_SIZE` | `32` | X25519 原始公钥长度（字节） |
-| `HKDF_INFO_AES_KEY` | `"PacPlay-AESKey"` | HKDF-SHA256 派生 AES 密钥时使用的固定 info 字符串 |
+| 宏                          | 值                   | 说明                                              |
+| --------------------------- | -------------------- | ------------------------------------------------- |
+| `CRYPTO_SUCC`             | `0`                | 函数执行成功                                      |
+| `CRYPTO_FAIL`             | `-1`               | 通用失败                                          |
+| `CRYPTO_AUTH_FAIL`        | `-2`               | AES-GCM 认证标签校验失败                          |
+| `AES_GCM_KEY_LEN`         | `32`               | AES-256 对称密钥长度（字节）                      |
+| `AES_GCM_NONCE_LEN`       | `12`               | GCM 模式 nonce 长度（字节）                       |
+| `AES_GCM_TAG_LEN`         | `16`               | GCM 认证标签长度（字节）                          |
+| `ECDH_SHARED_SECRET_SIZE` | `32`               | X25519 ECDH 协商后的共享密钥长度（字节）          |
+| `ECDH_PUBLIC_KEY_SIZE`    | `32`               | X25519 原始公钥长度（字节）                       |
+| `HKDF_INFO_AES_KEY`       | `"PacPlay-AESKey"` | HKDF-SHA256 派生 AES 密钥时使用的固定 info 字符串 |
 
 #### 1.1.2 类型定义
 
@@ -67,10 +67,10 @@ AES-GCM 加密输出结构。`buffer.data` 存放密文，`tag` 存放 16 字节
 
 #### 1.1.3 缓冲区辅助函数
 
-| 函数 | 说明 |
-|---|---|
+| 函数                                                         | 说明                                               |
+| ------------------------------------------------------------ | -------------------------------------------------- |
 | `int aesGCMBufferInit(AESGCMBuffer *buf, size_t capacity)` | 分配 `capacity` 字节堆内存，初始化 `buf->data` |
-| `void aesGCMBufferDeinit(AESGCMBuffer *buf)` | 释放 `buf->data`，指针置为 NULL（可重复调用） |
+| `void aesGCMBufferDeinit(AESGCMBuffer *buf)`               | 释放 `buf->data`，指针置为 NULL（可重复调用）    |
 
 调用 `aesGCMBufferInit()` 后须显式调用 `aesGCMBufferDeinit()` 释放，防止内存泄漏。
 
@@ -86,12 +86,12 @@ AES-GCM 加密输出结构。`buffer.data` 存放密文，`tag` 存放 16 字节
 
 #### 1.1.5 ECDH（X25519）密钥协商
 
-| 函数 | 说明 |
-|---|---|
-| `EVP_PKEY *genECDHKeypair(void)` | 生成 X25519 临时密钥对，返回 `EVP_PKEY *`，调用者须以 `EVP_PKEY_free()` 释放 |
-| `int exportECDHPublicKey(EVP_PKEY *pkey, uint8_t pub[32])` | 提取 32 字节原始公钥，可直接网络传输 |
-| `EVP_PKEY *importECDHPeerPublicKey(const uint8_t pub[32])` | 将对端 32 字节公钥重构为 `EVP_PKEY *` |
-| `int deriveECDHSharedSecret(EVP_PKEY *localKey, EVP_PKEY *peerKey, uint8_t secret[32])` | 执行 ECDH 协商，输出 32 字节共享密钥。失败时用 `OPENSSL_cleanse` 清零输出 |
+| 函数                                                                                      | 说明                                                                             |
+| ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `EVP_PKEY *genECDHKeypair(void)`                                                        | 生成 X25519 临时密钥对，返回 `EVP_PKEY *`，调用者须以 `EVP_PKEY_free()` 释放 |
+| `int exportECDHPublicKey(EVP_PKEY *pkey, uint8_t pub[32])`                              | 提取 32 字节原始公钥，可直接网络传输                                             |
+| `EVP_PKEY *importECDHPeerPublicKey(const uint8_t pub[32])`                              | 将对端 32 字节公钥重构为 `EVP_PKEY *`                                          |
+| `int deriveECDHSharedSecret(EVP_PKEY *localKey, EVP_PKEY *peerKey, uint8_t secret[32])` | 执行 ECDH 协商，输出 32 字节共享密钥。失败时用 `OPENSSL_cleanse` 清零输出      |
 
 #### 1.1.6 HKDF-SHA256 密钥派生
 
@@ -141,18 +141,18 @@ EVP_PKEY_free(peerKey);
 
 #### 1.2.1 常量与宏
 
-| 宏 | 值 | 说明 |
-|---|---|---|
-| `PROTOCOL_SUCC` | `0` | 函数执行成功 |
-| `PROTOCOL_FAIL` | `-1` | 通用失败 |
-| `PROTOCOL_AUTH_FAIL` | `-2` | AES-GCM 认证标签校验失败或 AAD 不匹配 |
-| `MAX_PAYLOAD_LEN` | `1024` | 明文载荷最大字节数 |
-| `LOGIN_USERNAME_LEN` | `32` | 用户名固定长度（NUL 终止） |
-| `LOGIN_NICKNAME_LEN` | `32` | 昵称固定长度（NUL 终止） |
-| `AES_PACKET_EXTRA_LEN` | `28` | 加密后额外开销：nonce(12) + tag(16) |
-| `BACKLOG` | `1024` | `listen()` 连接队列长度 |
-| `NULL_SOCKETFD` | `-1` | 无效套接字描述符标识 |
-| `PACKET_MAGIC` | `0x5050504D` | 包魔术字，ASCII `PPPM` |
+| 宏                       | 值             | 说明                                  |
+| ------------------------ | -------------- | ------------------------------------- |
+| `PROTOCOL_SUCC`        | `0`          | 函数执行成功                          |
+| `PROTOCOL_FAIL`        | `-1`         | 通用失败                              |
+| `PROTOCOL_AUTH_FAIL`   | `-2`         | AES-GCM 认证标签校验失败或 AAD 不匹配 |
+| `MAX_PAYLOAD_LEN`      | `1024`       | 明文载荷最大字节数                    |
+| `LOGIN_USERNAME_LEN`   | `32`         | 用户名固定长度（NUL 终止）            |
+| `LOGIN_NICKNAME_LEN`   | `32`         | 昵称固定长度（NUL 终止）              |
+| `AES_PACKET_EXTRA_LEN` | `28`         | 加密后额外开销：nonce(12) + tag(16)   |
+| `BACKLOG`              | `1024`       | `listen()` 连接队列长度             |
+| `NULL_SOCKETFD`        | `-1`         | 无效套接字描述符标识                  |
+| `PACKET_MAGIC`         | `0x5050504D` | 包魔术字，ASCII `PPPM`              |
 
 #### 1.2.2 类型定义
 
@@ -293,11 +293,11 @@ typedef struct {
 
 #### 1.2.4 网络连接管理
 
-| 函数 | 说明 |
-|---|---|
-| `SocketFD serverSetup(uint16_t port)` | 在指定端口创建 TCP 监听套接字，绑定 `INADDR_ANY`，队列长度为 `BACKLOG`。失败返回 `NULL_SOCKETFD` |
-| `SocketFD clientSetup(const char *addr, uint16_t port)` | 创建 TCP 客户端套接字并连接。`addr` 须为 IPv4 点分十进制字符串。失败返回 `NULL_SOCKETFD` |
-| `void socketClose(SocketFD *socketFD)` | 关闭套接字并重置为 `NULL_SOCKETFD`。重复调用安全 |
+| 函数                                                      | 说明                                                                                                   |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `SocketFD serverSetup(uint16_t port)`                   | 在指定端口创建 TCP 监听套接字，绑定 `INADDR_ANY`，队列长度为 `BACKLOG`。失败返回 `NULL_SOCKETFD` |
+| `SocketFD clientSetup(const char *addr, uint16_t port)` | 创建 TCP 客户端套接字并连接。`addr` 须为 IPv4 点分十进制字符串。失败返回 `NULL_SOCKETFD`           |
+| `void socketClose(SocketFD *socketFD)`                  | 关闭套接字并重置为 `NULL_SOCKETFD`。重复调用安全                                                     |
 
 #### 1.2.5 数据包序列化与反序列化
 
@@ -362,10 +362,10 @@ Protocol 层的加密与解密通过 `crypto` 模块提供的 `encryptAESGCM()` 
 
 #### 1.2.8 网络收发
 
-| 函数 | 说明 |
-|---|---|
-| `int packetSend(Packet *packet, SocketFD socketFD)` | 分两次发送完 header 与 payload，使用 `sendAll` 循环处理部分写 |
-| `int packetRecv(Packet *dest, SocketFD socketFD)` | 阻塞接收完整数据包，先收 header（校验 magic 与长度），再收 payload。加密包限额为 `MAX_PAYLOAD_LEN + AES_PACKET_EXTRA_LEN` |
+| 函数                                                  | 说明                                                                                                                        |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `int packetSend(Packet *packet, SocketFD socketFD)` | 分两次发送完 header 与 payload，使用 `sendAll` 循环处理部分写                                                             |
+| `int packetRecv(Packet *dest, SocketFD socketFD)`   | 阻塞接收完整数据包，先收 header（校验 magic 与长度），再收 payload。加密包限额为 `MAX_PAYLOAD_LEN + AES_PACKET_EXTRA_LEN` |
 
 #### 1.2.9 协议使用要点
 
@@ -425,12 +425,12 @@ sequenceDiagram
 
 #### 1.3.2 便捷宏
 
-| 宏 | 等价展开 |
-|---|---|
+| 宏                      | 等价展开                                                |
+| ----------------------- | ------------------------------------------------------- |
 | `LOG_TRACE(fmt, ...)` | `logLog(LogLevelTrace, __FILE__, __LINE__, fmt, ...)` |
 | `LOG_DEBUG(fmt, ...)` | `logLog(LogLevelDebug, __FILE__, __LINE__, fmt, ...)` |
-| `LOG_INFO(fmt, ...)` | `logLog(LogLevelInfo, __FILE__, __LINE__, fmt, ...)` |
-| `LOG_WARN(fmt, ...)` | `logLog(LogLevelWarn, __FILE__, __LINE__, fmt, ...)` |
+| `LOG_INFO(fmt, ...)`  | `logLog(LogLevelInfo, __FILE__, __LINE__, fmt, ...)`  |
+| `LOG_WARN(fmt, ...)`  | `logLog(LogLevelWarn, __FILE__, __LINE__, fmt, ...)`  |
 | `LOG_ERROR(fmt, ...)` | `logLog(LogLevelError, __FILE__, __LINE__, fmt, ...)` |
 | `LOG_FATAL(fmt, ...)` | `logLog(LogLevelFatal, __FILE__, __LINE__, fmt, ...)` |
 
@@ -438,13 +438,13 @@ sequenceDiagram
 
 #### 1.3.3 配置函数
 
-| 函数 | 作用 |
-|---|---|
-| `void logSetLevel(LogLevel level)` | 设置全局最低输出级别 |
-| `void logSetQuiet(bool enable)` | `true` 关闭 stderr 输出，不影响回调 |
-| `void logSetLock(LogLockFn fn, void *udata)` | 注册加锁回调，多线程必须设置 |
-| `int logAddFp(FILE *fp, LogLevel level)` | 添加文件输出（带完整日期格式），最多 32 个回调槽 |
-| `int logAddCallback(LogLogFn fn, void *udata, LogLevel level)` | 注册自定义日志后端 |
+| 函数                                                             | 作用                                             |
+| ---------------------------------------------------------------- | ------------------------------------------------ |
+| `void logSetLevel(LogLevel level)`                             | 设置全局最低输出级别                             |
+| `void logSetQuiet(bool enable)`                                | `true` 关闭 stderr 输出，不影响回调            |
+| `void logSetLock(LogLockFn fn, void *udata)`                   | 注册加锁回调，多线程必须设置                     |
+| `int logAddFp(FILE *fp, LogLevel level)`                       | 添加文件输出（带完整日期格式），最多 32 个回调槽 |
+| `int logAddCallback(LogLogFn fn, void *udata, LogLevel level)` | 注册自定义日志后端                               |
 
 #### 1.3.4 线程安全
 
@@ -460,7 +460,261 @@ logSetLock(lockFn, NULL);
 
 ---
 
-### 1.4 Utils 工具模块
+### 1.4 Container 容器模块
+
+**接口**：`include/container.h`
+**实现**：`src/common/container.c`
+
+提供泛型数据容器，为服务端与客户端提供通用数据结构支持。当前包含泛型环形缓冲区。
+
+#### 1.4.1 泛型环形缓冲区（QueueT）
+
+通过 `QUEUE_DECLARE(T)` / `QUEUE_IMPLEMENT(T)` 两步预处理器宏模拟 C++ 模板，在编译期为任意数据类型生成类型安全的循环队列（环形缓冲区）实现，支持自动扩容、O(1) 推入/弹出及完整生命周期管理。
+
+##### 常量与宏
+
+| 宏                         | 值    | 说明                                                                              |
+| -------------------------- | ----- | --------------------------------------------------------------------------------- |
+| `QUEUE_DEFAULT_CAPACITY` | `8` | 队列初始容量（槽位数）。当 `Init` 传入容量为 `0` 时自动采用此默认值           |
+| `QUEUE_DECLARE(T)`       | —    | 为类型 `T` 声明队列结构体及函数原型。放置于头文件                               |
+| `QUEUE_IMPLEMENT(T)`     | —    | 为类型 `T` 生成所有函数实现。每种类型在**唯一一个** `.c` 文件中调用一次 |
+
+##### 类型定义
+
+**ContainerRes**
+
+```c
+typedef enum { ContainerSucc = 0, ContainerFail = -1 } ContainerRes;
+```
+
+所有容器函数的统一返回值。`ContainerSucc` 表示操作成功，`ContainerFail` 表示失败（队空、内存不足等）。
+
+**QueueT**（由 `QUEUE_DECLARE(T)` 展开）
+
+以 `T = int` 为例，`QUEUE_DECLARE(int)` 展开后生成如下结构体：
+
+```c
+typedef struct {
+    int *buf;         // 环形缓冲区，动态分配于堆上
+    size_t capacity;  // 当前容量（槽位数，以 sizeof(T) 为单位）
+    size_t head;      // 队首索引（下一出队位置）
+    size_t tail;      // 队尾索引（下一入队位置）
+} Queueint;
+```
+
+环形缓冲区的核心不变式：
+
+- **空队列**：`head == tail`
+- **满队列**：`tail` 追上 `head`（`Push` 写入后若 `tail == head` 立即触发扩容）
+- 有效元素个数（推导值）：`(tail - head + capacity) % capacity`
+
+下图为容量为 8、已存储 4 个元素的环形缓冲区内存布局（绿色槽位为已占用，虚线箭头表示首尾回环）：
+
+```mermaid
+graph LR
+    b0["A"] --- b1["B"] --- b2["C"] --- b3["D"] --- b4[" "] --- b5[" "] --- b6[" "] --- b7[" "] --- b0
+    hd["head = 0"] -.-> b0
+    tl["tail = 4"] -.-> b4
+    style b0 fill:#4a4
+    style b1 fill:#4a4
+    style b2 fill:#4a4
+    style b3 fill:#4a4
+```
+
+Push 操作将元素写入 `buf[tail]` 后 `tail = (tail + 1) % capacity`；Pop 操作 `head = (head + 1) % capacity`（不释放元素内存）。两指针均按模容量循环推进，实现 O(1) 入队/出队。
+
+##### 命名规则
+
+`##` 拼接运算符将类型名 `T` 直接拼入标识符。调用者传入的类型名大小写决定最终函数名：
+
+| 宏调用                    | 结构体名        | Init 函数名         | Push 函数名         |
+| ------------------------- | --------------- | ------------------- | ------------------- |
+| `QUEUE_DECLARE(int)`    | `Queueint`    | `queueintInit`    | `queueintPush`    |
+| `QUEUE_DECLARE(Packet)` | `QueuePacket` | `queuePacketInit` | `queuePacketPush` |
+
+**推荐使用 `typedef` 别名**统一命名风格（参见下方完整使用示例）。
+
+##### 公开 API
+
+| 函数              | 签名                                                       | 返回                                  | 说明                                                                                                                                               |
+| ----------------- | ---------------------------------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `queueTInit`    | `ContainerRes queueTInit(QueueT *self, size_t capacity)` | `ContainerSucc` / `ContainerFail` | 分配 `capacity * sizeof(T)` 字节堆内存并初始化各字段。`capacity == 0` 时使用 `QUEUE_DEFAULT_CAPACITY`。`malloc` 失败返回 `ContainerFail` |
+| `queueTDeinit`  | `void queueTDeinit(QueueT *self)`                        | void                                  | 释放 `self->buf` 并置 NULL。传入 NULL 安全返回。对同一 Queue 重复调用安全（double-free 安全）                                                    |
+| `queueTFront`   | `ContainerRes queueTFront(QueueT *self, T *result)`      | `ContainerSucc` / `ContainerFail` | 将队首元素**拷贝**至 `*result`。队空时返回 `ContainerFail`，`*result` 不变                                                             |
+| `queueTPush`    | `ContainerRes queueTPush(QueueT *self, T data)`          | `ContainerSucc` / `ContainerFail` | 将 `data` 写入队尾，尾指针前进。写后若 `tail == head` 自动调用内部 `Reserve` 扩容为 2 倍。扩容 OOM 时返回 `ContainerFail`，旧数据无损      |
+| `queueTPop`     | `ContainerRes queueTPop(QueueT *self)`                   | `ContainerSucc` / `ContainerFail` | 队首指针前进一位，**不返回弹出元素**。队空时返回 `ContainerFail`                                                                           |
+| `queueTIsEmpty` | `bool queueTIsEmpty(QueueT *self)`                       | `true` / `false`                  | `head == tail` 时返回 `true`                                                                                                                   |
+
+**注意**：`queueTPop` 不返回被弹出元素的值。如需获取后弹出，先调用 `queueTFront` 后 `queueTPop`。
+
+##### 内部扩容机制（`queueTReserve`）
+
+`Reserve` 为 `static` 函数，对外不可见，仅在队满时由 `Push` 自动触发。扩容流程：
+
+```mermaid
+flowchart TD
+    A["Push 后 tail == head"] --> B["保存旧队列快照至 before"]
+    B --> C["malloc(2 × capacity × sizeof(T))"]
+    C --> D{分配成功?}
+    D -->|否| E["LOG_ERROR / 恢复 self->buf = before.buf"]
+    E --> F["返回 ContainerFail（旧数据无损）"]
+    D -->|是| G["capacity *= 2; head = 0; tail = 0"]
+    G --> H["逐元素拷贝 before.buf 至 self->buf[0...n)"]
+    H --> I["free(before.buf)"]
+    I --> J["返回 ContainerSucc"]
+```
+
+关键保证：
+
+- **原子性**：分配失败时完整恢复 `self->buf` 指向旧缓冲区，队列状态与扩容前完全一致。
+- **线性化**：旧环形缓冲区中的元素按 `head → tail` 顺序被拷贝到新缓冲区的连续区间 `[0, n)`，`head` 与 `tail` 重置为 `0` 和 `n`。
+- **触发时机**：仅在 `Push` 导致 `(tail + 1) % capacity == head`（即 `tail` 追上 `head`）时触发，而非预判式扩容。
+
+##### 容量语义
+
+```
+容量 = 可用槽位数。Push N 次后，若 N ≤ capacity，无需扩容。
+若 N > capacity，扩容为 2 × capacity，可容纳至多 2N 个元素。
+```
+
+`capacity == 0` 是非法的——容量为 0 的队列没有存储槽位，Push 后 `tail == head`（队满），触发 `Reserve` 时 `0 × 2 = 0` 导致死循环。因此，本模块将 `capacity == 0` 作为"使用默认值"的哨兵：
+
+```c
+Queueint q;
+queueintInit(&q, 0);   // 等价于 queueintInit(&q, 8)
+queueintInit(&q, 256); // 显式指定 256 槽位
+```
+
+##### 完整使用示例
+
+以 `uint32_t` 为例演示声明、实现及使用的完整流程：
+
+**第一步 — 头文件中声明（如 `my_queue.h`）**
+
+```c
+#include "container.h"
+
+QUEUE_DECLARE(uint32_t)
+```
+
+**第二步 — 源文件中实现（如 `my_queue.c`，仅此一处）**
+
+```c
+#include "my_queue.h"
+
+QUEUE_IMPLEMENT(uint32_t)
+```
+
+**第三步 — 业务代码中使用**
+
+```c
+#include "my_queue.h"
+
+void example(void) {
+    Queueuint32_t q;
+
+    // 初始化（使用默认容量 8）
+    if (queueuint32_tInit(&q, 0) == ContainerFail) {
+        LOG_ERROR("OOM");
+        return;
+    }
+
+    // 推入
+    for (uint32_t i = 1; i <= 100; i++) {
+        if (queueuint32_tPush(&q, i) == ContainerFail) {
+            LOG_ERROR("Push failed at %u", i);
+            break;
+        }
+    }
+
+    // 依次取出并处理
+    uint32_t val;
+    while (!queueuint32_tIsEmpty(&q)) {
+        queueuint32_tFront(&q, &val); // 获取队首
+        queueuint32_tPop(&q);         // 弹出
+        printf("%u\n", val);
+    }
+
+    // 释放
+    queueuint32_tDeinit(&q);
+}
+```
+
+此例中首次扩容发生在第 9 次 Push（容量 8 → 16），后续依次 16 → 32 → 64 → 128。最终队列容纳全部 100 个元素后，容量为 128。
+
+##### 使用要点
+
+1. **声明与实现的分离**：`QUEUE_DECLARE(T)` 可放入头文件供多个翻译单元使用，但 `QUEUE_IMPLEMENT(T)` **必须在唯一一个 `.c` 文件中调用一次**，否则链接时产生多重定义错误。这与 C++ 模板的隐式实例化不同，需显式管理。
+2. **内存所有权**：`Init` 在堆上分配 `buf`，`Deinit` 释放之。若 `T` 本身包含指向堆内存的指针（如 `char *`），`Deinit` **仅释放 `buf` 数组本身**，不递归释放 `T` 内部的指针。调用者须在 `Deinit` 前手动遍历释放每个元素的嵌套内存。
+3. **`Pop` 不返回元素**：`Pop` 仅移动 `head` 指针，不返回弹出值。获取队首值须先调用 `Front`。对于大型结构体，可避免不必要的数据拷贝。
+4. **非线程安全**：所有函数未加锁。多线程环境下须由调用者在外部施加同步（如 `pthread_mutex_t`）。
+5. **元素拷贝语义**：`Push` 和 `Front` 均为**值拷贝**（浅拷贝），通过 `=` 赋值完成。对于包含指针成员的复杂类型，需注意浅拷贝导致的悬挂指针问题。
+6. **无 `queueTSize` 接口**：未提供直接获取当前元素个数的函数。若需计数，调用者须自行维护外部计数器，或通过推导公式 `(tail - head + capacity) % capacity` 计算（需访问内部字段，破坏封装）。
+7. **哨兵容量值**：`Init` 的 `capacity` 参数取 `0` 时使用默认容量 8。`0` 不被视为合法容量，传入非零值则将严格使用该值（无最小值保护——传入 `1` 则仅分配 1 个槽位）。
+
+##### Packet 类型特化风险
+
+`QueuePacket`（通过 `QUEUE_DECLARE(Packet)` 声明）在实际使用中需特别注意，因为 `Packet` 结构体内部含有堆分配指针 `payload`，而队列的所有操作均为**浅拷贝**。以下逐一说明风险场景及正确用法。
+
+**8. 浅拷贝与 payload 所有权**
+
+`Push` 执行 `self->buf[self->tail] = data`（结构体赋值），`Front` 执行 `*result = self->buf[self->head]`。两者均为浅拷贝——仅拷贝 `PacketHeader` 字段和 `payload` **指针值**，不复制 `payload` 指向的堆内存。结果：队列内的 `Packet` 副本与调用方持有的 `Packet` 副本**共享**同一块 `payload` 内存。
+
+若任一方调用 `packetClear` 释放 `payload`，其他副本中的 `payload` 立即成为悬挂指针。因此，将 `Packet` 推入队列后，**原所有者的 `payload` 所有权已转移至队列**，原所有者不应再单独释放该 `Packet`。
+
+**9. `Pop` 不释放 payload → 内存泄漏**
+
+`Pop` 仅将 `head` 指针前移一位，不调用 `packetClear`。这意味着：
+
+- 若在 `Pop` 之前未通过 `Front` 取出元素并手动 `packetClear`，该元素的 `payload` 将永久泄漏。
+- 正确用法：先 `Front` 取出队首，处理完毕后 `packetClear(&front)`，然后 `Pop`。示例：
+
+```c
+Packet front;
+while (!queuePacketIsEmpty(&q)) {
+    queuePacketFront(&q, &front);
+    // ... 处理 front ...
+    packetClear(&front);   // 释放 payload，防止泄漏
+    queuePacketPop(&q);    // 仅移动 head 指针
+}
+```
+
+**10. `Deinit` 前必须清空队列**
+
+`Deinit` 只执行 `free(self->buf)` 释放 `Packet` 结构体数组，**不遍历**调用每个元素的 `packetClear`。若队列中仍残留未弹出的 `Packet`（`payload != NULL`），它们将随 `Deinit` 永久泄漏。正确清理流程：
+
+```c
+// 1. 清空队列（逐个弹出并释放）
+while (!queuePacketIsEmpty(&q)) {
+    Packet pkt;
+    queuePacketFront(&q, &pkt);
+    packetClear(&pkt);
+    queuePacketPop(&q);
+}
+// 2. 释放队列缓冲区
+queuePacketDeinit(&q);
+```
+
+**11. Double-Init 导致旧缓冲区泄漏**
+
+`Init` **不检查**队列是否已初始化。对同一 `QueuePacket` 调用两次 `Init`（中间未调用 `Deinit`），第一次分配的缓冲区将被覆盖且无法追踪，导致永久内存泄漏：
+
+```c
+QueuePacket q;
+queuePacketInit(&q, 4);   // 分配 buf A
+queuePacketInit(&q, 8);   // 分配 buf B，覆盖 buf A 指针 → buf A 泄漏
+queuePacketDeinit(&q);    // 仅释放 buf B
+```
+
+**防范**：(a) 在首次 `Init` 前用 `memset(&q, 0, sizeof(q))` 零初始化，或 (b) `Init` → `Deinit` → `Init` 成对调用。
+
+**12. `Reserve` 扩容时的所有权转移**
+
+当队列满触发 `Reserve` 扩容时，旧缓冲区中的 `Packet` 通过浅拷贝转移至新缓冲区，旧缓冲区随后被 `free`。`payload` 指针在此过程中被正确转移（未被重复释放），因此扩容不会导致 payload 泄漏。所有元素在扩容后仍保持有效。
+
+---
+
+### 1.5 Utils 工具模块
 
 **接口**：`include/utils.h`
 **实现**：`src/common/utils.c`
@@ -507,15 +761,15 @@ size_t readPasswordMasked(char *buf, size_t bufsize);
 
 #### 2.1.1 常量
 
-| 宏 | 值 | 说明 |
-|---|---|---|
-| `USERNAME_MAX_LEN` | `32` | 用户名最大长度（含 NUL），与 `LOGIN_USERNAME_LEN` 保持同步 |
-| `NICKNAME_MAX_LEN` | `32` | 昵称最大长度（含 NUL），与 `LOGIN_NICKNAME_LEN` 保持同步 |
-| `MAX_CLIENTS_PER_ROOM` | `10` | 单个房间最大客户端数 |
-| `SERVER_INITIAL_CAPACITY` | `16` | 动态 session / room 数组初始容量 |
-| `SERVER_SELECT_TIMEOUT_US` | `16000` | `select()` 超时时间（微秒，约 60 Hz） |
-| `SERVER_SUCC` | `0` | 操作成功 |
-| `SERVER_FAIL` | `-1` | 操作失败 |
+| 宏                           | 值        | 说明                                                         |
+| ---------------------------- | --------- | ------------------------------------------------------------ |
+| `USERNAME_MAX_LEN`         | `32`    | 用户名最大长度（含 NUL），与 `LOGIN_USERNAME_LEN` 保持同步 |
+| `NICKNAME_MAX_LEN`         | `32`    | 昵称最大长度（含 NUL），与 `LOGIN_NICKNAME_LEN` 保持同步   |
+| `MAX_CLIENTS_PER_ROOM`     | `10`    | 单个房间最大客户端数                                         |
+| `SERVER_INITIAL_CAPACITY`  | `16`    | 动态 session / room 数组初始容量                             |
+| `SERVER_SELECT_TIMEOUT_US` | `16000` | `select()` 超时时间（微秒，约 60 Hz）                      |
+| `SERVER_SUCC`              | `0`     | 操作成功                                                     |
+| `SERVER_FAIL`              | `-1`    | 操作失败                                                     |
 
 #### 2.1.2 服务端状态机
 
@@ -603,27 +857,27 @@ typedef struct {
 
 #### 2.1.4 公开 API
 
-| 函数 | 说明 |
-|---|---|
-| `int serverInit(Server *s, uint16_t port)` | 创建监听套接字，打开 userDB / chatDB / gameDB。须传入零初始化的 `Server` |
-| `void serverRun(Server *s)` | 进入 `select()` 事件循环（阻塞直至进程终止）。16ms 超时为后续 game tick 预留 |
-| `void serverCleanup(Server *s)` | 断开所有客户端、释放 session/room、关闭数据库 |
+| 函数                                         | 说明                                                                           |
+| -------------------------------------------- | ------------------------------------------------------------------------------ |
+| `int serverInit(Server *s, uint16_t port)` | 创建监听套接字，打开 userDB / chatDB / gameDB。须传入零初始化的 `Server`     |
+| `void serverRun(Server *s)`                | 进入 `select()` 事件循环（阻塞直至进程终止）。16ms 超时为后续 game tick 预留 |
+| `void serverCleanup(Server *s)`            | 断开所有客户端、释放 session/room、关闭数据库                                  |
 
 #### 2.1.5 Handler 处理逻辑
 
-| 阶段 | 接收包 | 处理行为 |
-|---|---|---|
-| KeyExchange | `MsgKeyExchangeReq` | 调用 `serverExchangeAESKey()` → 状态切至 `SessionLogin` |
-| Login | `MsgLoginReq` | 解析 `LoginRequestPayload`（username + password），调用 `verifyUser()`。成功则发送 `LoginResponsePayload`（uid + username + nickname），状态切至 `SessionRoom`；失败则发送 uid=0 的 `LoginResponsePayload` |
-| Login | `MsgRegisterReq` | 解析 `RegisterRequestPayload`（username + nickname + password），调用 `createUser()`（服务器自动生成 UID），发送单字节状态响应。注册后不自动登录，客户端须另行发送 `MsgLoginReq` |
-| Login | `MsgLogout` | 断开连接 |
-| Room | `MsgRoomListReq` | 查询 GameDB → 发送房间 ID 数组 |
-| Room | `MsgCreateRoom` | 写入 GameDB → `MsgCreateRoomResp`（0/1） |
-| Room | `MsgJoinRoom` | 检查 GameDB 存在性 → 加入 ActiveRoom → `MsgJoinRoomResp`（0/1）→ 状态切至 `SessionChat` |
-| Room | `MsgLogout` | 断开连接 |
-| Chat | `MsgChat` | 存入 ChatHistoryDB → 广播 `ChatBroadcastPayload` 给同房间其他成员 |
-| Chat | `MsgHeartbeat` | 回显 `MsgHeartbeat` |
-| Chat | `MsgLogout` | 断开连接 |
+| 阶段        | 接收包                | 处理行为                                                                                                                                                                                                             |
+| ----------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| KeyExchange | `MsgKeyExchangeReq` | 调用 `serverExchangeAESKey()` → 状态切至 `SessionLogin`                                                                                                                                                         |
+| Login       | `MsgLoginReq`       | 解析 `LoginRequestPayload`（username + password），调用 `verifyUser()`。成功则发送 `LoginResponsePayload`（uid + username + nickname），状态切至 `SessionRoom`；失败则发送 uid=0 的 `LoginResponsePayload` |
+| Login       | `MsgRegisterReq`    | 解析 `RegisterRequestPayload`（username + nickname + password），调用 `createUser()`（服务器自动生成 UID），发送单字节状态响应。注册后不自动登录，客户端须另行发送 `MsgLoginReq`                               |
+| Login       | `MsgLogout`         | 断开连接                                                                                                                                                                                                             |
+| Room        | `MsgRoomListReq`    | 查询 GameDB → 发送房间 ID 数组                                                                                                                                                                                      |
+| Room        | `MsgCreateRoom`     | 写入 GameDB →`MsgCreateRoomResp`（0/1）                                                                                                                                                                           |
+| Room        | `MsgJoinRoom`       | 检查 GameDB 存在性 → 加入 ActiveRoom →`MsgJoinRoomResp`（0/1）→ 状态切至 `SessionChat`                                                                                                                        |
+| Room        | `MsgLogout`         | 断开连接                                                                                                                                                                                                             |
+| Chat        | `MsgChat`           | 存入 ChatHistoryDB → 广播 `ChatBroadcastPayload` 给同房间其他成员                                                                                                                                                 |
+| Chat        | `MsgHeartbeat`      | 回显 `MsgHeartbeat`                                                                                                                                                                                                |
+| Chat        | `MsgLogout`         | 断开连接                                                                                                                                                                                                             |
 
 #### 2.1.6 协议违规
 
@@ -640,15 +894,15 @@ typedef struct {
 
 #### 2.2.1 常量与宏
 
-| 宏 | 值 | 说明 |
-|---|---|---|
-| `DB_SUCC` | `0` | 操作成功 |
-| `DB_FAIL` | `-1` | 操作失败 |
-| `USER_DB_PATH` | `"db/user.db"` | 用户数据库文件路径 |
-| `CHAT_HISTORY_DB_PATH` | `"db/chatHistory.db"` | 聊天记录数据库文件路径 |
-| `GAME_DB_PATH` | `"db/game.db"` | 游戏房间数据库文件路径 |
-| `DB_DIRECTORY` | `"db"` | 数据库文件所在目录 |
-| `ROOM_STMT_BUCKETS` | `32` | Room 语句缓存哈希表桶数 |
+| 宏                       | 值                      | 说明                    |
+| ------------------------ | ----------------------- | ----------------------- |
+| `DB_SUCC`              | `0`                   | 操作成功                |
+| `DB_FAIL`              | `-1`                  | 操作失败                |
+| `USER_DB_PATH`         | `"db/user.db"`        | 用户数据库文件路径      |
+| `CHAT_HISTORY_DB_PATH` | `"db/chatHistory.db"` | 聊天记录数据库文件路径  |
+| `GAME_DB_PATH`         | `"db/game.db"`        | 游戏房间数据库文件路径  |
+| `DB_DIRECTORY`         | `"db"`                | 数据库文件所在目录      |
+| `ROOM_STMT_BUCKETS`    | `32`                  | Room 语句缓存哈希表桶数 |
 
 #### 2.2.2 类型定义
 
@@ -749,10 +1003,10 @@ CREATE TABLE IF NOT EXISTS rooms (
 
 #### 2.2.4 生命周期管理
 
-| 函数 | 说明 |
-|---|---|
-| `DB *dbInit(DBType dbType)` | 打开（或创建）指定类型数据库。自动创建 `db/` 目录，启用 WAL journal 模式及外键约束。失败返回 NULL，所有已分配资源正确释放 |
-| `void dbClose(DB *database)` | 关闭数据库连接并释放所有关联资源。`dbClose(NULL)` 为安全的 no-op |
+| 函数                           | 说明                                                                                                                        |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `DB *dbInit(DBType dbType)`  | 打开（或创建）指定类型数据库。自动创建 `db/` 目录，启用 WAL journal 模式及外键约束。失败返回 NULL，所有已分配资源正确释放 |
+| `void dbClose(DB *database)` | 关闭数据库连接并释放所有关联资源。`dbClose(NULL)` 为安全的 no-op                                                          |
 
 #### 2.2.5 用户操作
 
@@ -790,23 +1044,23 @@ CREATE TABLE IF NOT EXISTS rooms (
 
 #### 2.2.6 聊天记录操作
 
-| 函数 | 说明 |
-|---|---|
-| `int storeChat(DB *database, uint32_t roomId, Chat *chat)` | 存入一条聊天消息，msgId 由数据库生成并回填 |
-| `int queryChatByMsgId(DB *database, uint32_t roomId, uint64_t msgId, Chat *out)` | 按全局唯一 msgId 查询单条记录，`out->message` 须 `free` |
-| `int queryChatByTimeRange(DB *database, uint32_t roomId, uint32_t uid, time_t startTime, time_t endTime, Chat **out, size_t *count)` | 查询指定房间时间范围闭区间 `[startTime, endTime]` 内的消息。`uid == 0` 查询所有用户。结果按 msgId ASC 排序。调用者须 `free` 每个 `out[i].message` 及数组本身 |
-| `int queryChatByUserAllRooms(DB *database, uint32_t uid, time_t startTime, time_t endTime, Chat **out, size_t *count)` | 跨所有房间查询指定用户的消息，按全局 msgId ASC 排序返回。通过 `sqlite_master` 发现所有 room 表，使用缓存的 `stmtSelectByTimeUid` 逐表查询，最后 `qsort` 合并排序 |
+| 函数                                                                                                                                   | 说明                                                                                                                                                                   |
+| -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `int storeChat(DB *database, uint32_t roomId, Chat *chat)`                                                                           | 存入一条聊天消息，msgId 由数据库生成并回填                                                                                                                             |
+| `int queryChatByMsgId(DB *database, uint32_t roomId, uint64_t msgId, Chat *out)`                                                     | 按全局唯一 msgId 查询单条记录，`out->message` 须 `free`                                                                                                            |
+| `int queryChatByTimeRange(DB *database, uint32_t roomId, uint32_t uid, time_t startTime, time_t endTime, Chat **out, size_t *count)` | 查询指定房间时间范围闭区间 `[startTime, endTime]` 内的消息。`uid == 0` 查询所有用户。结果按 msgId ASC 排序。调用者须 `free` 每个 `out[i].message` 及数组本身   |
+| `int queryChatByUserAllRooms(DB *database, uint32_t uid, time_t startTime, time_t endTime, Chat **out, size_t *count)`               | 跨所有房间查询指定用户的消息，按全局 msgId ASC 排序返回。通过 `sqlite_master` 发现所有 room 表，使用缓存的 `stmtSelectByTimeUid` 逐表查询，最后 `qsort` 合并排序 |
 
 所有函数通过 `getOrCreateRoomStmts()` 在首次访问某 room 时自动创建表、索引并缓存 prepared statement，后续访问直接命中缓存。结果上限 100000 条以防范 OOM。所有用户输入通过参数绑定（`?` 占位符），不存在 SQL 注入风险。
 
 #### 2.2.7 GameDB — 游戏房间持久化
 
-| 函数 | 说明 |
-|---|---|
+| 函数                                                                   | 说明                                                                                              |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `int createRoom(DB *database, uint32_t roomId, uint32_t creatorUid)` | 创建房间记录，`createdAt` 由 `time(NULL)` 填充。`roomId` 不得为 0，重复创建返回 `DB_FAIL` |
-| `int deleteRoom(DB *database, uint32_t roomId)` | 删除房间。严格模式：不存在则返回 `DB_FAIL` |
-| `int listRooms(DB *database, uint32_t **outRoomIds, size_t *count)` | 列出所有房间 ID，按 `roomId ASC` 排序。调用者须 `free(*outRoomIds)` |
-| `int roomExists(DB *database, uint32_t roomId)` | 检查房间是否存在，用于 `handleRoomJoin` 验证 |
+| `int deleteRoom(DB *database, uint32_t roomId)`                      | 删除房间。严格模式：不存在则返回 `DB_FAIL`                                                      |
+| `int listRooms(DB *database, uint32_t **outRoomIds, size_t *count)`  | 列出所有房间 ID，按 `roomId ASC` 排序。调用者须 `free(*outRoomIds)`                           |
+| `int roomExists(DB *database, uint32_t roomId)`                      | 检查房间是否存在，用于 `handleRoomJoin` 验证                                                    |
 
 #### 2.2.8 Prepared Statement 缓存机制
 
@@ -826,9 +1080,9 @@ CREATE TABLE IF NOT EXISTS rooms (
 
 #### 2.3.1 常量
 
-| 宏 | 值 | 说明 |
-|---|---|---|
-| `COMM_SUCC` | `0` | 操作成功 |
+| 宏            | 值     | 说明     |
+| ------------- | ------ | -------- |
+| `COMM_SUCC` | `0`  | 操作成功 |
 | `COMM_FAIL` | `-1` | 操作失败 |
 
 #### 2.3.2 `int serverExchangeAESKey(SocketFD clientFD, Packet *reqPacket, AESGCMKey *outKey)`
@@ -868,9 +1122,9 @@ CREATE TABLE IF NOT EXISTS rooms (
 
 #### 3.1.1 常量
 
-| 宏 | 值 | 说明 |
-|---|---|---|
-| `CLIENT_SUCC` | `0` | 操作成功 |
+| 宏              | 值     | 说明     |
+| --------------- | ------ | -------- |
+| `CLIENT_SUCC` | `0`  | 操作成功 |
 | `CLIENT_FAIL` | `-1` | 操作失败 |
 
 #### 3.1.2 类型定义
@@ -887,14 +1141,14 @@ typedef struct {
 
 #### 3.1.3 公开 API
 
-| 函数 | 说明 |
-|---|---|
-| `int clientConnect(Client *c, const char *addr, uint16_t port)` | 建立 TCP 连接并执行 ECDH+HKDF 密钥交换。成功时 `c->aesKey` 已就绪 |
-| `int clientLogin(Client *c)` | 从 stdin 交互式读入 username 和 password（密码掩码显示），发送 `MsgLoginReq`（`LoginRequestPayload`），接收 `MsgLoginResp`（`LoginResponsePayload`），通过 `resp->uid != 0` 判定成功。成功时 `c->uid` 被设置，显示欢迎信息（含 nickname） |
-| `int clientRegister(Client *c)` | 从 stdin 交互式读入 username、nickname 和 password，发送 `MsgRegisterReq`（`RegisterRequestPayload`）。UID 由服务器自动分配，注册成功后可另行登录获取 |
-| `int clientRoomMenu(Client *c)` | 拉取房间列表，提供交互式 `[c]reate room`、`[j]oin room`、`[r]efresh`、`[q]uit` 菜单 |
-| `int clientChatLoop(Client *c)` | 进入房间聊天循环：使用 `select(stdin, socket)` 同时监听键盘输入和网络消息。stdin 输入以 `MsgChat` 发送；收到的 `ChatBroadcastPayload` 格式化显示。支持 `/exit`（登出）和 `/help` 命令 |
-| `void clientDisconnect(Client *c)` | 安全擦除 AES 密钥并关闭套接字 |
+| 函数                                                              | 说明                                                                                                                                                                                                                                                  |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `int clientConnect(Client *c, const char *addr, uint16_t port)` | 建立 TCP 连接并执行 ECDH+HKDF 密钥交换。成功时 `c->aesKey` 已就绪                                                                                                                                                                                   |
+| `int clientLogin(Client *c)`                                    | 从 stdin 交互式读入 username 和 password（密码掩码显示），发送 `MsgLoginReq`（`LoginRequestPayload`），接收 `MsgLoginResp`（`LoginResponsePayload`），通过 `resp->uid != 0` 判定成功。成功时 `c->uid` 被设置，显示欢迎信息（含 nickname） |
+| `int clientRegister(Client *c)`                                 | 从 stdin 交互式读入 username、nickname 和 password，发送 `MsgRegisterReq`（`RegisterRequestPayload`）。UID 由服务器自动分配，注册成功后可另行登录获取                                                                                             |
+| `int clientRoomMenu(Client *c)`                                 | 拉取房间列表，提供交互式 `[c]reate room`、`[j]oin room`、`[r]efresh`、`[q]uit` 菜单                                                                                                                                                           |
+| `int clientChatLoop(Client *c)`                                 | 进入房间聊天循环：使用 `select(stdin, socket)` 同时监听键盘输入和网络消息。stdin 输入以 `MsgChat` 发送；收到的 `ChatBroadcastPayload` 格式化显示。支持 `/exit`（登出）和 `/help` 命令                                                       |
+| `void clientDisconnect(Client *c)`                              | 安全擦除 AES 密钥并关闭套接字                                                                                                                                                                                                                         |
 
 #### 3.1.4 注册与登录流程
 
@@ -923,10 +1177,10 @@ sequenceDiagram
 
 #### 3.1.5 聊天命令
 
-| 命令 | 行为 |
-|---|---|
+| 命令      | 行为                             |
+| --------- | -------------------------------- |
 | `/exit` | 发送 `MsgLogout`，退出聊天循环 |
-| `/help` | 显示可用命令列表 |
+| `/help` | 显示可用命令列表                 |
 
 ---
 
@@ -939,9 +1193,9 @@ sequenceDiagram
 
 #### 3.2.1 常量
 
-| 宏 | 值 | 说明 |
-|---|---|---|
-| `COMM_SUCC` | `0` | 操作成功 |
+| 宏            | 值     | 说明     |
+| ------------- | ------ | -------- |
+| `COMM_SUCC` | `0`  | 操作成功 |
 | `COMM_FAIL` | `-1` | 操作失败 |
 
 #### 3.2.2 `int clientExchangeAESKey(SocketFD socketFD, AESGCMKey *outKey)`
