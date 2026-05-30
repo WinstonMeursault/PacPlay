@@ -65,7 +65,8 @@
     "uid INTEGER PRIMARY KEY, "                                                \
     "username TEXT UNIQUE NOT NULL, "                                          \
     "nickname TEXT NOT NULL, "                                                 \
-    "password TEXT NOT NULL"                                                   \
+    "password TEXT NOT NULL, "                                                 \
+    "totp_secret BLOB"                                                         \
     ");"
 
 /** @brief SQL to create the global message sequence table. */
@@ -79,7 +80,8 @@
 /** @brief INSERT a user record. Params: ?1=uid, ?2=username, ?3=nickname,
     ?4=password. uid is server-generated and validated as unique before insert. */
 #define SQL_INSERT_USER                                                        \
-    "INSERT INTO users (uid, username, nickname, password) VALUES (?, ?, ?, ?);"
+    "INSERT INTO users (uid, username, nickname, password, totp_secret) "      \
+    "VALUES (?, ?, ?, ?, ?);"
 
 /** @brief DELETE a user by uid. Params: ?1=uid. */
 #define SQL_DELETE_USER "DELETE FROM users WHERE uid = ?;"
@@ -89,10 +91,36 @@
     returns it on login). Params: ?1=username.
     Columns: 0=uid, 1=nickname, 2=password. */
 #define SQL_SELECT_USER_PASSWORD                                               \
-    "SELECT uid, nickname, password FROM users WHERE username = ?;"
+    "SELECT uid, nickname, password, totp_secret FROM users WHERE username = ?;"
 
 /** @brief Check whether a uid already exists. Params: ?1=uid. */
 #define SQL_UID_CHECK "SELECT 1 FROM users WHERE uid = ?;"
+
+/** @brief UPDATE totp_secret for a user. Params: ?1=secret, ?2=uid. */
+#define SQL_SET_TOTP_SECRET "UPDATE users SET totp_secret = ? WHERE uid = ?;"
+
+/** @brief SELECT totp_secret by uid. Params: ?1=uid. Columns: 0=totp_secret. */
+#define SQL_SELECT_TOTP_BY_UID "SELECT totp_secret FROM users WHERE uid = ?;"
+
+/* ──────────────────────── ServerDB prepared SQL ─────────────────────────── */
+
+/** @brief CREATE the server keys table. */
+#define SQL_CREATE_SERVER_KEYS_TABLE                                            \
+    "CREATE TABLE IF NOT EXISTS server_keys ("                                  \
+    "key_name TEXT PRIMARY KEY, "                                               \
+    "key_value BLOB NOT NULL, "                                                 \
+    "created_at INTEGER NOT NULL"                                               \
+    ");"
+
+/** @brief INSERT OR REPLACE a server key. Params: ?1=key_name, ?2=key_value,
+    ?3=created_at. */
+#define SQL_UPSERT_SERVER_KEY                                                   \
+    "INSERT OR REPLACE INTO server_keys (key_name, key_value, created_at) "    \
+    "VALUES (?, ?, ?);"
+
+/** @brief SELECT key_value by key name. Params: ?1=key_name.
+    Columns: 0=key_value. */
+#define SQL_SELECT_SERVER_KEY "SELECT key_value FROM server_keys WHERE key_name = ?;"
 
 /* ──────────────────────── ChatHistoryDB prepared SQL ────────────────────── */
 
@@ -485,6 +513,19 @@ static int initGameDBSchema(sqlite3 *dbHandle) {
     return execStmt(dbHandle, SQL_CREATE_ROOMS_TABLE, "CREATE TABLE rooms");
 }
 
+/**
+ * @brief Initialize the schema for the server key-value database.
+ *
+ * Creates the server_keys table.
+ *
+ * @param dbHandle  Raw sqlite3 handle.
+ * @return @c DB_SUCC on success, @c DB_FAIL on failure.
+ */
+static int initServerDBSchema(sqlite3 *dbHandle) {
+    return execStmt(dbHandle, SQL_CREATE_SERVER_KEYS_TABLE,
+                    "CREATE TABLE server_keys");
+}
+
 /* ──────────────────────── UserDB stmt preparation ─────────────────────── */
 
 /**
@@ -528,6 +569,22 @@ static int prepareUserStmts(DB *database) {
         return DB_FAIL;
     }
 
+    rc = sqlite3_prepare_v2(database->handle, SQL_SET_TOTP_SECRET, -1,
+                            &database->stmtSetTotpSecret, NULL);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("prepareUserStmts: SET totp_secret prepare failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_prepare_v2(database->handle, SQL_SELECT_TOTP_BY_UID, -1,
+                            &database->stmtGetTOTPSecret, NULL);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("prepareUserStmts: SELECT totp_secret prepare failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
     return DB_SUCC;
 }
 
@@ -547,6 +604,7 @@ static int prepareChatGlobalStmts(DB *database) {
                   sqlite3_errmsg(database->handle), rc);
         return DB_FAIL;
     }
+
     return DB_SUCC;
 }
 
@@ -596,6 +654,36 @@ static int prepareGameDBStmts(DB *database) {
     return DB_SUCC;
 }
 
+/* ──────────────────────── ServerDB stmt preparation ────────────────────── */
+
+/**
+ * @brief Prepare the cached statements for a ServerDB handle.
+ *
+ * @param database  The DB handle to populate.
+ * @return @c DB_SUCC on success, @c DB_FAIL on failure.
+ */
+static int prepareServerDBStmts(DB *database) {
+    int rc;
+
+    rc = sqlite3_prepare_v2(database->handle, SQL_UPSERT_SERVER_KEY, -1,
+                            &database->stmtSetKey, NULL);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("prepareServerDBStmts: UPSERT prepare failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_prepare_v2(database->handle, SQL_SELECT_SERVER_KEY, -1,
+                            &database->stmtGetKey, NULL);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("prepareServerDBStmts: SELECT prepare failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    return DB_SUCC;
+}
+
 /* ──────────────────────── public API: lifecycle ───────────────────────── */
 
 DB *dbInit(DBType dbType) {
@@ -610,6 +698,9 @@ DB *dbInit(DBType dbType) {
         break;
     case GameDB:
         dbPath = GAME_DB_PATH;
+        break;
+    case ServerDB:
+        dbPath = SERVER_DB_PATH;
         break;
     default:
         LOG_ERROR("dbInit: unknown DBType %d", (int)dbType);
@@ -663,6 +754,9 @@ DB *dbInit(DBType dbType) {
     case GameDB:
         schemaResult = initGameDBSchema(database->handle);
         break;
+    case ServerDB:
+        schemaResult = initServerDBSchema(database->handle);
+        break;
     default:
         break;
     }
@@ -694,6 +788,9 @@ DB *dbInit(DBType dbType) {
     case GameDB:
         stmtResult = prepareGameDBStmts(database);
         break;
+    case ServerDB:
+        stmtResult = prepareServerDBStmts(database);
+        break;
     default:
         break;
     }
@@ -705,6 +802,10 @@ DB *dbInit(DBType dbType) {
         finalizeStmt(&database->stmtSelect);
         finalizeStmt(&database->stmtRoomExists);
         finalizeStmt(&database->stmtUidCheck);
+        finalizeStmt(&database->stmtSetTotpSecret);
+        finalizeStmt(&database->stmtGetTOTPSecret);
+        finalizeStmt(&database->stmtSetKey);
+        finalizeStmt(&database->stmtGetKey);
         finalizeStmt(&database->stmtSeq);
         roomCacheDestroy(database->roomCache);
         sqlite3_close(database->handle);
@@ -727,6 +828,12 @@ void dbClose(DB *database) {
     finalizeStmt(&database->stmtSelect);
     finalizeStmt(&database->stmtRoomExists);
     finalizeStmt(&database->stmtUidCheck);
+    finalizeStmt(&database->stmtSetTotpSecret);
+    finalizeStmt(&database->stmtGetTOTPSecret);
+
+    /* Finalize ServerDB cached statements */
+    finalizeStmt(&database->stmtSetKey);
+    finalizeStmt(&database->stmtGetKey);
 
     /* Finalize ChatHistoryDB cached statements */
     finalizeStmt(&database->stmtSeq);
@@ -739,10 +846,16 @@ void dbClose(DB *database) {
                   sqlite3_errmsg(database->handle), rc);
     }
 
+    OPENSSL_cleanse(database->dekKey, sizeof(database->dekKey));
     free(database);
 }
 
 /* ──────────────────────── public API: user operations ─────────────────── */
+
+static uint8_t *encryptTOTP(const char *secret, const uint8_t *dekKey,
+                            size_t *outLen);
+static char *decryptTOTP(const uint8_t *blob, size_t blobLen,
+                         const uint8_t *dekKey);
 
 int createUser(DB *database, User *user) {
     if (database == NULL || user == NULL) {
@@ -861,6 +974,27 @@ int createUser(DB *database, User *user) {
         return DB_FAIL;
     }
 
+    enum { TotpBindIndex = 5 };
+    if (user->totpSecret != NULL) {
+        size_t encLen = 0;
+        uint8_t *enc = encryptTOTP(user->totpSecret, database->dekKey, &encLen);
+        if (enc == NULL) {
+            OPENSSL_cleanse(hashed, strlen(hashed));
+            free(hashed);
+            return DB_FAIL;
+        }
+        rc = sqlite3_bind_blob(stmt, TotpBindIndex, enc, (int)encLen, free);
+    } else {
+        rc = sqlite3_bind_null(stmt, TotpBindIndex);
+    }
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("createUser: bind totp_secret failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        OPENSSL_cleanse(hashed, strlen(hashed));
+        free(hashed);
+        return DB_FAIL;
+    }
+
     rc = sqlite3_step(stmt);
 
     /* Securely wipe the hashed password from memory */
@@ -957,7 +1091,7 @@ int verifyUser(DB *database, User *user) {
         return DB_FAIL;
     }
 
-    /* Columns: 0=uid, 1=nickname, 2=password */
+    /* Columns: 0=uid, 1=nickname, 2=password, 3=totp_secret */
     user->uid = (uint32_t)sqlite3_column_int64(stmt, 0);
 
     const char *storedNickname = (const char *)sqlite3_column_text(stmt, 1);
@@ -977,7 +1111,420 @@ int verifyUser(DB *database, User *user) {
         return DB_FAIL;
     }
 
+    const void *storedTotpBlob = sqlite3_column_blob(stmt, 3);
+    int storedTotpLen = sqlite3_column_bytes(stmt, 3);
+    if (storedTotpBlob != NULL && storedTotpLen > 0) {
+        user->totpSecret =
+            decryptTOTP((const uint8_t *)storedTotpBlob,
+                        (size_t)storedTotpLen, database->dekKey);
+        if (user->totpSecret == NULL) {
+            return DB_FAIL;
+        }
+    } else {
+        user->totpSecret = NULL;
+    }
+
     memcpy(user->nickname, storedNickname, NICKNAME_MAX_LEN);
+    return DB_SUCC;
+}
+
+/* ──────────── TOTP secret AES-256-GCM envelope helpers ─────────────────── */
+
+/**
+ * @brief Encrypt a TOTP secret with the DEK via AES-256-GCM.
+ *
+ * Returns a heap-allocated BLOB in the format
+ * @c nonce(12) @c || @c ciphertext(n) @c || @c tag(16).
+ * The caller must @c free() the returned pointer.
+ *
+ * @param secret   Null-terminated plaintext secret.
+ * @param dekKey   Pointer to 32-byte DEK.
+ * @param outLen   Receives the total encrypted blob length.
+ * @return Heap-allocated encrypted blob, or NULL on failure.
+ */
+static uint8_t *encryptTOTP(const char *secret, const uint8_t *dekKey,
+                            size_t *outLen) {
+    size_t ptLen = strlen(secret);
+    AESGCMKey key;
+    memcpy(key.key, dekKey, AES_GCM_KEY_LEN);
+    if (cryptoRandomBytes(key.nonce, AES_GCM_NONCE_LEN) != CRYPTO_SUCC) {
+        LOG_ERROR("encryptTOTP: nonce generation failed");
+        return NULL;
+    }
+
+    AESGCMBuffer pt = {.data = (uint8_t *)(uintptr_t)secret,
+                        .len = ptLen,
+                        .capacity = ptLen};
+    AESGCMCipher ct;
+    if (aesGCMBufferInit(&ct.buffer, ptLen) != CRYPTO_SUCC) {
+        return NULL;
+    }
+
+    if (encryptAESGCM(&pt, NULL, &key, &ct) != CRYPTO_SUCC) {
+        LOG_ERROR("encryptTOTP: encryption failed");
+        aesGCMBufferDeinit(&ct.buffer);
+        return NULL;
+    }
+
+    size_t total = AES_GCM_NONCE_LEN + ptLen + AES_GCM_TAG_LEN;
+    uint8_t *blob = malloc(total);
+    if (blob == NULL) {
+        LOG_ERROR("encryptTOTP: malloc failed (errno=%d)", errno);
+        aesGCMBufferDeinit(&ct.buffer);
+        return NULL;
+    }
+
+    memcpy(blob, key.nonce, AES_GCM_NONCE_LEN);
+    memcpy(blob + AES_GCM_NONCE_LEN, ct.buffer.data, ptLen);
+    memcpy(blob + AES_GCM_NONCE_LEN + ptLen, ct.tag, AES_GCM_TAG_LEN);
+    *outLen = total;
+
+    aesGCMBufferDeinit(&ct.buffer);
+    return blob;
+}
+
+/**
+ * @brief Decrypt a TOTP secret envelope with the DEK.
+ *
+ * Parses the @c nonce @c || @c ciphertext @c || @c tag BLOB, decrypts
+ * via AES-256-GCM, and returns a null-terminated plaintext string.
+ * The caller must @c free() the returned pointer.
+ *
+ * @param blob      Encrypted BLOB (nonce + CT + tag).
+ * @param blobLen   Total length of @p blob.
+ * @param dekKey    Pointer to 32-byte DEK.
+ * @return Heap-allocated plaintext TOTP secret, or NULL on failure.
+ */
+static char *decryptTOTP(const uint8_t *blob, size_t blobLen,
+                         const uint8_t *dekKey) {
+    if (blobLen < AES_GCM_NONCE_LEN + AES_GCM_TAG_LEN) {
+        LOG_ERROR("decryptTOTP: blob too short (%zu bytes)", blobLen);
+        return NULL;
+    }
+
+    size_t ctLen = blobLen - AES_GCM_NONCE_LEN - AES_GCM_TAG_LEN;
+    AESGCMKey key;
+    memcpy(key.key, dekKey, AES_GCM_KEY_LEN);
+    memcpy(key.nonce, blob, AES_GCM_NONCE_LEN);
+
+    AESGCMCipher ct;
+    ct.buffer.data = (uint8_t *)(uintptr_t)(blob + AES_GCM_NONCE_LEN);
+    ct.buffer.len = ctLen;
+    ct.buffer.capacity = ctLen;
+    memcpy(ct.tag, blob + AES_GCM_NONCE_LEN + ctLen, AES_GCM_TAG_LEN);
+
+    AESGCMBuffer pt;
+    if (aesGCMBufferInit(&pt, ctLen) != CRYPTO_SUCC) {
+        return NULL;
+    }
+
+    int ret = decryptAESGCM(&ct, NULL, &key, &pt);
+    if (ret != CRYPTO_SUCC) {
+        aesGCMBufferDeinit(&pt);
+        if (ret == CRYPTO_AUTH_FAIL) {
+            LOG_ERROR("decryptTOTP: authentication failed — wrong DEK?");
+        }
+        return NULL;
+    }
+
+    char *result = malloc(pt.len + 1);
+    if (result == NULL) {
+        LOG_ERROR("decryptTOTP: malloc failed (errno=%d)", errno);
+        aesGCMBufferDeinit(&pt);
+        return NULL;
+    }
+    memcpy(result, pt.data, pt.len);
+    result[pt.len] = '\0';
+    aesGCMBufferDeinit(&pt);
+    return result;
+}
+
+/* ──────────────────────── public API: set/TOTP operations ─────────────── */
+
+void dbSetDekKey(DB *database, const uint8_t *dekKey) {
+    if (database == NULL) {
+        return;
+    }
+    if (dekKey != NULL) {
+        memcpy(database->dekKey, dekKey, AES_GCM_KEY_LEN);
+    } else {
+        memset(database->dekKey, 0, sizeof(database->dekKey));
+    }
+}
+
+/**
+ * @brief Read and decrypt the TOTP secret for a user.
+ *
+ * @param database  UserDB handle with DEK set.
+ * @param user      User whose @c uid identifies the row.
+ * @return Heap-allocated plaintext Base32 secret, or NULL.
+ */
+char *getTOTPSecret(DB *database, User *user) {
+    sqlite3_stmt *stmt = database->stmtGetTOTPSecret;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    int rc = sqlite3_bind_int64(stmt, 1, (sqlite3_int64)user->uid);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("getTOTPSecret: bind uid failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return NULL;
+    }
+
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE) {
+        return NULL;
+    }
+    if (rc != SQLITE_ROW) {
+        return NULL;
+    }
+
+    const void *blobData = sqlite3_column_blob(stmt, 0);
+    int blobLen = sqlite3_column_bytes(stmt, 0);
+    if (blobData == NULL || blobLen == 0) {
+        return NULL;
+    }
+
+    return decryptTOTP((const uint8_t *)blobData, (size_t)blobLen,
+                       database->dekKey);
+}
+
+int setTOTPSecret(DB *database, User *user, const char *secret) {
+    if (database == NULL || user == NULL) {
+        LOG_ERROR("setTOTPSecret: NULL argument (database=%p, user=%p)",
+                  (void *)database, (void *)user);
+        return DB_FAIL;
+    }
+    if (database->type != UserDB) {
+        LOG_ERROR("setTOTPSecret: wrong database type %d (expected UserDB)",
+                  (int)database->type);
+        return DB_FAIL;
+    }
+
+    sqlite3_stmt *stmt = database->stmtSetTotpSecret;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    int rc;
+    if (secret != NULL && secret[0] != '\0') {
+        size_t encLen = 0;
+        uint8_t *enc = encryptTOTP(secret, database->dekKey, &encLen);
+        if (enc == NULL) {
+            return DB_FAIL;
+        }
+        rc = sqlite3_bind_blob(stmt, 1, enc, (int)encLen, free);
+    } else {
+        rc = sqlite3_bind_null(stmt, 1);
+    }
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("setTOTPSecret: bind secret failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_bind_int64(stmt, 2, (sqlite3_int64)user->uid);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("setTOTPSecret: bind uid failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        LOG_ERROR("setTOTPSecret: step failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    if (sqlite3_changes(database->handle) == 0) {
+        LOG_WARN("setTOTPSecret: uid %u not found in database", user->uid);
+        return DB_FAIL;
+    }
+
+    return DB_SUCC;
+}
+
+/* ──────────────────────── public API: set TOTP secret ─────────────────── */
+
+int setTotpSecret(DB *database, User *user, const char *secret) {
+    if (database == NULL || user == NULL) {
+        LOG_ERROR("setTotpSecret: NULL argument (database=%p, user=%p)",
+                  (void *)database, (void *)user);
+        return DB_FAIL;
+    }
+    if (database->type != UserDB) {
+        LOG_ERROR("setTotpSecret: wrong database type %d (expected UserDB)",
+                  (int)database->type);
+        return DB_FAIL;
+    }
+
+    sqlite3_stmt *stmt = database->stmtSetTotpSecret;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    /* ?1 = totp_secret (text or NULL) */
+    int rc;
+    if (secret != NULL && secret[0] != '\0') {
+        rc = sqlite3_bind_text(stmt, 1, secret, -1, SQLITE_STATIC);
+    } else {
+        rc = sqlite3_bind_null(stmt, 1);
+    }
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("setTotpSecret: bind secret failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    /* ?2 = uid */
+    rc = sqlite3_bind_int64(stmt, 2, (sqlite3_int64)user->uid);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("setTotpSecret: bind uid failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        LOG_ERROR("setTotpSecret: step failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    if (sqlite3_changes(database->handle) == 0) {
+        LOG_WARN("setTotpSecret: uid %u not found in database", user->uid);
+        return DB_FAIL;
+    }
+
+    return DB_SUCC;
+}
+
+/* ──────────────────────── public API: server keys ─────────────────────── */
+
+int setServerKey(DB *database, const char *keyName, const uint8_t *value,
+                 size_t valueLen) {
+    if (database == NULL || keyName == NULL) {
+        LOG_ERROR("setServerKey: NULL argument (database=%p, keyName=%p)",
+                  (void *)database, (const void *)keyName);
+        return DB_FAIL;
+    }
+    if (keyName[0] == '\0') {
+        LOG_ERROR("setServerKey: keyName is empty");
+        return DB_FAIL;
+    }
+    if (database->type != ServerDB) {
+        LOG_ERROR("setServerKey: wrong database type %d (expected ServerDB)",
+                  (int)database->type);
+        return DB_FAIL;
+    }
+    if (valueLen > 0 && value == NULL) {
+        LOG_ERROR("setServerKey: value is NULL with positive valueLen (%zu)",
+                  valueLen);
+        return DB_FAIL;
+    }
+
+    sqlite3_stmt *stmt = database->stmtSetKey;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    int rc =
+        sqlite3_bind_text(stmt, 1, keyName, -1, SQLITE_STATIC);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("setServerKey: bind key_name failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    if (valueLen > 0) {
+        rc = sqlite3_bind_blob(stmt, 2, value, (int)valueLen, SQLITE_STATIC);
+    } else {
+        rc = sqlite3_bind_zeroblob(stmt, 2, 0);
+    }
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("setServerKey: bind key_value failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_bind_int64(stmt, 3, (sqlite3_int64)time(NULL));
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("setServerKey: bind created_at failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        LOG_ERROR("setServerKey: step failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    return DB_SUCC;
+}
+
+int getServerKey(DB *database, const char *keyName, uint8_t **outValue,
+                 size_t *outLen) {
+    *outValue = NULL;
+    *outLen = 0;
+
+    if (database == NULL || keyName == NULL || outValue == NULL ||
+        outLen == NULL) {
+        LOG_ERROR("getServerKey: NULL argument "
+                  "(database=%p, keyName=%p, outValue=%p, outLen=%p)",
+                  (void *)database, (const void *)keyName, (void *)outValue,
+                  (void *)outLen);
+        return DB_FAIL;
+    }
+    if (keyName[0] == '\0') {
+        LOG_ERROR("getServerKey: keyName is empty");
+        return DB_FAIL;
+    }
+    if (database->type != ServerDB) {
+        LOG_ERROR("getServerKey: wrong database type %d (expected ServerDB)",
+                  (int)database->type);
+        return DB_FAIL;
+    }
+
+    sqlite3_stmt *stmt = database->stmtGetKey;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    int rc =
+        sqlite3_bind_text(stmt, 1, keyName, -1, SQLITE_STATIC);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("getServerKey: bind key_name failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE) {
+        /* Key not found — not an error, output stays NULL/0 */
+        return DB_SUCC;
+    }
+    if (rc != SQLITE_ROW) {
+        LOG_ERROR("getServerKey: step failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    /* Column 0 = key_value (BLOB) */
+    int blobLen = sqlite3_column_bytes(stmt, 0);
+    const void *blobData = sqlite3_column_blob(stmt, 0);
+
+    if (blobLen > 0) {
+        uint8_t *copy = malloc((size_t)blobLen);
+        if (copy == NULL) {
+            LOG_ERROR("getServerKey: malloc failed (errno=%d)", errno);
+            return DB_FAIL;
+        }
+        if (blobData != NULL) {
+            memcpy(copy, blobData, (size_t)blobLen);
+        }
+        *outValue = copy;
+        *outLen = (size_t)blobLen;
+    }
+
     return DB_SUCC;
 }
 

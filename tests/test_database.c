@@ -76,6 +76,28 @@ static void removeDBFiles(void) {
     remove("db/game.db");
     remove("db/game.db-wal");
     remove("db/game.db-shm");
+    remove("db/server.db");
+    remove("db/server.db-wal");
+    remove("db/server.db-shm");
+}
+
+/** @brief All-zeros DEK for testing TOTP secret encryption. */
+static const uint8_t testDek[AES_GCM_KEY_LEN];
+
+/**
+ * @brief Open a UserDB with the test DEK pre-set.
+ *
+ * Wraps @c dbInit(UserDB) and @c dbSetDekKey so that every test database
+ * can encrypt / decrypt TOTP secrets without manual DEK plumbing.
+ *
+ * @return An open UserDB handle, or NULL on failure.
+ */
+static DB *testUserDB(void) {
+    DB *db = dbInit(UserDB);
+    if (db != NULL) {
+        dbSetDekKey(db, testDek);
+    }
+    return db;
 }
 
 /**
@@ -100,7 +122,7 @@ static void testDbInitInvalidType(void) {
 /** @brief dbInit for UserDB returns non-NULL. */
 static void testDbInitUserDB(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(db->type, UserDB);
     dbClose(db);
@@ -126,7 +148,7 @@ static void testDbInitCreatesDir(void) {
     /* Cleanly remove the directory to verify dbInit recreates it */
     removeDBFiles();
     rmdir("db");
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     dbClose(db);
     /* Verify directory exists */
@@ -138,8 +160,8 @@ static void testDbInitCreatesDir(void) {
 /** @brief dbInit called multiple times creates independent handles. */
 static void testDbInitMultipleHandles(void) {
     removeDBFiles();
-    DB *db1 = dbInit(UserDB);
-    DB *db2 = dbInit(UserDB);
+    DB *db1 = testUserDB();
+    DB *db2 = testUserDB();
     ASSERT_TRUE(db1 != NULL);
     ASSERT_TRUE(db2 != NULL);
     ASSERT_TRUE(db1 != db2);
@@ -158,7 +180,7 @@ static void testCreateUserNullDB(void) {
 /** @brief createUser rejects NULL user pointer. */
 static void testCreateUserNullUser(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(createUser(db, NULL), DB_FAIL);
     dbClose(db);
@@ -167,7 +189,7 @@ static void testCreateUserNullUser(void) {
 /** @brief createUser rejects empty username. */
 static void testCreateUserEmptyUsername(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_FAIL);
@@ -177,7 +199,7 @@ static void testCreateUserEmptyUsername(void) {
 /** @brief createUser rejects empty nickname. */
 static void testCreateUserEmptyNickname(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "", .uid = 0, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_FAIL);
@@ -187,7 +209,7 @@ static void testCreateUserEmptyNickname(void) {
 /** @brief createUser rejects NULL password pointer. */
 static void testCreateUserNullPassword(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = NULL};
     ASSERT_INT_EQ(createUser(db, &u), DB_FAIL);
@@ -197,7 +219,7 @@ static void testCreateUserNullPassword(void) {
 /** @brief createUser rejects empty password string. */
 static void testCreateUserEmptyPassword(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = ""};
     ASSERT_INT_EQ(createUser(db, &u), DB_FAIL);
@@ -217,7 +239,7 @@ static void testCreateUserWrongDBType(void) {
 /** @brief createUser: basic successful creation. */
 static void testCreateUserBasic(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "secret123"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
@@ -228,7 +250,7 @@ static void testCreateUserBasic(void) {
  *  because uid is server-assigned — each call gets a unique random value. */
 static void testCreateUserDuplicateUID(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u1 = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass1"};
     ASSERT_INT_EQ(createUser(db, &u1), DB_SUCC);
@@ -243,7 +265,7 @@ static void testCreateUserDuplicateUID(void) {
 /** @brief createUser: duplicate username (different uid) must fail. */
 static void testCreateUserDuplicateUsername(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u1 = { .username = "eve", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass1"};
     ASSERT_INT_EQ(createUser(db, &u1), DB_SUCC);
@@ -255,7 +277,7 @@ static void testCreateUserDuplicateUsername(void) {
 /** @brief createUser: username at maximum length (31 non-NUL chars) works. */
 static void testCreateUserMaxLenUsername(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = {.uid = TestUidAlpha, .password = "pass", .nickname = "TestNick"};
     memset(u.username, 'X', (size_t)MaxUserLen31);
@@ -267,7 +289,7 @@ static void testCreateUserMaxLenUsername(void) {
 /** @brief createUser: nickname at maximum length (31 non-NUL chars) works. */
 static void testCreateUserMaxLenNickname(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     enum { MaxNickLen31 = NICKNAME_MAX_LEN - 1 };
     User u = {.username = "nickmax", .uid = 0, .password = "pass"};
@@ -281,7 +303,7 @@ static void testCreateUserMaxLenNickname(void) {
  *  non-zero uid and populates user->uid. */
 static void testCreateUserUidZero(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "uidzero", .nickname = "TestNick", .uid = 0, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
@@ -292,7 +314,7 @@ static void testCreateUserUidZero(void) {
 /** @brief createUser: uid = UINT32_MAX works. */
 static void testCreateUserUidMax(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "uidmax", .nickname = "TestNick", .uid = TestUidMax, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
@@ -304,7 +326,7 @@ static void testCreateUserUidMax(void) {
  *  under normal load and guarantees no collisions within a small set. */
 static void testCreateUserMultipleUniqueUids(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     enum { UserCount = 20 };
     uint32_t uids[UserCount];
@@ -330,7 +352,7 @@ static void testCreateUserMultipleUniqueUids(void) {
 /** @brief createUser: special characters in password are handled. */
 static void testCreateUserSpecialCharsPassword(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = {.username = "spec", .nickname = "TestNick", .uid = TestUidAlpha,
               .password = "!@#$%^&*()_+{}|:\"<>?`~[\\];',./\x01\x1F\x7F"};
@@ -343,7 +365,7 @@ static void testCreateUserSpecialCharsPassword(void) {
 /** @brief createUser: very long password does not crash or overflow. */
 static void testCreateUserLongPassword(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     size_t passLen = (size_t)LongStrLen + 1;
     char *longPass = malloc(passLen);
@@ -371,7 +393,7 @@ static void testDeleteUserNullDB(void) {
 /** @brief deleteUser rejects NULL user pointer. */
 static void testDeleteUserNullUser(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(deleteUser(db, NULL), DB_FAIL);
     dbClose(db);
@@ -390,7 +412,7 @@ static void testDeleteUserWrongDBType(void) {
 /** @brief deleteUser: non-existent uid returns DB_FAIL (strict mode). */
 static void testDeleteUserNonexistent(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "ghost", .nickname = "TestNick", .uid = NonexistentUid, .password = NULL};
     ASSERT_INT_EQ(deleteUser(db, &u), DB_FAIL);
@@ -400,7 +422,7 @@ static void testDeleteUserNonexistent(void) {
 /** @brief deleteUser: create then delete a user. */
 static void testDeleteUserBasic(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "delme", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
@@ -411,7 +433,7 @@ static void testDeleteUserBasic(void) {
 /** @brief deleteUser twice: second call must fail. */
 static void testDeleteUserTwice(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "delme2", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
@@ -424,7 +446,7 @@ static void testDeleteUserTwice(void) {
  *  of a uid=0 record (which cannot exist) must also fail. */
 static void testDeleteUserUidZero(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     /* Create a valid user to ensure DB operations work, but uid=0 is rejected
      */
@@ -439,7 +461,7 @@ static void testDeleteUserUidZero(void) {
 /** @brief deleteUser: uid = UINT32_MAX works. */
 static void testDeleteUserUidMax(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "max", .nickname = "TestNick", .uid = TestUidMax, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
@@ -458,7 +480,7 @@ static void testVerifyUserNullDB(void) {
 /** @brief verifyUser rejects NULL user pointer. */
 static void testVerifyUserNullUser(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(verifyUser(db, NULL), DB_FAIL);
     dbClose(db);
@@ -467,7 +489,7 @@ static void testVerifyUserNullUser(void) {
 /** @brief verifyUser rejects empty username. */
 static void testVerifyUserEmptyUsername(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(verifyUser(db, &u), DB_FAIL);
@@ -477,7 +499,7 @@ static void testVerifyUserEmptyUsername(void) {
 /** @brief verifyUser rejects NULL password. */
 static void testVerifyUserNullPassword(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = NULL};
     ASSERT_INT_EQ(verifyUser(db, &u), DB_FAIL);
@@ -487,7 +509,7 @@ static void testVerifyUserNullPassword(void) {
 /** @brief verifyUser rejects empty password. */
 static void testVerifyUserEmptyPassword(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = ""};
     ASSERT_INT_EQ(verifyUser(db, &u), DB_FAIL);
@@ -507,7 +529,7 @@ static void testVerifyUserWrongDBType(void) {
 /** @brief verifyUser: non-existent user fails. */
 static void testVerifyUserNonexistent(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "ghost", .nickname = "TestNick", .uid = NonexistentUid, .password = "pass"};
     ASSERT_INT_EQ(verifyUser(db, &u), DB_FAIL);
@@ -517,7 +539,7 @@ static void testVerifyUserNonexistent(void) {
 /** @brief verifyUser: wrong password fails. */
 static void testVerifyUserWrongPassword(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "correct"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
@@ -529,7 +551,7 @@ static void testVerifyUserWrongPassword(void) {
 /** @brief verifyUser: correct uid but wrong username fails. */
 static void testVerifyUserWrongUsername(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "secret"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
@@ -543,7 +565,7 @@ static void testVerifyUserWrongUsername(void) {
  *  while keeping correct username+password should still succeed. */
 static void testVerifyUserWrongUID(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "secret"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
@@ -560,7 +582,7 @@ static void testVerifyUserWrongUID(void) {
 /** @brief verifyUser: basic success. */
 static void testVerifyUserBasic(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "secret123"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
@@ -571,7 +593,7 @@ static void testVerifyUserBasic(void) {
 /** @brief verifyUser must fail after user is deleted. */
 static void testVerifyUserAfterDelete(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "todelete", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
@@ -585,7 +607,7 @@ static void testVerifyUserAfterDelete(void) {
 /** @brief verifyUser does NOT distinguish non-existent user from wrong pass. */
 static void testVerifyUserNoEnumeration(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "realpass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
@@ -604,7 +626,7 @@ static void testVerifyUserNoEnumeration(void) {
 /** @brief verifyUser: passwords that differ by one bit fail. */
 static void testVerifyUserSimilarPassword(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "Password123"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
@@ -660,7 +682,7 @@ static void testStoreChatEmptyMessage(void) {
 /** @brief storeChat rejects wrong database type. */
 static void testStoreChatWrongDBType(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidAlpha, 0, "msg", (time_t)TimeBase};
     ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_FAIL);
@@ -778,7 +800,7 @@ static void testQueryMsgIdNullOut(void) {
 /** @brief queryChatByMsgId rejects wrong database type. */
 static void testQueryMsgIdWrongDBType(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, 1, &out), DB_FAIL);
@@ -905,7 +927,7 @@ static void testQueryTimeNullCount(void) {
 /** @brief queryChatByTimeRange rejects wrong database type. */
 static void testQueryTimeWrongDBType(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     Chat *out = NULL;
     size_t count = 0;
@@ -1121,14 +1143,14 @@ static void testQueryTimeCrossRoomIsolation(void) {
 static void testPersistenceUserDB(void) {
     removeDBFiles();
     {
-        DB *db = dbInit(UserDB);
+        DB *db = testUserDB();
         ASSERT_TRUE(db != NULL);
         User u = { .username = "persist", .nickname = "TestNick", .uid = TestUidAlpha, .password = "mysecret"};
         ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
         dbClose(db);
     }
     {
-        DB *db = dbInit(UserDB);
+        DB *db = testUserDB();
         ASSERT_TRUE(db != NULL);
         User u = { .username = "persist", .nickname = "TestNick", .uid = TestUidAlpha, .password = "mysecret"};
         ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
@@ -1194,7 +1216,7 @@ static void testPersistenceMsgSeqContinues(void) {
  */
 static void testSQLInjectionUsername(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "'; DROP TABLE users; --", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
@@ -1235,7 +1257,7 @@ static void testSQLInjectionMessage(void) {
  */
 static void testCrossTypeChatOnUserDB(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidAlpha, 0, "msg", (time_t)TimeBase};
     ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_FAIL);
@@ -1266,7 +1288,7 @@ static void testCrossTypeUserOnChatDB(void) {
 /** @brief Username with embedded NUL byte (using username[0] = '\0'). */
 static void testUsernameEmbeddedNul(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     /* First char \0 → empty string, must be rejected */
     User u = { .username = "\0hidden", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
@@ -1283,7 +1305,7 @@ static void testDbInitFileWhereDirExpected(void) {
     if (f != NULL) {
         fclose(f);
         /* dbInit should fail because "db" is a file, not a directory */
-        DB *db = dbInit(UserDB);
+        DB *db = testUserDB();
         /* It may or may not return NULL depending on implementation;
          * the important thing is that it does not crash or produce UB */
         if (db != NULL) {
@@ -1298,7 +1320,7 @@ static void testDbInitFileWhereDirExpected(void) {
 /** @brief password hash stored in database is not the plaintext. */
 static void testPasswordNotPlaintextInDB(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "secret123"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
@@ -1331,7 +1353,7 @@ static void testPasswordNotPlaintextInDB(void) {
  */
 static void testPasswordHashSamePasswordDifferentUsers(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u1 = { .username = "hash1", .nickname = "TestNick", .uid = TestUidAlpha, .password = "samepass"};
     User u2 = { .username = "hash2", .nickname = "TestNick", .uid = TestUidBravo, .password = "samepass"};
@@ -1355,7 +1377,7 @@ static void testPasswordHashSamePasswordDifferentUsers(void) {
  *  uid and verifyUser returns the canonical uid from the database. */
 static void testVerifyUserUidZero(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = { .username = "zero", .nickname = "TestNick", .uid = 0, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
@@ -1368,7 +1390,7 @@ static void testVerifyUserUidZero(void) {
  *  on repeated calls, and fills the nickname field from the stored record. */
 static void testVerifyUserUidConsistency(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     User u = {.username = "stable", .nickname = "TestNick", .uid = 0,
               .password = "stablepw"};
@@ -1382,6 +1404,407 @@ static void testVerifyUserUidConsistency(void) {
     /* Second call must also return the same uid */
     ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
     ASSERT_UINT_EQ(u.uid, firstUid);
+    dbClose(db);
+}
+
+/** @brief createUser stores and verifyUser retrieves a non-NULL totpSecret. */
+static void testCreateUserWithTotpSecret(void) {
+    removeDBFiles();
+    DB *db = testUserDB();
+    ASSERT_TRUE(db != NULL);
+    User u = {.username = "totpuser",
+              .nickname = "TOTP",
+              .uid = 0,
+              .password = "totppw",
+              .totpSecret = "JBSWY3DPEHPK3PXP"};
+    ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+    ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
+    ASSERT_TRUE(u.totpSecret != NULL);
+    ASSERT_STR_EQ(u.totpSecret, "JBSWY3DPEHPK3PXP");
+    free(u.totpSecret);
+    dbClose(db);
+}
+
+/** @brief createUser stores a NULL totpSecret; verifyUser returns NULL. */
+static void testCreateUserTotpSecretNull(void) {
+    removeDBFiles();
+    DB *db = testUserDB();
+    ASSERT_TRUE(db != NULL);
+    User u = {.username = "nototp",
+              .nickname = "NoTOTP",
+              .uid = 0,
+              .password = "nopw",
+              .totpSecret = NULL};
+    ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+    ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
+    ASSERT_TRUE(u.totpSecret == NULL);
+    dbClose(db);
+}
+
+/** @brief TOTP secret survives database close / reopen. */
+static void testTotpSecretPersistence(void) {
+    removeDBFiles();
+    {
+        DB *db = testUserDB();
+        ASSERT_TRUE(db != NULL);
+        User u = {.username = "persisttotp",
+                  .nickname = "PTotp",
+                  .uid = 0,
+                  .password = "ppw",
+                  .totpSecret = "GEZDGNBVGY3TQOJQ"};
+        ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+        dbClose(db);
+    }
+    {
+        DB *db = testUserDB();
+        ASSERT_TRUE(db != NULL);
+        User u = {.username = "persisttotp",
+                  .nickname = "PTotp",
+                  .uid = 0,
+                  .password = "ppw",
+                  .totpSecret = NULL};
+        ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
+        ASSERT_TRUE(u.totpSecret != NULL);
+        ASSERT_STR_EQ(u.totpSecret, "GEZDGNBVGY3TQOJQ");
+        free(u.totpSecret);
+        dbClose(db);
+    }
+}
+
+static void testSetTotpSecretBasic(void) {
+    removeDBFiles();
+    DB *db = testUserDB();
+    ASSERT_TRUE(db != NULL);
+    User u = {.username = "settotp",
+              .nickname = "Set",
+              .uid = 0,
+              .password = "pw"};
+    ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+
+    ASSERT_INT_EQ(setTOTPSecret(db, &u, "JBSWY3DPEHPK3PXP"), DB_SUCC);
+
+    ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
+    ASSERT_TRUE(u.totpSecret != NULL);
+    ASSERT_STR_EQ(u.totpSecret, "JBSWY3DPEHPK3PXP");
+    free(u.totpSecret);
+    dbClose(db);
+}
+
+static void testSetTotpSecretOverwrite(void) {
+    removeDBFiles();
+    DB *db = testUserDB();
+    ASSERT_TRUE(db != NULL);
+    User u = {.username = "ovrwrtotp",
+              .nickname = "Over",
+              .uid = 0,
+              .password = "pw",
+              .totpSecret = "AAAAAAAAAAAA"};
+    ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+
+    ASSERT_INT_EQ(setTOTPSecret(db, &u, "GEZDGNBVGY3TQOJQ"), DB_SUCC);
+
+    ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
+    ASSERT_TRUE(u.totpSecret != NULL);
+    ASSERT_STR_EQ(u.totpSecret, "GEZDGNBVGY3TQOJQ");
+    free(u.totpSecret);
+    dbClose(db);
+}
+
+static void testSetTotpSecretClear(void) {
+    removeDBFiles();
+    DB *db = testUserDB();
+    ASSERT_TRUE(db != NULL);
+    User u = {.username = "cleartotp",
+              .nickname = "Clear",
+              .uid = 0,
+              .password = "pw",
+              .totpSecret = "JBSWY3DPEHPK3PXP"};
+    ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+
+    ASSERT_INT_EQ(setTOTPSecret(db, &u, NULL), DB_SUCC);
+
+    ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
+    ASSERT_TRUE(u.totpSecret == NULL);
+    dbClose(db);
+}
+
+static void testSetTotpSecretClearEmpty(void) {
+    removeDBFiles();
+    DB *db = testUserDB();
+    ASSERT_TRUE(db != NULL);
+    User u = {.username = "clearempty",
+              .nickname = "ClrE",
+              .uid = 0,
+              .password = "pw",
+              .totpSecret = "JBSWY3DPEHPK3PXP"};
+    ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+
+    ASSERT_INT_EQ(setTOTPSecret(db, &u, ""), DB_SUCC);
+
+    ASSERT_INT_EQ(verifyUser(db, &u), DB_SUCC);
+    ASSERT_TRUE(u.totpSecret == NULL);
+    dbClose(db);
+}
+
+static void testSetTotpSecretNullDB(void) {
+    ASSERT_INT_EQ(setTOTPSecret(NULL, NULL, NULL), DB_FAIL);
+}
+
+static void testSetTotpSecretWrongDBType(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    User u = {.username = "wrongdb", .nickname = "W", .uid = 1, .password = "pw"};
+    ASSERT_INT_EQ(setTOTPSecret(db, &u, "AAAA"), DB_FAIL);
+    dbClose(db);
+}
+
+static void testSetTotpSecretNonexistentUser(void) {
+    removeDBFiles();
+    DB *db = testUserDB();
+    ASSERT_TRUE(db != NULL);
+    enum { NonexistentUid = 9999 };
+    User u = {.username = "ghost", .nickname = "G", .uid = NonexistentUid, .password = "pw"};
+    ASSERT_INT_EQ(setTOTPSecret(db, &u, "AAAA"), DB_FAIL);
+    dbClose(db);
+}
+
+static void testTOTPSecretEncryptedInDB(void) {
+    removeDBFiles();
+    DB *db = testUserDB();
+    ASSERT_TRUE(db != NULL);
+    User u = {.username = "encrypted",
+              .nickname = "Enc",
+              .uid = 0,
+              .password = "pw",
+              .totpSecret = "JBSWY3DPEHPK3PXP"};
+    ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(
+        db->handle, "SELECT totp_secret FROM users WHERE uid = ?;", -1, &stmt,
+        NULL);
+    ASSERT_INT_EQ(rc, SQLITE_OK);
+    rc = sqlite3_bind_int64(stmt, 1, (sqlite3_int64)u.uid);
+    ASSERT_INT_EQ(rc, SQLITE_OK);
+    rc = sqlite3_step(stmt);
+    ASSERT_INT_EQ(rc, SQLITE_ROW);
+
+    const void *blob = sqlite3_column_blob(stmt, 0);
+    int blobLen = sqlite3_column_bytes(stmt, 0);
+    ASSERT_TRUE(blob != NULL);
+    /* Must be nonce(12) + ciphertext(16) + tag(16) = 44 bytes */
+    ASSERT_TRUE(blobLen > 0);
+    /* Must NOT equal the plaintext Base32 string */
+    ASSERT_TRUE(memcmp(blob, "JBSWY3DPEHPK3PXP", 16) != 0);
+    sqlite3_finalize(stmt);
+    dbClose(db);
+}
+
+static void testTOTPSecretWrongDEKFails(void) {
+    removeDBFiles();
+    {
+        DB *db = testUserDB();
+        ASSERT_TRUE(db != NULL);
+        User u = {.username = "wrongdek",
+                  .nickname = "WD",
+                  .uid = 0,
+                  .password = "pw",
+                  .totpSecret = "JBSWY3DPEHPK3PXP"};
+        ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+        dbClose(db);
+    }
+    {
+        DB *db = dbInit(UserDB);
+        ASSERT_TRUE(db != NULL);
+        enum { BadDekVal = 0xFF };
+        uint8_t badDek[AES_GCM_KEY_LEN];
+        memset(badDek, BadDekVal, sizeof(badDek));
+        dbSetDekKey(db, badDek);
+
+        User u = {.username = "wrongdek",
+                  .nickname = "WD",
+                  .uid = 0,
+                  .password = "pw",
+                  .totpSecret = NULL};
+        ASSERT_INT_EQ(verifyUser(db, &u), DB_FAIL);
+        dbClose(db);
+    }
+}
+
+static void testTOTPSecretDEKUnsetFails(void) {
+    removeDBFiles();
+    {
+        DB *db = dbInit(UserDB);
+        ASSERT_TRUE(db != NULL);
+        enum { TestDekByte = 0xAA };
+        uint8_t customDek[AES_GCM_KEY_LEN];
+        memset(customDek, TestDekByte, sizeof(customDek));
+        dbSetDekKey(db, customDek);
+
+        User u = {.username = "nodek",
+                  .nickname = "ND",
+                  .uid = 0,
+                  .password = "pw",
+                  .totpSecret = "JBSWY3DPEHPK3PXP"};
+        ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+        dbClose(db);
+    }
+    {
+        DB *db = dbInit(UserDB);
+        ASSERT_TRUE(db != NULL);
+        /* DEK is all-zeros from calloc — different from encrypt DEK */
+        User u = {.username = "nodek",
+                  .nickname = "ND",
+                  .uid = 0,
+                  .password = "pw",
+                  .totpSecret = NULL};
+        ASSERT_INT_EQ(verifyUser(db, &u), DB_FAIL);
+        dbClose(db);
+    }
+}
+
+static void testGetTOTPSecretNoTOTP(void) {
+    removeDBFiles();
+    DB *db = testUserDB();
+    ASSERT_TRUE(db != NULL);
+    User u = {.username = "nototpg",
+              .nickname = "NT",
+              .uid = 0,
+              .password = "pw",
+              .totpSecret = NULL};
+    ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+    char *result = getTOTPSecret(db, &u);
+    ASSERT_TRUE(result == NULL);
+    free(result);
+    dbClose(db);
+}
+
+static void testGetTOTPSecretNonexistent(void) {
+    removeDBFiles();
+    DB *db = testUserDB();
+    ASSERT_TRUE(db != NULL);
+    enum { GhostUid = 88888 };
+    User u = {.username = "ghost", .nickname = "G", .uid = GhostUid,
+              .password = "pw", .totpSecret = NULL};
+    char *result = getTOTPSecret(db, &u);
+    ASSERT_TRUE(result == NULL);
+    free(result);
+    dbClose(db);
+}
+
+static void testGetTOTPSecretWithSecret(void) {
+    removeDBFiles();
+    DB *db = testUserDB();
+    ASSERT_TRUE(db != NULL);
+    User u = {.username = "withtotp",
+              .nickname = "WT",
+              .uid = 0,
+              .password = "pw",
+              .totpSecret = "GEZDGNBVGY3TQOJQ"};
+    ASSERT_INT_EQ(createUser(db, &u), DB_SUCC);
+    char *result = getTOTPSecret(db, &u);
+    ASSERT_TRUE(result != NULL);
+    ASSERT_STR_EQ(result, "GEZDGNBVGY3TQOJQ");
+    free(result);
+    dbClose(db);
+}
+
+static void testSetServerKeyBasic(void) {
+    removeDBFiles();
+    DB *db = dbInit(ServerDB);
+    ASSERT_TRUE(db != NULL);
+
+    const uint8_t val[] = {0xDE, 0xAD, 0xBE, 0xEF};
+    ASSERT_INT_EQ(setServerKey(db, "signing_key", val, sizeof(val)), DB_SUCC);
+
+    uint8_t *out = NULL;
+    size_t outLen = 0;
+    ASSERT_INT_EQ(getServerKey(db, "signing_key", &out, &outLen), DB_SUCC);
+    ASSERT_UINT_EQ(outLen, sizeof(val));
+    ASSERT_MEM_EQ(out, val, sizeof(val));
+    free(out);
+    dbClose(db);
+}
+
+static void testSetServerKeyOverwrite(void) {
+    removeDBFiles();
+    DB *db = dbInit(ServerDB);
+    ASSERT_TRUE(db != NULL);
+
+    const uint8_t old[] = {0x01, 0x02};
+    ASSERT_INT_EQ(setServerKey(db, "overwrite", old, sizeof(old)), DB_SUCC);
+
+    const uint8_t newVal[] = {0xFF, 0xFE};
+    ASSERT_INT_EQ(setServerKey(db, "overwrite", newVal, sizeof(newVal)),
+                  DB_SUCC);
+
+    uint8_t *out = NULL;
+    size_t outLen = 0;
+    ASSERT_INT_EQ(getServerKey(db, "overwrite", &out, &outLen), DB_SUCC);
+    ASSERT_UINT_EQ(outLen, sizeof(newVal));
+    ASSERT_MEM_EQ(out, newVal, sizeof(newVal));
+    free(out);
+    dbClose(db);
+}
+
+static void testSetServerKeyEmptyBlob(void) {
+    removeDBFiles();
+    DB *db = dbInit(ServerDB);
+    ASSERT_TRUE(db != NULL);
+
+    ASSERT_INT_EQ(setServerKey(db, "empty", NULL, 0), DB_SUCC);
+
+    uint8_t *out = NULL;
+    size_t outLen = 0;
+    ASSERT_INT_EQ(getServerKey(db, "empty", &out, &outLen), DB_SUCC);
+    ASSERT_UINT_EQ(outLen, 0);
+    ASSERT_TRUE(out == NULL);
+    free(out);
+    dbClose(db);
+}
+
+static void testGetServerKeyNotFound(void) {
+    removeDBFiles();
+    DB *db = dbInit(ServerDB);
+    ASSERT_TRUE(db != NULL);
+
+    uint8_t *out = NULL;
+    size_t outLen = 0;
+    ASSERT_INT_EQ(getServerKey(db, "nonexistent", &out, &outLen), DB_SUCC);
+    ASSERT_TRUE(out == NULL);
+    ASSERT_UINT_EQ(outLen, 0);
+    free(out);
+    dbClose(db);
+}
+
+static void testSetServerKeyNullDB(void) {
+    ASSERT_INT_EQ(setServerKey(NULL, "k", NULL, 0), DB_FAIL);
+}
+
+static void testSetServerKeyWrongDBType(void) {
+    removeDBFiles();
+    DB *db = dbInit(ChatHistoryDB);
+    ASSERT_TRUE(db != NULL);
+    ASSERT_INT_EQ(setServerKey(db, "k", NULL, 0), DB_FAIL);
+    dbClose(db);
+}
+
+static void testSetServerKeyEmptyName(void) {
+    removeDBFiles();
+    DB *db = dbInit(ServerDB);
+    ASSERT_TRUE(db != NULL);
+    ASSERT_INT_EQ(setServerKey(db, "", NULL, 0), DB_FAIL);
+    dbClose(db);
+}
+
+static void testGetServerKeyEmptyName(void) {
+    removeDBFiles();
+    DB *db = dbInit(ServerDB);
+    ASSERT_TRUE(db != NULL);
+    uint8_t *out = NULL;
+    size_t outLen = 0;
+    ASSERT_INT_EQ(getServerKey(db, "", &out, &outLen), DB_FAIL);
     dbClose(db);
 }
 
@@ -1513,7 +1936,7 @@ static void testQueryUserAllNullCount(void) {
 /** @brief queryChatByUserAllRooms rejects wrong database type. */
 static void testQueryUserAllWrongDBType(void) {
     removeDBFiles();
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     Chat *out = (Chat *)(uintptr_t)TestSentinelPtr;
     size_t count = TestCountSentinel;
@@ -2082,7 +2505,7 @@ static void testCreateRoomNullDB(void) {
 }
 
 static void testCreateRoomWrongDBType(void) {
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(createRoom(db, 1001, 42), DB_FAIL);
     dbClose(db);
@@ -2177,7 +2600,7 @@ static void testListRoomsNullOut(void) {
 }
 
 static void testListRoomsWrongDBType(void) {
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     uint32_t *ids = NULL;
     size_t count = 0;
@@ -2224,7 +2647,7 @@ static void testDeleteRoomNullDB(void) {
 
 /** @brief deleteRoom rejects wrong database type (UserDB). */
 static void testDeleteRoomWrongDBType(void) {
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(deleteRoom(db, 1001), DB_FAIL);
     dbClose(db);
@@ -2247,7 +2670,7 @@ static void testRoomExistsNullDB(void) {
 
 /** @brief roomExists rejects wrong database type (UserDB). */
 static void testRoomExistsWrongDBType(void) {
-    DB *db = dbInit(UserDB);
+    DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(roomExists(db, 1001), DB_FAIL);
     dbClose(db);
@@ -2389,6 +2812,32 @@ int main(void) {
     RUN_TEST(testVerifyUserSimilarPassword);
     RUN_TEST(testVerifyUserUidZero);
     RUN_TEST(testVerifyUserUidConsistency);
+    RUN_TEST(testCreateUserWithTotpSecret);
+    RUN_TEST(testCreateUserTotpSecretNull);
+    RUN_TEST(testTotpSecretPersistence);
+    RUN_TEST(testSetTotpSecretBasic);
+    RUN_TEST(testSetTotpSecretOverwrite);
+    RUN_TEST(testSetTotpSecretClear);
+    RUN_TEST(testSetTotpSecretClearEmpty);
+    RUN_TEST(testSetTotpSecretNullDB);
+    RUN_TEST(testSetTotpSecretWrongDBType);
+    RUN_TEST(testSetTotpSecretNonexistentUser);
+    RUN_TEST(testTOTPSecretEncryptedInDB);
+    RUN_TEST(testTOTPSecretWrongDEKFails);
+    RUN_TEST(testTOTPSecretDEKUnsetFails);
+    RUN_TEST(testGetTOTPSecretNoTOTP);
+    RUN_TEST(testGetTOTPSecretNonexistent);
+    RUN_TEST(testGetTOTPSecretWithSecret);
+
+    /* ──────────── server keys ───────────────── */
+    RUN_TEST(testSetServerKeyBasic);
+    RUN_TEST(testSetServerKeyOverwrite);
+    RUN_TEST(testSetServerKeyEmptyBlob);
+    RUN_TEST(testGetServerKeyNotFound);
+    RUN_TEST(testSetServerKeyNullDB);
+    RUN_TEST(testSetServerKeyWrongDBType);
+    RUN_TEST(testSetServerKeyEmptyName);
+    RUN_TEST(testGetServerKeyEmptyName);
 
     /* ──────────── storeChat ──────────────────── */
     RUN_TEST(testStoreChatNullDB);

@@ -49,6 +49,10 @@
 /** @brief Fixed nickname length in login request payload (NUL-terminated). */
 #define LOGIN_NICKNAME_LEN 32
 
+/** @brief Fixed length of Base32-encoded TOTP secret in setup response
+ *         (32 chars + NUL). */
+#define TOTP_SETUP_SECRET_LEN 33
+
 /** @brief Extra bytes added by AES-256-GCM encryption: nonce + tag. */
 #define AES_PACKET_EXTRA_LEN (AES_GCM_NONCE_LEN + AES_GCM_TAG_LEN)
 
@@ -69,17 +73,22 @@ typedef enum {
 } PacketType;
 
 typedef enum {
-    /* Phase 1: key exchange (plaintext, happens before any encryption). */
+    /* Key exchange (plaintext, happens before any encryption). */
     MsgKeyExchangeReq = 1,
     MsgKeyExchangeResp,
 
-    /* Phase 2: authentication. */
+    /* Authentication. */
     MsgLoginReq,
     MsgLoginResp,
     MsgRegisterReq,
     MsgRegisterResp,
 
-    /* Phase 3: room management. */
+    MsgTOTPSetupReq,
+    MsgTOTPSetupResp,
+    MsgTOTPVerifyReq,
+    MsgTOTPVerifyResp,
+
+    /* Room management. */
     MsgRoomListReq,
     MsgRoomListResp,
     MsgCreateRoom,
@@ -87,14 +96,14 @@ typedef enum {
     MsgJoinRoom,
     MsgJoinRoomResp,
 
-    /* Phase 4: in-room chat. */
+    /* In-room chat. */
     MsgChat,
 
     /* Session lifecycle. */
     MsgLogout,
     MsgHeartbeat,
 
-    /* Phase 5: game control (future). */
+    /* Game control (future). */
     MsgGameStart,
     MsgGameStop
 } MessageType;
@@ -127,6 +136,18 @@ typedef struct {
     uint8_t publicKey[ECDH_PUBLIC_KEY_SIZE];
 } KeyExchangePacketPayload;
 
+#pragma pack(pop)
+
+/** @brief TOTP setup response payload sent from server to client.
+ *
+ *  Used by @c MsgTOTPSetupResp.  Contains the Base32-encoded (RFC 4648,
+ *  no padding) TOTP shared secret as a NUL-terminated string.  The secret
+ *  is 160 bits (20 bytes) of raw entropy, encoded to 32 Base32 characters
+ *  plus a NUL terminator. */
+#pragma pack(push, 1)
+typedef struct {
+    char secret[TOTP_SETUP_SECRET_LEN];
+} TOTPSetupRespPayload;
 #pragma pack(pop)
 
 /** @brief Login request payload sent from client to server.
@@ -163,16 +184,28 @@ typedef struct {
 
 /** @brief Login response payload sent from server to client.
  *
- *  Sent as the payload of @c MsgLoginResp.  On success, all three fields are
- *  populated with the authenticated user's canonical record from the database.
- *  On failure, @c uid is 0 and the string fields are zero-filled.  The client
+ *  Sent as the payload of @c MsgLoginResp.  On success, all fields are
+ *  populated with the authenticated user's canonical record from the database;
+ *  @c totpEnabled indicates whether TOTP is registered (1) or not (0). On
+ *  failure, @c uid is 0 and all other fields are zero-filled.  The client
  *  must check @c uid @c != @c 0 to determine success. */
 #pragma pack(push, 1)
 typedef struct {
     uint32_t uid;
     char username[LOGIN_USERNAME_LEN];
     char nickname[LOGIN_NICKNAME_LEN];
+    uint8_t totpEnabled;
 } LoginResponsePayload;
+#pragma pack(pop)
+
+/** @brief TOTP verification code payload sent from client to server.
+ *
+ *  Used by @c MsgTOTPVerifyResp.  Contains the 6-digit TOTP code entered
+ *  by the user.  Fixed size: 4 bytes. */
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t code;
+} TOTPVerifyPayload;
 #pragma pack(pop)
 
 /** @brief Chat message payload sent from client to server.

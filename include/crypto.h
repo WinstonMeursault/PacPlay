@@ -270,6 +270,125 @@ char *hashPassword(const char *password);
  */
 int verifyPassword(const char *password, const char *storedHash);
 
+/* ──────────────────────  Base32 (RFC 4648) API  ────────────────────────── */
+
+/**
+ * @brief Encode raw binary data to a Base32 (RFC 4648) string.
+ *
+ * Encodes @p data into a null-terminated Base32 string using the standard
+ * alphabet @c ABCDEFGHIJKLMNOPQRSTUVWXYZ234567, without padding characters
+ * (@c '=').  The caller is responsible for freeing the returned string with
+ * @c free().
+ *
+ * @param data    Input binary data to encode.  Must not be NULL when
+ *                @p len > 0.
+ * @param len     Length of @p data in bytes.
+ * @param outStr  Output parameter receiving the heap-allocated,
+ *                null-terminated Base32 string.  Set to @c NULL on failure.
+ * @return @c CRYPTO_SUCC on success, @c CRYPTO_FAIL on invalid input or
+ *         allocation failure.
+ */
+int base32Encode(const uint8_t *data, size_t len, char **outStr);
+
+/**
+ * @brief Decode a Base32 (RFC 4648) string back to raw binary data.
+ *
+ * Decodes a Base32-encoded string into raw bytes.  The input is
+ * case-insensitive and whitespace (ASCII space, tab, newline, carriage
+ * return) is silently stripped.  Any character outside the Base32 alphabet
+ * @c ABCDEFGHIJKLMNOPQRSTUVWXYZ234567 (including the RFC 4648 padding
+ * character @c '=') is treated as an error.
+ *
+ * The caller is responsible for freeing the returned buffer with @c free().
+ *
+ * @param encoded  Null-terminated Base32 string to decode.  Must not be
+ *                 NULL.
+ * @param outData  Output parameter receiving the heap-allocated decoded
+ *                 bytes.  Set to @c NULL on failure.
+ * @param outLen   Output parameter receiving the number of decoded bytes.
+ *                 Unchanged on failure.
+ * @return @c CRYPTO_SUCC on success, @c CRYPTO_FAIL on invalid input
+ *         (invalid character, corrupt padding bits, or encoding too short
+ *         to contain a full byte) or allocation failure.
+ */
+int base32Decode(const char *encoded, uint8_t **outData, size_t *outLen);
+
+/* ──────────────────────── TOTP (RFC 6238) constants ─────────────────────── */
+
+/** @brief TOTP time step in seconds (standard 30 s). */
+#define TOTP_STEP_SECONDS 30
+
+/** @brief Number of decimal digits in the generated code. */
+#define TOTP_DIGITS 6
+
+/** @brief Allowed time-step window (±1 from current). */
+#define TOTP_WINDOW 1
+
+/** @brief SHA-1 digest length used for TOTP HMAC. */
+#define TOTP_HMAC_SHA1_LEN 20
+
+/** @brief Modulus for 6-digit code extraction (10^TOTP_DIGITS). */
+#define TOTP_CODE_RANGE 1000000
+
+/** @brief Minimum TOTP shared secret length in bytes (RFC 4226: >= 128 bits). */
+#define TOTP_MIN_KEY_LEN 16
+
+/* ──────────────────────── TOTP API ──────────────────────────────── */
+
+/**
+ * @brief Verify a user-provided TOTP code against a shared secret.
+ *
+ * Decodes the Base32-encoded @p secret into raw key material, computes the
+ * expected TOTP code for the current 30-second time window (as well as the
+ * immediately preceding and succeeding windows to allow for clock skew),
+ * and compares the result against the code pointed to by @p code using
+ * integer equality.
+ *
+ * Implements RFC 6238 (TOTP) with HMAC-SHA1 (RFC 2104) and dynamic
+ * truncation per RFC 4226.  The decoded key is securely wiped from memory
+ * before the function returns.
+ *
+ * @param secret  Base32-encoded shared secret string (null-terminated).
+ *                Must not be NULL.  After decoding, the raw key must be
+ *                at least @c TOTP_MIN_KEY_LEN bytes per RFC 4226.
+ * @param code    Pointer to the 6-digit TOTP code to verify.  Must not be
+ *                NULL.
+ * @return @c CRYPTO_SUCC when @p *code matches the expected value for the
+ *         current or an adjacent time window, @c CRYPTO_FAIL otherwise
+ *         (mismatch, invalid secret, undersized key, or internal error).
+ */
+int verifyTOTPCode(const char *secret, int *code);
+
+/**
+ * @brief Generate a key URI for TOTP enrollment (Google Authenticator format).
+ *
+ * Produces an @c otpauth://totp/ URI string that encodes the shared TOTP
+ * secret together with the account label, issuer, and algorithm parameters.
+ * The URI can be embedded in a QR code for import into standard authenticator
+ * applications (Google Authenticator, Authy, etc.).
+ *
+ * The label is constructed as @c PacPlay:@p username.  Both the issuer
+ * portion of the label and the @c issuer query parameter are set to
+ * @c "PacPlay".  The @p secret is assumed to already be Base32-encoded
+ * by the caller and is placed directly in the URI query string.
+ *
+ * URI path components that may contain special characters (@p issuer and
+ * @p username) are percent-encoded per RFC 3986 before insertion.
+ *
+ * The caller is responsible for freeing the returned string with @c free().
+ *
+ * @param secret    Base32-encoded TOTP shared secret (null-terminated).
+ *                  Must not be NULL or empty.  Placed in the URI as-is.
+ * @param username  Human-readable account identifier (null-terminated).
+ *                  Must not be NULL or empty.  Percent-encoded if needed.
+ * @param outURI    Output parameter receiving the heap-allocated,
+ *                  null-terminated URI string.  Set to @c NULL on failure.
+ * @return @c CRYPTO_SUCC on success, @c CRYPTO_FAIL on invalid input
+ *         or allocation failure.
+ */
+int generateOTPAuthURI(const char *secret, const char *username,
+                       char **outURI);
+
 /* ──────────────────────── utility ──────────────────────────────────────── */
 
 /**

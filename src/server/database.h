@@ -47,6 +47,9 @@
 /** @brief File path for the game database. */
 #define GAME_DB_PATH "db/game.db"
 
+/** @brief File path for the server key-value database. */
+#define SERVER_DB_PATH "db/server.db"
+
 /** @brief Directory containing all database files. */
 #define DB_DIRECTORY "db"
 
@@ -58,7 +61,7 @@
 /* ──────────────────────── types ────────────────────────────────────────── */
 
 /** @brief Identifies which database to open. */
-typedef enum { UserDB = 1, ChatHistoryDB, GameDB } DBType;
+typedef enum { UserDB = 1, ChatHistoryDB, GameDB, ServerDB } DBType;
 
 /* ──────────────────────── room statement cache ────────────────────────── */
 
@@ -109,9 +112,16 @@ typedef struct DB {
     sqlite3_stmt *stmtSelect; /**< Cached SELECT statement (UserDB / GameDB). */
     sqlite3_stmt *stmtRoomExists; /**< cached SELECT 1 FROM rooms WHERE roomId=? (GameDB). */
     sqlite3_stmt *stmtUidCheck; /**< Cached SELECT 1 FROM users WHERE uid=? (UserDB). */
+    sqlite3_stmt *stmtSetTotpSecret; /**< Cached UPDATE totp_secret (UserDB). */
+    sqlite3_stmt *stmtGetTOTPSecret; /**< Cached SELECT totp_secret (UserDB). */
     /* ChatHistoryDB cached statements */
     sqlite3_stmt *stmtSeq; /**< Global msg sequence INSERT (ChatHistoryDB). */
     RoomStmtCache *roomCache; /**< Per-room statement cache (ChatHistoryDB). */
+    /* ServerDB cached statements */
+    sqlite3_stmt *stmtSetKey; /**< Cached INSERT OR REPLACE (ServerDB). */
+    sqlite3_stmt *stmtGetKey; /**< Cached SELECT key_value (ServerDB). */
+    /* Key material held in memory for the lifetime of the handle */
+    uint8_t dekKey[AES_GCM_KEY_LEN]; /**< DEK for TOTP secret envelope encryption. */
 } DB;
 
 /* ──────────────────────── lifecycle ────────────────────────────────────── */
@@ -125,7 +135,8 @@ typedef struct DB {
  *
  * Schema for UserDB:
  *   - users(uid INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL,
- *           nickname TEXT NOT NULL, password TEXT NOT NULL)
+ *           nickname TEXT NOT NULL, password TEXT NOT NULL,
+ *           totp_secret TEXT)
  *
  * Schema for ChatHistoryDB:
  *   - msg_sequence(id INTEGER PRIMARY KEY AUTOINCREMENT)
@@ -148,14 +159,31 @@ DB *dbInit(DBType dbType);
  */
 void dbClose(DB *database);
 
+/**
+ * @brief Set the DEK for envelope encryption of TOTP secrets.
+ *
+ * Copies the 32-byte DEK into the UserDB handle.  The DEK is used
+ * internally by @c createUser(), @c verifyUser(), and
+ * @c setTOTPSecret() to encrypt / decrypt the @c totp_secret column.
+ * It is securely wiped when @c dbClose() is called.
+ *
+ * Safe to call multiple times on the same handle (overwrites).
+ * Passing @c NULL zeros the DEK.
+ *
+ * @param database  An open UserDB handle.
+ * @param dekKey    Pointer to 32-byte AES-256 DEK, or NULL to clear.
+ */
+void dbSetDekKey(DB *database, const uint8_t *dekKey);
+
 /* ──────────────────────── user operations ──────────────────────────────── */
 
 /**
  * @brief Insert a new user record into the user database.
  *
  * The plaintext password in @p user->password is hashed internally via
- * @c hashPassword() before storage.  The caller retains ownership of the
- * User struct and its fields.
+ * @c hashPassword() before storage.  The optional @c user->totpSecret is
+ * stored as-is (Base32-encoded, or NULL if TOTP is not set).  The caller
+ * retains ownership of the User struct and its fields.
  *
  * @param database  An open UserDB handle.
  * @param user      User data to insert. Must not be NULL.
@@ -178,6 +206,8 @@ int deleteUser(DB *database, User *user);
  * Fetches the stored password hash from the database and verifies the
  * plaintext password in @p user->password against it using
  * @c verifyPassword() (constant-time comparison with stored salt).
+ * On success, also populates @c user->totpSecret (via @c strdup) with
+ * the stored TOTP secret, or sets it to @c NULL if none is stored.
  *
  * @param database  An open UserDB handle.
  * @param user      User credentials to verify. @c user->password must
@@ -185,6 +215,81 @@ int deleteUser(DB *database, User *user);
  * @return @c DB_SUCC if credentials are valid, @c DB_FAIL otherwise.
  */
 int verifyUser(DB *database, User *user);
+
+/**
+ * @brief Retrieve the decrypted TOTP secret for a user.
+ *
+ * Reads the encrypted envelope from the database, decrypts it with the
+ * DEK stored in @p database, and returns the plaintext Base32 string.
+ * Returns @c NULL if the user has no TOTP secret set or on error.
+ *
+ * The caller must @c free() the returned string.
+ *
+ * @param database  An open UserDB handle with DEK set via dbSetDekKey().
+ * @param user      User whose @c uid identifies the row.  Must not be NULL.
+ * @return Heap-allocated decrypted TOTP secret, or @c NULL.
+ */
+char *getTOTPSecret(DB *database, User *user);
+
+/**
+ * @brief Set or clear the TOTP secret for an existing user.
+ *
+ * Updates the @c totp_secret column for the user identified by
+ * @p user->uid.  @p secret is a Base32-encoded TOTP shared secret
+ * (null-terminated).  Passing @c NULL or an empty string clears the
+ * secret (column set to @c NULL).
+ *
+ * @param database  An open UserDB handle.
+ * @param user      User record whose uid identifies the target.  Must not
+ *                  be NULL.
+ * @param secret    Base32-encoded TOTP secret, or NULL / "" to clear.
+ * @return @c DB_SUCC on success, @c DB_FAIL if the user does not exist
+ *         or on error.
+ */
+int setTOTPSecret(DB *database, User *user, const char *secret);
+
+/* ──────────────────────── server key operations ────────────────────────── */
+
+/**
+ * @brief Store a key-value pair into the server database.
+ *
+ * Inserts or replaces a row in the @c server_keys table.  @p value is
+ * copied as a BLOB; @p valueLen may be zero (an empty blob is stored).
+ * The @c created_at column is set to the current UNIX timestamp.
+ *
+ * @param database  An open ServerDB handle.
+ * @param keyName   Unique key name (null-terminated).  Must not be NULL
+ *                  or empty.
+ * @param value     Pointer to the value bytes.  Must not be NULL when
+ *                  @p valueLen > 0.
+ * @param valueLen  Length of @p value in bytes.  May be 0.
+ * @return @c DB_SUCC on success, @c DB_FAIL on error.
+ */
+int setServerKey(DB *database, const char *keyName, const uint8_t *value,
+                 size_t valueLen);
+
+/**
+ * @brief Retrieve a stored server key by name.
+ *
+ * Looks up @p keyName in the @c server_keys table and, on success,
+ * allocates a buffer containing the stored value.  If the key does not
+ * exist the call still returns @c DB_SUCC with @p *outValue = NULL and
+ * @p *outLen = 0.
+ *
+ * The caller is responsible for freeing @p *outValue with @c free().
+ *
+ * @param database  An open ServerDB handle.
+ * @param keyName   Key name to look up (null-terminated).  Must not be
+ *                  NULL or empty.
+ * @param outValue  Output parameter receiving the heap-allocated value
+ *                  bytes.  Set to @c NULL on failure or if not found.
+ * @param outLen    Output parameter receiving the value length in bytes.
+ *                  Set to 0 on failure or if not found.
+ * @return @c DB_SUCC on success, @c DB_FAIL on error (invalid argument,
+ *         wrong DB type, or allocation failure).
+ */
+int getServerKey(DB *database, const char *keyName, uint8_t **outValue,
+                 size_t *outLen);
 
 /* ──────────────────────── chat history operations ─────────────────────── */
 

@@ -75,7 +75,8 @@ typedef struct {
     char username[USERNAME_MAX_LEN];
     char nickname[NICKNAME_MAX_LEN];
     uint32_t uid;
-    char *password; /**< Plaintext password (hashed internally on storage). */
+    char *password;   /**< Plaintext password (hashed internally on storage). */
+    char *totpSecret; /**< Base32-encoded TOTP shared secret, or NULL. */
 } User;
 
 /** @brief Represents a single chat message record. */
@@ -90,6 +91,7 @@ typedef struct {
 typedef enum {
     SessionKeyExchange = 0, /**< Awaiting MsgKeyExchangeReq. */
     SessionLogin,           /**< Awaiting MsgLoginReq. */
+    SessionTOTPVerify,      /**< Awaiting MsgTOTPVerifyResp. */
     SessionRoom,            /**< Lobby — can list / create / join rooms. */
     SessionChat             /**< Inside a room — can chat and heartbeat. */
 } SessionState;
@@ -124,9 +126,31 @@ typedef struct {
     struct DB *userDB;            /**< Opaque DB handle (full def in database.h). */
     struct DB *chatDB;
     struct DB *gameDB;
+    struct DB *serverDB;          /**< Server key-value store. */
+    uint8_t dekKey[AES_GCM_KEY_LEN]; /**< Decrypted DEK, available after serverInitKeys. */
 } Server;
 
 /* ──────────────────────── public API ───────────────────────────────────── */
+
+/**
+ * @brief Initialise server cryptographic keys (envelope encryption).
+ *
+ * If no encrypted DEK exists in ServerDB, generates fresh AES-256 MK and
+ * DEK, wraps DEK with MK via AES-256-GCM into an envelope, stores the
+ * envelope in the database, displays MK once to the administrator, then
+ * securely wipes MK from memory.
+ *
+ * If the DEK envelope already exists, prompts the administrator for the
+ * Master Key, decrypts the DEK, and loads it into the server's memory.
+ * The decrypted DEK is available in @c s->dekKey and is securely wiped
+ * when @c serverCleanup() is called.  MK is never stored on disk in
+ * either path.
+ *
+ * @param s  An initialised Server with @c serverDB open.
+ * @return @c SERVER_SUCC on success, @c SERVER_FAIL on error (incorrect
+ *         Master Key, corrupted envelope, I/O failure).
+ */
+int serverInitKeys(Server *s);
 
 /**
  * @brief Initialise the server — creates listen socket and opens databases.

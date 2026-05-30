@@ -97,6 +97,18 @@ int clientRoomMenu(Client *client);
 int clientChatLoop(Client *client);
 
 /**
+ * @brief Perform TOTP setup — request a new secret from the server.
+ *
+ * Sends @c MsgTOTPSetupReq, receives @c MsgTOTPSetupResp containing
+ * a Base32-encoded TOTP secret, displays it along with the otpauth
+ * URI for import into an authenticator app.
+ *
+ * @param client  Authenticated client (must have completed login).
+ * @return @c CLIENT_SUCC on success, @c CLIENT_FAIL on failure.
+ */
+int clientTOTPSetup(Client *client);
+
+/**
  * @brief Disconnect and clean up client resources.
  *
  * @param client  Client to tear down.

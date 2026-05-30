@@ -71,6 +71,8 @@ static int handleRoomJoin(Server *s, ClientSession *cs, Packet *pkt);
 static int handleChat(Server *s, ClientSession *cs, Packet *pkt);
 static int handleHeartbeat(Server *s, ClientSession *cs);
 static int handleLogout(Server *s, ClientSession *cs);
+static int handleTOTPSetup(Server *s, ClientSession *cs);
+static int handleTOTPVerify(Server *s, ClientSession *cs, Packet *pkt);
 
 /* Room helpers */
 static ActiveRoom *findActiveRoom(const Server *s, uint32_t roomId);
@@ -80,6 +82,208 @@ static void removeClientFromRoom(Server *s, ClientSession *cs);
 static void broadcastToRoom(Server *s, uint32_t roomId, ClientSession *sender,
                             uint32_t uid, uint64_t msgId, int64_t timestamp,
                             const uint8_t *message, size_t msgLen);
+
+/**
+ * @brief Convert a single hex character (0-9, a-f, A-F) to its nibble value.
+ *
+ * @param c  Hex character.
+ * @return Nibble value 0-15, or -1 if @p c is not a hex digit.
+ */
+static int hexToNibble(char c) {
+    enum { HexAlphaOffset = 10 };
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + HexAlphaOffset;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + HexAlphaOffset;
+    }
+    return -1;
+}
+
+/* ═══════════════════════  server key init  ════════════════════════════════ */
+
+int serverInitKeys(Server *s) {
+    enum { AES256KeyLen = 32, MkHexLen = AES256KeyLen * 2 };
+    uint8_t *dekEnc = NULL;
+    size_t dekLen = 0;
+
+    if (getServerKey(s->serverDB, "DEK", &dekEnc, &dekLen) != DB_SUCC) {
+        return SERVER_FAIL;
+    }
+
+    if (dekEnc != NULL) {
+        /* DEK exists — prompt admin for Master Key and decrypt it. */
+        char hexBuf[MkHexLen + 1];
+        printf("Enter Master Key: ");
+        fflush(stdout);
+        if (readPasswordMasked(hexBuf, sizeof(hexBuf)) == 0) {
+            LOG_ERROR("serverInitKeys: failed to read Master Key");
+            free(dekEnc);
+            return SERVER_FAIL;
+        }
+        printf("\n");
+
+        uint8_t mkKey[AES256KeyLen];
+        {
+            /* Convert hex string to binary; all chars must be valid hex. */
+            for (size_t i = 0; i < AES256KeyLen; i++) {
+                char hi = hexBuf[i * 2];
+                char lo = hexBuf[i * 2 + 1];
+                int hiVal = hexToNibble(hi);
+                int loVal = hexToNibble(lo);
+                if (hiVal < 0 || loVal < 0) {
+                    LOG_ERROR("serverInitKeys: invalid hex char in Master Key");
+                    OPENSSL_cleanse(hexBuf, sizeof(hexBuf));
+                    free(dekEnc);
+                    return SERVER_FAIL;
+                }
+                mkKey[i] = (uint8_t)((hiVal << 4) | loVal);
+            }
+        }
+        OPENSSL_cleanse(hexBuf, sizeof(hexBuf));
+
+        /* Parse stored blob: nonce(12) || ciphertext(32) || tag(16) */
+        enum {
+            EncDekMinLen = AES_GCM_NONCE_LEN + AES256KeyLen + AES_GCM_TAG_LEN
+        };
+        if (dekLen != EncDekMinLen) {
+            LOG_ERROR("serverInitKeys: corrupted DEK blob (len=%zu, expected=%d)",
+                      dekLen, EncDekMinLen);
+            OPENSSL_cleanse(mkKey, sizeof(mkKey));
+            free(dekEnc);
+            return SERVER_FAIL;
+        }
+
+        AESGCMKey decKey;
+        memcpy(decKey.key, mkKey, AES256KeyLen);
+        memcpy(decKey.nonce, dekEnc, AES_GCM_NONCE_LEN);
+
+        AESGCMCipher ct;
+        ct.buffer.data = dekEnc + AES_GCM_NONCE_LEN;
+        ct.buffer.len = AES256KeyLen;
+        ct.buffer.capacity = AES256KeyLen;
+        memcpy(ct.tag, dekEnc + AES_GCM_NONCE_LEN + AES256KeyLen,
+               AES_GCM_TAG_LEN);
+
+        AESGCMBuffer pt;
+        if (aesGCMBufferInit(&pt, AES256KeyLen) != CRYPTO_SUCC) {
+            LOG_ERROR("serverInitKeys: buffer init failed");
+            OPENSSL_cleanse(mkKey, sizeof(mkKey));
+            free(dekEnc);
+            return SERVER_FAIL;
+        }
+
+        int decRet = decryptAESGCM(&ct, NULL, &decKey, &pt);
+        OPENSSL_cleanse(mkKey, sizeof(mkKey));
+        free(dekEnc);
+
+        if (decRet == CRYPTO_AUTH_FAIL) {
+            LOG_ERROR("serverInitKeys: Master Key is incorrect");
+            aesGCMBufferDeinit(&pt);
+            return SERVER_FAIL;
+        }
+        if (decRet != CRYPTO_SUCC) {
+            LOG_ERROR("serverInitKeys: DEK decryption failed");
+            aesGCMBufferDeinit(&pt);
+            return SERVER_FAIL;
+        }
+
+        memcpy(s->dekKey, pt.data, AES256KeyLen);
+        aesGCMBufferDeinit(&pt);
+
+        LOG_INFO("serverInitKeys: DEK decrypted and loaded into memory");
+        return SERVER_SUCC;
+    }
+    free(dekEnc);
+
+    LOG_INFO("serverInitKeys: generating fresh server keys");
+
+    /* Generate two AES-256 keys: MK (Master Key) and DEK (Data Encryption
+     * Key).  DEK is encrypted with MK via AES-256-GCM before storage;
+     * MK is never stored — the administrator must keep it offline. */
+    uint8_t mkKey[AES256KeyLen];
+    uint8_t dekKey[AES256KeyLen];
+
+    if (cryptoRandomBytes(mkKey, AES256KeyLen) != CRYPTO_SUCC ||
+        cryptoRandomBytes(dekKey, AES256KeyLen) != CRYPTO_SUCC) {
+        LOG_ERROR("serverInitKeys: cryptoRandomBytes failed");
+        return SERVER_FAIL;
+    }
+
+    /* ═══ Encrypt DEK with MK via AES-256-GCM (envelope encryption) ═══ */
+    AESGCMKey encKey;
+    memcpy(encKey.key, mkKey, AES256KeyLen);
+    if (cryptoRandomBytes(encKey.nonce, AES_GCM_NONCE_LEN) != CRYPTO_SUCC) {
+        LOG_ERROR("serverInitKeys: nonce generation failed");
+        OPENSSL_cleanse(mkKey, sizeof(mkKey));
+        OPENSSL_cleanse(dekKey, sizeof(dekKey));
+        return SERVER_FAIL;
+    }
+
+    AESGCMBuffer pt;
+    pt.data = dekKey;
+    pt.len = AES256KeyLen;
+    pt.capacity = AES256KeyLen;
+
+    AESGCMCipher ct;
+    if (aesGCMBufferInit(&ct.buffer, AES256KeyLen) != CRYPTO_SUCC) {
+        OPENSSL_cleanse(mkKey, sizeof(mkKey));
+        OPENSSL_cleanse(dekKey, sizeof(dekKey));
+        return SERVER_FAIL;
+    }
+
+    if (encryptAESGCM(&pt, NULL, &encKey, &ct) != CRYPTO_SUCC) {
+        LOG_ERROR("serverInitKeys: DEK encryption failed");
+        aesGCMBufferDeinit(&ct.buffer);
+        OPENSSL_cleanse(mkKey, sizeof(mkKey));
+        OPENSSL_cleanse(dekKey, sizeof(dekKey));
+        return SERVER_FAIL;
+    }
+
+    /* Concatenate: nonce(12) || ciphertext(32) || tag(16) = 60 bytes */
+    enum {
+        EncDekNonceOff = 0,
+        EncDekCtOff = AES_GCM_NONCE_LEN,
+        EncDekTagOff = AES_GCM_NONCE_LEN + AES256KeyLen,
+        EncDekTotalLen = AES_GCM_NONCE_LEN + AES256KeyLen + AES_GCM_TAG_LEN
+    };
+    uint8_t encDek[EncDekTotalLen];
+    memcpy(encDek + EncDekNonceOff, encKey.nonce, AES_GCM_NONCE_LEN);
+    memcpy(encDek + EncDekCtOff, ct.buffer.data, ct.buffer.len);
+    memcpy(encDek + EncDekTagOff, ct.tag, AES_GCM_TAG_LEN);
+    aesGCMBufferDeinit(&ct.buffer);
+
+    /* Store only the encrypted DEK; MK stays out of the database */
+    if (setServerKey(s->serverDB, "DEK", encDek, sizeof(encDek)) != DB_SUCC) {
+        LOG_ERROR("serverInitKeys: setServerKey failed");
+        OPENSSL_cleanse(mkKey, sizeof(mkKey));
+        OPENSSL_cleanse(dekKey, sizeof(dekKey));
+        return SERVER_FAIL;
+    }
+
+    memcpy(s->dekKey, dekKey, AES256KeyLen);
+    OPENSSL_cleanse(dekKey, sizeof(dekKey));
+
+    /* ═══════════ Master Key — one-time display ═══════════ */
+    printf("\n========================================\n");
+    printf("  Master Key (SAVE THIS — shown only once):\n  ");
+    for (int i = 0; i < AES256KeyLen; i++) {
+        printf("%02x", mkKey[i]);
+    }
+    printf("\n========================================\n");
+    printf("Press Enter after you have saved the key...");
+    (void)getchar();
+
+    printf("\033[2J\033[H");
+    fflush(stdout);
+    OPENSSL_cleanse(mkKey, sizeof(mkKey));
+
+    LOG_INFO("serverInitKeys: key initialization complete");
+    return SERVER_SUCC;
+}
 
 /* ═══════════════════════  public API  ════════════════════════════════════ */
 
@@ -92,11 +296,14 @@ int serverInit(Server *server, uint16_t port) {
     DB *userDB = dbInit(UserDB);
     DB *chatDB = dbInit(ChatHistoryDB);
     DB *gameDB = dbInit(GameDB);
-    if (userDB == NULL || chatDB == NULL || gameDB == NULL) {
+    DB *serverDB = dbInit(ServerDB);
+    if (userDB == NULL || chatDB == NULL || gameDB == NULL ||
+        serverDB == NULL) {
         LOG_ERROR("serverInit: database initialization failed");
         dbClose(userDB);
         dbClose(chatDB);
         dbClose(gameDB);
+        dbClose(serverDB);
         socketClose(&listenFd);
         return SERVER_FAIL;
     }
@@ -105,6 +312,15 @@ int serverInit(Server *server, uint16_t port) {
     server->userDB = userDB;
     server->chatDB = chatDB;
     server->gameDB = gameDB;
+    server->serverDB = serverDB;
+
+    if (serverInitKeys(server) != SERVER_SUCC) {
+        LOG_ERROR("serverInit: server key initialization failed");
+        serverCleanup(server);
+        return SERVER_FAIL;
+    }
+
+    dbSetDekKey(server->userDB, server->dekKey);
 
     server->clientCapacity = SERVER_INITIAL_CAPACITY;
     server->clients = (ClientSession **)calloc(
@@ -201,6 +417,9 @@ void serverCleanup(Server *server) {
     dbClose(server->userDB);
     dbClose(server->chatDB);
     dbClose(server->gameDB);
+    dbClose(server->serverDB);
+
+    OPENSSL_cleanse(server->dekKey, sizeof(server->dekKey));
 
     LOG_INFO("Server shut down");
 }
@@ -266,6 +485,11 @@ static void clientDisconnect(Server *s, int idx) {
 
     socketClose(&cs->fd);
     OPENSSL_cleanse(&cs->aesKey, sizeof(cs->aesKey));
+    if (cs->currentUser.totpSecret != NULL) {
+        OPENSSL_cleanse(cs->currentUser.totpSecret,
+                        strlen(cs->currentUser.totpSecret));
+        free(cs->currentUser.totpSecret);
+    }
     free(cs);
 
     /* Compact the clients array */
@@ -367,6 +591,18 @@ static int processClient(Server *s, ClientSession *cs) {
         }
         break;
 
+    case SessionTOTPVerify:
+        if (mt == MsgTOTPVerifyResp) {
+            ret = handleTOTPVerify(s, cs, &pkt);
+        } else if (mt == MsgLogout) {
+            ret = handleLogout(s, cs);
+        } else {
+            LOG_WARN("processClient: unexpected msgType %d in state %d (fd=%d)",
+                     (int)mt, cs->state, cs->fd);
+            ret = SERVER_FAIL;
+        }
+        break;
+
     case SessionRoom:
         if (mt == MsgRoomListReq) {
             ret = handleRoomList(s, cs);
@@ -376,6 +612,8 @@ static int processClient(Server *s, ClientSession *cs) {
             ret = handleRoomJoin(s, cs, &pkt);
         } else if (mt == MsgLogout) {
             ret = handleLogout(s, cs);
+        } else if (mt == MsgTOTPSetupReq) {
+            ret = handleTOTPSetup(s, cs);
         } else {
             LOG_WARN("processClient: unexpected msgType %d in state %d (fd=%d)",
                      (int)mt, cs->state, cs->fd);
@@ -390,6 +628,8 @@ static int processClient(Server *s, ClientSession *cs) {
             ret = handleHeartbeat(s, cs);
         } else if (mt == MsgLogout) {
             ret = handleLogout(s, cs);
+        } else if (mt == MsgTOTPSetupReq) {
+            ret = handleTOTPSetup(s, cs);
         } else {
             LOG_WARN("processClient: unexpected msgType %d in state %d (fd=%d)",
                      (int)mt, cs->state, cs->fd);
@@ -479,17 +719,30 @@ static int handleLogin(Server *s, ClientSession *cs, Packet *pkt) {
         return SERVER_SUCC;
     }
 
-    /* Login successful — store user identity (clear password pointer).
-     * uid and nickname are populated by verifyUser(). */
+    /* Login successful — populate session state.  If TOTP is registered,
+     * challenge the client before granting full access. */
     memcpy(cs->currentUser.username, user.username, USERNAME_MAX_LEN);
     memcpy(cs->currentUser.nickname, user.nickname, NICKNAME_MAX_LEN);
     cs->currentUser.uid = user.uid;
     cs->currentUser.password = NULL;
+
+    if (user.totpSecret != NULL) {
+        /* TOTP registered — challenge before room access */
+        cs->currentUser.totpSecret = user.totpSecret;
+        user.totpSecret = NULL;
+        cs->state = SessionTOTPVerify;
+        LOG_INFO("TOTP challenge required for uid=%u", user.uid);
+        sendEncryptedPacket(cs, MsgTOTPVerifyReq, NULL, 0);
+        return SERVER_SUCC;
+    }
+
+    /* No TOTP registered — grant immediate access */
     cs->state = SessionRoom;
 
     LoginResponsePayload succResp;
     memset(&succResp, 0, sizeof(succResp));
     succResp.uid = user.uid;
+    succResp.totpEnabled = 0;
     memcpy(succResp.username, user.username, LOGIN_USERNAME_LEN);
     memcpy(succResp.nickname, user.nickname, LOGIN_NICKNAME_LEN);
     sendEncryptedPacket(cs, MsgLoginResp, &succResp, sizeof(succResp));
@@ -691,6 +944,98 @@ static int handleLogout(Server *s, ClientSession *cs) {
     (void)s;
     LOG_INFO("User logging out (fd=%d)", cs->fd);
     return SERVER_FAIL; /* Signal to disconnect */
+}
+
+static int handleTOTPSetup(Server *s, ClientSession *cs) {
+    enum { RawSecretLen = 20, Base32EncodedLen = 32 };
+    (void)s;
+
+    char *existing = getTOTPSecret(s->userDB, &cs->currentUser);
+    if (existing != NULL) {
+        LOG_WARN("handleTOTPSetup: TOTP already set for uid=%u",
+                 cs->currentUser.uid);
+        free(existing);
+        sendStatusResp(cs, MsgTOTPSetupResp, StatusFailure);
+        return SERVER_SUCC;
+    }
+
+    uint8_t raw[RawSecretLen];
+    if (cryptoRandomBytes(raw, RawSecretLen) != CRYPTO_SUCC) {
+        LOG_ERROR("handleTOTPSetup: cryptoRandomBytes failed");
+        return SERVER_FAIL;
+    }
+
+    char *base32 = NULL;
+    if (base32Encode(raw, RawSecretLen, &base32) != CRYPTO_SUCC) {
+        LOG_ERROR("handleTOTPSetup: base32Encode failed");
+        return SERVER_FAIL;
+    }
+    OPENSSL_cleanse(raw, sizeof(raw));
+
+    if (setTOTPSecret(s->userDB, &cs->currentUser, base32) != DB_SUCC) {
+        LOG_ERROR("handleTOTPSetup: setTOTPSecret failed for uid=%u",
+                  cs->currentUser.uid);
+        OPENSSL_cleanse(base32, Base32EncodedLen);
+        free(base32);
+        return SERVER_FAIL;
+    }
+
+    TOTPSetupRespPayload resp;
+    memset(&resp, 0, sizeof(resp));
+    memcpy(resp.secret, base32, Base32EncodedLen);
+
+    int ret = sendEncryptedPacket(cs, MsgTOTPSetupResp, &resp, sizeof(resp));
+
+    OPENSSL_cleanse(base32, Base32EncodedLen);
+    free(base32);
+
+    LOG_INFO("handleTOTPSetup: TOTP set for uid=%u", cs->currentUser.uid);
+    return ret;
+}
+
+static int handleTOTPVerify(Server *s, ClientSession *cs, Packet *pkt) {
+    (void)s;
+    if (pkt->header.payloadLength < sizeof(TOTPVerifyPayload)) {
+        LOG_WARN("handleTOTPVerify: payload too small (%u bytes)",
+                 pkt->header.payloadLength);
+        return SERVER_FAIL;
+    }
+
+    enum { MinCodeValue = 0, MaxCodeValue = 999999 };
+    TOTPVerifyPayload *vp = (TOTPVerifyPayload *)pkt->payload;
+    int code = (int)vp->code;
+    if (code < MinCodeValue || code > MaxCodeValue) {
+        LOG_WARN("handleTOTPVerify: TOTP code out of range (%d)", code);
+        return SERVER_FAIL;
+    }
+
+    int verifyRet =
+        verifyTOTPCode(cs->currentUser.totpSecret, &code);
+    OPENSSL_cleanse(cs->currentUser.totpSecret,
+                    strlen(cs->currentUser.totpSecret));
+    free(cs->currentUser.totpSecret);
+    cs->currentUser.totpSecret = NULL;
+
+    if (verifyRet != CRYPTO_SUCC) {
+        LOG_WARN("handleTOTPVerify: TOTP code incorrect for uid=%u",
+                 cs->currentUser.uid);
+        LoginResponsePayload failResp;
+        memset(&failResp, 0, sizeof(failResp));
+        sendEncryptedPacket(cs, MsgLoginResp, &failResp, sizeof(failResp));
+        return SERVER_FAIL;
+    }
+
+    cs->state = SessionRoom;
+    LoginResponsePayload succResp;
+    memset(&succResp, 0, sizeof(succResp));
+    succResp.uid = cs->currentUser.uid;
+    succResp.totpEnabled = 1;
+    memcpy(succResp.username, cs->currentUser.username, LOGIN_USERNAME_LEN);
+    memcpy(succResp.nickname, cs->currentUser.nickname, LOGIN_NICKNAME_LEN);
+    sendEncryptedPacket(cs, MsgLoginResp, &succResp, sizeof(succResp));
+    LOG_INFO("User %u (%s) logged in with TOTP on fd=%d",
+             cs->currentUser.uid, cs->currentUser.username, cs->fd);
+    return SERVER_SUCC;
 }
 
 /* ═══════════════════════  room helpers  ══════════════════════════════════ */

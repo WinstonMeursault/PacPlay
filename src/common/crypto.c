@@ -28,11 +28,13 @@
 
 #include "crypto.h"
 #include "log.h"
+#include "utils.h"
 #include <errno.h>
 #include <limits.h>
 #include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/hmac.h>
 #include <openssl/kdf.h>
 #include <openssl/params.h>
 #include <openssl/rand.h>
@@ -665,6 +667,371 @@ int verifyPassword(const char *password, const char *storedHash) {
     OPENSSL_cleanse(computedHash, sizeof(computedHash));
 
     return (match == 0) ? CRYPTO_SUCC : CRYPTO_FAIL;
+}
+
+/* ──────────────────────── Base32 (RFC 4648) ────────────────────────────── */
+
+/** @brief RFC 4648 Base32 alphabet (uppercase A-Z + digits 2-7). */
+static const char base32Alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+enum {
+    B32AlphabetLen = 32,
+    B32BitsPerChar = 5,
+    B32BitsPerByte = 8,
+    B32CharMask = 0x1F,
+    B32ByteMask = 0xFF,
+    B32DigitOffset = 26
+};
+
+/**
+ * @brief Map a Base32 character to its 5-bit value (case-insensitive).
+ *
+ * @param c  Character to map.
+ * @return 5-bit value (0-31) on success, -1 for invalid characters.
+ */
+static int base32CharToValue(char c) {
+    if (c >= 'A' && c <= 'Z') {
+        return c - 'A';
+    }
+    if (c >= 'a' && c <= 'z') {
+        return c - 'a';
+    }
+    if (c >= '2' && c <= '7') {
+        return (c - '2') + B32DigitOffset;
+    }
+    return -1;
+}
+
+/**
+ * @brief Check if a character is an ignorable whitespace character.
+ *
+ * Whitespace characters (ASCII space, tab, newline, carriage return) are
+ * silently stripped during decoding to accommodate human-formatted input.
+ *
+ * @param c  Character to check.
+ * @return Non-zero if @p c is whitespace, zero otherwise.
+ */
+static int isB32Whitespace(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+int base32Encode(const uint8_t *data, size_t len, char **outStr) {
+    if (outStr == NULL) {
+        return CRYPTO_FAIL;
+    }
+    *outStr = NULL;
+
+    if (len > 0 && data == NULL) {
+        return CRYPTO_FAIL;
+    }
+
+    size_t outLen =
+        (len * B32BitsPerByte + B32BitsPerChar - 1) / B32BitsPerChar;
+    char *output = malloc(outLen + 1);
+    if (output == NULL) {
+        LOG_ERROR("base32Encode: allocation failed");
+        return CRYPTO_FAIL;
+    }
+
+    uint64_t acc = 0;
+    int bits = 0;
+    size_t pos = 0;
+
+    for (size_t i = 0; i < len; i++) {
+        acc = (acc << B32BitsPerByte) | data[i];
+        bits += B32BitsPerByte;
+        while (bits >= B32BitsPerChar) {
+            bits -= B32BitsPerChar;
+            output[pos++] =
+                base32Alphabet[(acc >> bits) & B32CharMask];
+        }
+    }
+
+    if (bits > 0) {
+        output[pos++] =
+            base32Alphabet[(acc << (B32BitsPerChar - bits)) & B32CharMask];
+    }
+
+    output[pos] = '\0';
+    *outStr = output;
+    return CRYPTO_SUCC;
+}
+
+int base32Decode(const char *encoded, uint8_t **outData, size_t *outLen) {
+    if (encoded == NULL || outData == NULL || outLen == NULL) {
+        if (outData != NULL) {
+            *outData = NULL;
+        }
+        return CRYPTO_FAIL;
+    }
+
+    *outData = NULL;
+
+    size_t charCount = 0;
+    for (const char *p = encoded; *p != '\0'; p++) {
+        if (isB32Whitespace(*p)) {
+            continue;
+        }
+        if (base32CharToValue(*p) < 0) {
+            LOG_ERROR("base32Decode: invalid character 0x%02x '%c'",
+                      (unsigned char)*p, *p);
+            return CRYPTO_FAIL;
+        }
+        charCount++;
+    }
+
+    if (charCount == 0) {
+        *outLen = 0;
+        return CRYPTO_SUCC;
+    }
+
+    size_t outBytes = (charCount * B32BitsPerChar) / B32BitsPerByte;
+    if (outBytes == 0) {
+        LOG_ERROR("base32Decode: input too short for one full byte "
+                  "(%zu chars)",
+                  charCount);
+        return CRYPTO_FAIL;
+    }
+
+    uint8_t *output = malloc(outBytes);
+    if (output == NULL) {
+        LOG_ERROR("base32Decode: allocation failed");
+        return CRYPTO_FAIL;
+    }
+
+    uint64_t acc = 0;
+    int bits = 0;
+    size_t pos = 0;
+
+    for (const char *p = encoded; *p != '\0'; p++) {
+        if (isB32Whitespace(*p)) {
+            continue;
+        }
+        int val = base32CharToValue(*p);
+        acc = (acc << B32BitsPerChar) | (uint64_t)val;
+        bits += B32BitsPerChar;
+        if (bits >= B32BitsPerByte) {
+            bits -= B32BitsPerByte;
+            output[pos++] = (acc >> bits) & B32ByteMask;
+        }
+    }
+
+    if (bits > 0) {
+        uint64_t mask = ((uint64_t)1 << bits) - 1;
+        if ((acc & mask) != 0) {
+            LOG_ERROR("base32Decode: non-zero padding bits detected");
+            free(output);
+            return CRYPTO_FAIL;
+        }
+    }
+
+    *outData = output;
+    *outLen = outBytes;
+    return CRYPTO_SUCC;
+}
+
+/* ──────────────────────── TOTP (RFC 6238)  ──────────────────────────────── */
+
+int verifyTOTPCode(const char *secret, int *code) {
+    if (secret == NULL || code == NULL) {
+        LOG_ERROR("verifyTOTPCode: NULL argument (secret=%p, code=%p)",
+                  (const void *)secret, (const void *)code);
+        return CRYPTO_FAIL;
+    }
+
+    uint8_t *key = NULL;
+    size_t keyLen = 0;
+    if (base32Decode(secret, &key, &keyLen) != CRYPTO_SUCC) {
+        LOG_ERROR("verifyTOTPCode: failed to decode Base32 secret");
+        return CRYPTO_FAIL;
+    }
+
+    if (keyLen < TOTP_MIN_KEY_LEN) {
+        LOG_ERROR("verifyTOTPCode: decoded key too short (%zu < %d)",
+                  keyLen, TOTP_MIN_KEY_LEN);
+        OPENSSL_cleanse(key, keyLen);
+        free(key);
+        return CRYPTO_FAIL;
+    }
+
+    enum {
+        CounterSizeBytes = 8,
+        CounterByteMask = 0xFF,
+        CounterShiftBits = 8,
+        DtOffsetMask = 0x0F,
+        DtMsbMask = 0x7F,
+        DtByteMask = 0xFF,
+        DtShift24 = 24,
+        DtShift16 = 16,
+        DtShift8 = 8
+    };
+
+    int64_t baseStep = (int64_t)(getCurrentTimestamp() / TOTP_STEP_SECONDS);
+    int result = CRYPTO_FAIL;
+
+    for (int64_t step = baseStep - TOTP_WINDOW;
+         step <= baseStep + TOTP_WINDOW; step++) {
+        uint8_t counter[CounterSizeBytes];
+        uint64_t c = (uint64_t)step;
+        for (int i = CounterSizeBytes - 1; i >= 0; i--) {
+            counter[i] = (uint8_t)(c & CounterByteMask);
+            c >>= CounterShiftBits;
+        }
+
+        uint8_t hmac[TOTP_HMAC_SHA1_LEN];
+        unsigned int hmacLen = sizeof(hmac);
+        if (HMAC(EVP_sha1(), key, (int)keyLen, counter, sizeof(counter), hmac,
+                 &hmacLen) == NULL) {
+            LOG_ERROR_SSL("verifyTOTPCode: HMAC-SHA1 failed");
+            break;
+        }
+
+        int dtOffset = hmac[hmacLen - 1] & DtOffsetMask;
+        int binary = ((hmac[dtOffset] & DtMsbMask) << DtShift24) |
+                     ((hmac[dtOffset + 1] & DtByteMask) << DtShift16) |
+                     ((hmac[dtOffset + 2] & DtByteMask) << DtShift8) |
+                     (hmac[dtOffset + 3] & DtByteMask);
+        if (binary % TOTP_CODE_RANGE == *code) {
+            result = CRYPTO_SUCC;
+            break;
+        }
+    }
+
+    OPENSSL_cleanse(key, keyLen);
+    free(key);
+    return result;
+}
+
+/**
+ * @brief Determine whether a character belongs to the unreserved set
+ *        defined by RFC 3986 Section 2.3.
+ *
+ * Unreserved characters: A-Z a-z 0-9 - _ . ~
+ *
+ * @param c  Character to test.
+ * @return Non-zero if @p c is unreserved, zero otherwise.
+ */
+static int isUnreservedURI(char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+           (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' ||
+           c == '~';
+}
+
+/**
+ * @brief Percent-encode a string per RFC 3986.
+ *
+ * Any character not in the unreserved set is encoded as @c %XX using
+ * uppercase hexadecimal digits.  The caller must free the returned
+ * string with @c free().
+ *
+ * @param str  Null-terminated input string.
+ * @return Heap-allocated, null-terminated encoded string, or @c NULL
+ *         on allocation failure.
+ */
+static char *urlEncode(const char *str) {
+    static const char hexDigits[] = "0123456789ABCDEF";
+    enum { PctEncodedLen = 3, NibbleBits = 4, NibbleMask = 0x0F };
+
+    size_t inLen = strlen(str);
+    size_t extra = 0;
+    for (size_t i = 0; i < inLen; i++) {
+        if (!isUnreservedURI(str[i])) {
+            extra++;
+        }
+    }
+
+    size_t outLen = inLen + extra * (PctEncodedLen - 1) + 1;
+    char *out = malloc(outLen);
+    if (out == NULL) {
+        LOG_ERROR("urlEncode: allocation failed");
+        return NULL;
+    }
+
+    size_t pos = 0;
+    for (size_t i = 0; i < inLen; i++) {
+        unsigned char c = (unsigned char)str[i];
+        if (isUnreservedURI((char)c)) {
+            out[pos++] = (char)c;
+        } else {
+            out[pos++] = '%';
+            out[pos++] = hexDigits[(c >> NibbleBits) & NibbleMask];
+            out[pos++] = hexDigits[c & NibbleMask];
+        }
+    }
+    out[pos] = '\0';
+    return out;
+}
+
+int generateOTPAuthURI(const char *secret, const char *username,
+                       char **outURI) {
+    if (secret == NULL || username == NULL || outURI == NULL) {
+        LOG_ERROR("generateOTPAuthURI: NULL argument "
+                  "(secret=%p, username=%p, outURI=%p)",
+                  (const void *)secret, (const void *)username,
+                  (const void *)outURI);
+        return CRYPTO_FAIL;
+    }
+    *outURI = NULL;
+
+    if (secret[0] == '\0') {
+        LOG_ERROR("generateOTPAuthURI: secret is empty");
+        return CRYPTO_FAIL;
+    }
+
+    for (const char *p = secret; *p != '\0'; p++) {
+        if (base32CharToValue(*p) < 0) {
+            LOG_ERROR("generateOTPAuthURI: secret contains invalid "
+                      "Base32 character 0x%02x '%c'",
+                      (unsigned char)*p, *p);
+            return CRYPTO_FAIL;
+        }
+    }
+
+    if (username[0] == '\0') {
+        LOG_ERROR("generateOTPAuthURI: username is empty");
+        return CRYPTO_FAIL;
+    }
+
+    static const char issuer[] = "PacPlay";
+    char *encIssuer = urlEncode(issuer);
+    if (encIssuer == NULL) {
+        return CRYPTO_FAIL;
+    }
+
+    char *encUser = urlEncode(username);
+    if (encUser == NULL) {
+        free(encIssuer);
+        return CRYPTO_FAIL;
+    }
+
+    /* URI template:
+     * otpauth://totp/{issuer}:{user}?secret={secret}&issuer={issuer}
+     *   &algorithm=SHA1&digits=6&period=30 */
+    size_t uriLen = strlen("otpauth://totp/") + strlen(encIssuer) +
+                    (size_t)1 /* ':' */ + strlen(encUser) +
+                    strlen("?secret=") + strlen(secret) +
+                    strlen("&issuer=") + strlen(encIssuer) +
+                    strlen("&algorithm=SHA1") + strlen("&digits=6") +
+                    strlen("&period=30") + (size_t)1 /* '\0' */;
+
+    char *uri = malloc(uriLen);
+    if (uri == NULL) {
+        LOG_ERROR("generateOTPAuthURI: allocation failed");
+        free(encIssuer);
+        free(encUser);
+        return CRYPTO_FAIL;
+    }
+
+    snprintf(uri, uriLen,
+             "otpauth://totp/%s:%s?secret=%s&issuer=%s"
+             "&algorithm=SHA1&digits=6&period=30",
+             encIssuer, encUser, secret, encIssuer);
+
+    free(encIssuer);
+    free(encUser);
+
+    *outURI = uri;
+    return CRYPTO_SUCC;
 }
 
 /* ──────────────────────── utility ──────────────────────────────────────── */

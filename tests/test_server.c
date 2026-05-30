@@ -1115,6 +1115,580 @@ static void testLoginEmptyPassword(void) {
     waitpid(child, NULL, 0);
 }
 
+/* ═══════════════════════  TOTP Setup  ═══════════════════════════════════ */
+
+static void testTOTPSetupAfterLogin(void) {
+    enum { TotpUid = 700, TotpNameLen = 9, TestNickLen = 9,
+           TestSecretLen = 16 };
+    DB *userDB = ensureTestUser("totpguy1", TotpUid, "totppw1");
+    ASSERT_TRUE(userDB != NULL);
+
+    SocketFD sv[2];
+    ASSERT_INT_EQ(makeSocketPair(sv), 0);
+    dbClose(userDB);
+
+    pid_t child = fork();
+    if (child == 0) {
+        socketClose(&sv[0]);
+        userDB = dbInit(UserDB);
+        AESGCMKey srvKey;
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        uint32_t seq = 0;
+
+        /* Simulate successful login */
+        {
+            Packet pkt;
+            memset(&pkt, 0, sizeof(pkt));
+            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
+            LoginResponsePayload lr;
+            memset(&lr, 0, sizeof(lr));
+            lr.uid = TotpUid;
+            memcpy(lr.username, "totpguy1", TotpNameLen);
+            memcpy(lr.nickname, "TestNick", TestNickLen);
+            sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &lr, sizeof(lr));
+            packetClear(&pkt);
+        }
+
+        /* Receive MsgTOTPSetupReq, reply with success */
+        {
+            Packet pkt;
+            memset(&pkt, 0, sizeof(pkt));
+            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
+            ASSERT_INT_EQ(pkt.header.messageType, MsgTOTPSetupReq);
+            TOTPSetupRespPayload resp;
+            memset(&resp, 0, sizeof(resp));
+            memcpy(resp.secret, "JBSWY3DPEHPK3PXP", TestSecretLen);
+            sendEnc(sv[1], &srvKey, &seq, MsgTOTPSetupResp, &resp,
+                    sizeof(resp));
+            packetClear(&pkt);
+        }
+
+        dbClose(userDB);
+        socketClose(&sv[1]);
+        _exit(0);
+    }
+
+    socketClose(&sv[1]);
+    AESGCMKey cliKey;
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    uint32_t cliSeq = 0;
+
+    /* Login via simulated server */
+    {
+        const char *pw = "totppw1";
+        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
+        LoginRequestPayload *lp = calloc(1, plen);
+        memcpy(lp->username, "totpguy1", TotpNameLen);
+        memcpy(lp->password, pw, strlen(pw) + 1);
+        ASSERT_INT_EQ(
+            sendEnc(sv[0], &cliKey, &cliSeq, MsgLoginReq, lp, plen), 0);
+        OPENSSL_cleanse(lp, plen);
+        free(lp);
+    }
+    {
+        Packet rpkt;
+        memset(&rpkt, 0, sizeof(rpkt));
+        ASSERT_INT_EQ(recvDec(sv[0], &cliKey, &rpkt), 0);
+        ASSERT_INT_EQ(rpkt.header.messageType, MsgLoginResp);
+        ASSERT_TRUE(rpkt.header.payloadLength >= sizeof(LoginResponsePayload));
+        LoginResponsePayload *lr = (LoginResponsePayload *)rpkt.payload;
+        ASSERT_TRUE(lr->uid != 0);
+        packetClear(&rpkt);
+    }
+
+    /* Send TOTP setup request */
+    ASSERT_INT_EQ(
+        sendEnc(sv[0], &cliKey, &cliSeq, MsgTOTPSetupReq, NULL, 0), 0);
+
+    /* Receive TOTP setup response */
+    {
+        Packet rpkt;
+        memset(&rpkt, 0, sizeof(rpkt));
+        ASSERT_INT_EQ(recvDec(sv[0], &cliKey, &rpkt), 0);
+        ASSERT_INT_EQ(rpkt.header.messageType, MsgTOTPSetupResp);
+        ASSERT_TRUE(rpkt.header.payloadLength >= sizeof(TOTPSetupRespPayload));
+        TOTPSetupRespPayload *resp =
+            (TOTPSetupRespPayload *)rpkt.payload;
+        ASSERT_TRUE(resp->secret[0] != '\0');
+        packetClear(&rpkt);
+    }
+
+    socketClose(&sv[0]);
+    waitpid(child, NULL, 0);
+}
+
+static void testTOTPSetupAlreadyEnabled(void) {
+    enum { TotpUid = 701, TotpNameLen = 9, TestNickLen = 9,
+           TestSecretLen = 16 };
+    DB *userDB = ensureTestUser("totpguy2", TotpUid, "totppw2");
+    ASSERT_TRUE(userDB != NULL);
+
+    SocketFD sv[2];
+    ASSERT_INT_EQ(makeSocketPair(sv), 0);
+    dbClose(userDB);
+
+    pid_t child = fork();
+    if (child == 0) {
+        socketClose(&sv[0]);
+        userDB = dbInit(UserDB);
+        AESGCMKey srvKey;
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        uint32_t seq = 0;
+
+        /* Login */
+        {
+            Packet pkt;
+            memset(&pkt, 0, sizeof(pkt));
+            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
+            LoginResponsePayload lr;
+            memset(&lr, 0, sizeof(lr));
+            lr.uid = TotpUid;
+            memcpy(lr.username, "totpguy2", TotpNameLen);
+            memcpy(lr.nickname, "TestNick", TestNickLen);
+            sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &lr, sizeof(lr));
+            packetClear(&pkt);
+        }
+
+        /* First TOTP setup — success */
+        {
+            Packet pkt;
+            memset(&pkt, 0, sizeof(pkt));
+            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
+            ASSERT_INT_EQ(pkt.header.messageType, MsgTOTPSetupReq);
+            TOTPSetupRespPayload r1;
+            memset(&r1, 0, sizeof(r1));
+            memcpy(r1.secret, "JBSWY3DPEHPK3PXP", TestSecretLen);
+            sendEnc(sv[1], &srvKey, &seq, MsgTOTPSetupResp, &r1,
+                    sizeof(r1));
+            packetClear(&pkt);
+        }
+
+        /* Second TOTP setup — reject (already enabled) */
+        {
+            Packet pkt;
+            memset(&pkt, 0, sizeof(pkt));
+            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
+            ASSERT_INT_EQ(pkt.header.messageType, MsgTOTPSetupReq);
+            uint8_t s = 1;
+            sendEnc(sv[1], &srvKey, &seq, MsgTOTPSetupResp, &s, sizeof(s));
+            packetClear(&pkt);
+        }
+
+        dbClose(userDB);
+        socketClose(&sv[1]);
+        _exit(0);
+    }
+
+    socketClose(&sv[1]);
+    AESGCMKey cliKey;
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    uint32_t cliSeq = 0;
+
+    {
+        const char *pw = "totppw2";
+        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
+        LoginRequestPayload *lp = calloc(1, plen);
+        memcpy(lp->username, "totpguy2", TotpNameLen);
+        memcpy(lp->password, pw, strlen(pw) + 1);
+        ASSERT_INT_EQ(
+            sendEnc(sv[0], &cliKey, &cliSeq, MsgLoginReq, lp, plen), 0);
+        OPENSSL_cleanse(lp, plen);
+        free(lp);
+    }
+    {
+        Packet rpkt;
+        memset(&rpkt, 0, sizeof(rpkt));
+        ASSERT_INT_EQ(recvDec(sv[0], &cliKey, &rpkt), 0);
+        ASSERT_INT_EQ(rpkt.header.messageType, MsgLoginResp);
+        packetClear(&rpkt);
+    }
+
+    /* First setup — must succeed */
+    ASSERT_INT_EQ(
+        sendEnc(sv[0], &cliKey, &cliSeq, MsgTOTPSetupReq, NULL, 0), 0);
+    {
+        Packet rpkt;
+        memset(&rpkt, 0, sizeof(rpkt));
+        ASSERT_INT_EQ(recvDec(sv[0], &cliKey, &rpkt), 0);
+        ASSERT_INT_EQ(rpkt.header.messageType, MsgTOTPSetupResp);
+        packetClear(&rpkt);
+    }
+
+    /* Second setup — must be rejected */
+    ASSERT_INT_EQ(
+        sendEnc(sv[0], &cliKey, &cliSeq, MsgTOTPSetupReq, NULL, 0), 0);
+    int status = recvStatus(sv[0], &cliKey, MsgTOTPSetupResp);
+    ASSERT_INT_EQ(status, 1);
+
+    socketClose(&sv[0]);
+    waitpid(child, NULL, 0);
+}
+
+/* ═══════════════════════  TOTP Verify  ══════════════════════════════════ */
+
+static void testTOTPVerifySuccess(void) {
+    enum { TotpUid = 800, SockParent = 0, SockChild = 1,
+           NameLen = 9, TestCode = 123456 };
+    DB *userDB = ensureTestUser("totpvfy1", TotpUid, "tvpw1");
+    ASSERT_TRUE(userDB != NULL);
+
+    SocketFD sv[2];
+    ASSERT_INT_EQ(makeSocketPair(sv), 0);
+    dbClose(userDB);
+
+    pid_t child = fork();
+    if (child == 0) {
+        socketClose(&sv[SockParent]);
+        userDB = dbInit(UserDB);
+        AESGCMKey srvKey;
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[SockChild], &srvKey), COMM_SUCC);
+        uint32_t seq = 0;
+
+        /* Receive login request — server would challenge with TOTP */
+        {
+            Packet pkt;
+            memset(&pkt, 0, sizeof(pkt));
+            ASSERT_INT_EQ(recvDec(sv[SockChild], &srvKey, &pkt), 0);
+            ASSERT_INT_EQ(pkt.header.messageType, MsgLoginReq);
+            packetClear(&pkt);
+        }
+
+        /* Send TOTP challenge */
+        ASSERT_INT_EQ(
+            sendEnc(sv[SockChild], &srvKey, &seq, MsgTOTPVerifyReq, NULL, 0),
+            0);
+
+        /* Receive TOTP code — accept any valid code */
+        {
+            Packet pkt;
+            memset(&pkt, 0, sizeof(pkt));
+            ASSERT_INT_EQ(recvDec(sv[SockChild], &srvKey, &pkt), 0);
+            ASSERT_INT_EQ(pkt.header.messageType, MsgTOTPVerifyResp);
+            ASSERT_TRUE(pkt.header.payloadLength >= sizeof(TOTPVerifyPayload));
+            packetClear(&pkt);
+        }
+
+        /* Send success LoginResp */
+        LoginResponsePayload lr;
+        memset(&lr, 0, sizeof(lr));
+        lr.uid = TotpUid;
+        lr.totpEnabled = 1;
+        memcpy(lr.username, "totpvfy1", NameLen);
+        memcpy(lr.nickname, "TestNick", NameLen);
+        sendEnc(sv[SockChild], &srvKey, &seq, MsgLoginResp, &lr, sizeof(lr));
+
+        dbClose(userDB);
+        socketClose(&sv[SockChild]);
+        _exit(0);
+    }
+
+    socketClose(&sv[SockChild]);
+    AESGCMKey cliKey;
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[SockParent], &cliKey), COMM_SUCC);
+    uint32_t cliSeq = 0;
+
+    /* Login */
+    {
+        const char *pw = "tvpw1";
+        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
+        LoginRequestPayload *lp = calloc(1, plen);
+        memcpy(lp->username, "totpvfy1", NameLen);
+        memcpy(lp->password, pw, strlen(pw) + 1);
+        ASSERT_INT_EQ(
+            sendEnc(sv[SockParent], &cliKey, &cliSeq, MsgLoginReq, lp, plen),
+            0);
+        OPENSSL_cleanse(lp, plen);
+        free(lp);
+    }
+
+    /* Expect TOTP challenge */
+    {
+        Packet pkt;
+        memset(&pkt, 0, sizeof(pkt));
+        ASSERT_INT_EQ(recvDec(sv[SockParent], &cliKey, &pkt), 0);
+        ASSERT_INT_EQ(pkt.header.messageType, MsgTOTPVerifyReq);
+        packetClear(&pkt);
+    }
+
+    /* Send TOTP code */
+    {
+        TOTPVerifyPayload vp;
+        vp.code = TestCode;
+        ASSERT_INT_EQ(
+            sendEnc(sv[SockParent], &cliKey, &cliSeq, MsgTOTPVerifyResp, &vp,
+                    sizeof(vp)),
+            0);
+    }
+
+    /* Expect success LoginResp with totpEnabled=1 */
+    {
+        Packet pkt;
+        memset(&pkt, 0, sizeof(pkt));
+        ASSERT_INT_EQ(recvDec(sv[SockParent], &cliKey, &pkt), 0);
+        ASSERT_INT_EQ(pkt.header.messageType, MsgLoginResp);
+        ASSERT_TRUE(pkt.header.payloadLength >= sizeof(LoginResponsePayload));
+        LoginResponsePayload *lr = (LoginResponsePayload *)pkt.payload;
+        ASSERT_TRUE(lr->uid != 0);
+        ASSERT_UINT_EQ(lr->totpEnabled, 1);
+        packetClear(&pkt);
+    }
+
+    socketClose(&sv[SockParent]);
+    waitpid(child, NULL, 0);
+}
+
+static void testTOTPVerifyWrongCode(void) {
+    enum { TotpUid = 801, SockParent = 0, SockChild = 1, NameLen = 9 };
+    DB *userDB = ensureTestUser("totpvfy2", TotpUid, "tvpw2");
+    ASSERT_TRUE(userDB != NULL);
+
+    SocketFD sv[2];
+    ASSERT_INT_EQ(makeSocketPair(sv), 0);
+    dbClose(userDB);
+
+    pid_t child = fork();
+    if (child == 0) {
+        socketClose(&sv[SockParent]);
+        userDB = dbInit(UserDB);
+        AESGCMKey srvKey;
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[SockChild], &srvKey), COMM_SUCC);
+        uint32_t seq = 0;
+
+        /* Receive login — simulate challenge */
+        {
+            Packet pkt;
+            memset(&pkt, 0, sizeof(pkt));
+            ASSERT_INT_EQ(recvDec(sv[SockChild], &srvKey, &pkt), 0);
+            packetClear(&pkt);
+        }
+        sendEnc(sv[SockChild], &srvKey, &seq, MsgTOTPVerifyReq, NULL, 0);
+
+        /* Receive code — simulate wrong code rejection */
+        {
+            Packet pkt;
+            memset(&pkt, 0, sizeof(pkt));
+            ASSERT_INT_EQ(recvDec(sv[SockChild], &srvKey, &pkt), 0);
+            ASSERT_INT_EQ(pkt.header.messageType, MsgTOTPVerifyResp);
+            packetClear(&pkt);
+        }
+
+        LoginResponsePayload failResp;
+        memset(&failResp, 0, sizeof(failResp));
+        sendEnc(sv[SockChild], &srvKey, &seq, MsgLoginResp, &failResp,
+                sizeof(failResp));
+
+        dbClose(userDB);
+        socketClose(&sv[SockChild]);
+        _exit(0);
+    }
+
+    socketClose(&sv[SockChild]);
+    AESGCMKey cliKey;
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[SockParent], &cliKey), COMM_SUCC);
+    uint32_t cliSeq = 0;
+
+    {
+        const char *pw = "tvpw2";
+        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
+        LoginRequestPayload *lp = calloc(1, plen);
+        memcpy(lp->username, "totpvfy2", NameLen);
+        memcpy(lp->password, pw, strlen(pw) + 1);
+        sendEnc(sv[SockParent], &cliKey, &cliSeq, MsgLoginReq, lp, plen);
+        OPENSSL_cleanse(lp, plen);
+        free(lp);
+    }
+
+    {
+        Packet pkt;
+        memset(&pkt, 0, sizeof(pkt));
+        ASSERT_INT_EQ(recvDec(sv[SockParent], &cliKey, &pkt), 0);
+        ASSERT_INT_EQ(pkt.header.messageType, MsgTOTPVerifyReq);
+        packetClear(&pkt);
+    }
+
+    TOTPVerifyPayload vp;
+    vp.code = 0;
+    sendEnc(sv[SockParent], &cliKey, &cliSeq, MsgTOTPVerifyResp, &vp,
+            sizeof(vp));
+
+    {
+        Packet pkt;
+        memset(&pkt, 0, sizeof(pkt));
+        ASSERT_INT_EQ(recvDec(sv[SockParent], &cliKey, &pkt), 0);
+        ASSERT_INT_EQ(pkt.header.messageType, MsgLoginResp);
+        ASSERT_TRUE(pkt.header.payloadLength >= sizeof(LoginResponsePayload));
+        LoginResponsePayload *lr = (LoginResponsePayload *)pkt.payload;
+        ASSERT_UINT_EQ(lr->uid, 0);
+        packetClear(&pkt);
+    }
+
+    socketClose(&sv[SockParent]);
+    waitpid(child, NULL, 0);
+}
+
+static void testTOTPVerifyMalformedPayload(void) {
+    enum { TotpUid = 802, SockParent = 0, SockChild = 1, NameLen = 9 };
+    DB *userDB = ensureTestUser("totpvfy3", TotpUid, "tvpw3");
+    ASSERT_TRUE(userDB != NULL);
+
+    SocketFD sv[2];
+    ASSERT_INT_EQ(makeSocketPair(sv), 0);
+    dbClose(userDB);
+
+    pid_t child = fork();
+    if (child == 0) {
+        socketClose(&sv[SockParent]);
+        userDB = dbInit(UserDB);
+        AESGCMKey srvKey;
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[SockChild], &srvKey), COMM_SUCC);
+        uint32_t seq = 0;
+
+        {
+            Packet pkt;
+            memset(&pkt, 0, sizeof(pkt));
+            ASSERT_INT_EQ(recvDec(sv[SockChild], &srvKey, &pkt), 0);
+            packetClear(&pkt);
+        }
+        sendEnc(sv[SockChild], &srvKey, &seq, MsgTOTPVerifyReq, NULL, 0);
+
+        /* Receive malformed payload — send fail */
+        {
+            Packet pkt;
+            memset(&pkt, 0, sizeof(pkt));
+            ASSERT_INT_EQ(recvDec(sv[SockChild], &srvKey, &pkt), 0);
+            ASSERT_INT_EQ(pkt.header.messageType, MsgTOTPVerifyResp);
+            packetClear(&pkt);
+        }
+
+        LoginResponsePayload failResp;
+        memset(&failResp, 0, sizeof(failResp));
+        sendEnc(sv[SockChild], &srvKey, &seq, MsgLoginResp, &failResp,
+                sizeof(failResp));
+
+        dbClose(userDB);
+        socketClose(&sv[SockChild]);
+        _exit(0);
+    }
+
+    socketClose(&sv[SockChild]);
+    AESGCMKey cliKey;
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[SockParent], &cliKey), COMM_SUCC);
+    uint32_t cliSeq = 0;
+
+    {
+        const char *pw = "tvpw3";
+        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
+        LoginRequestPayload *lp = calloc(1, plen);
+        memcpy(lp->username, "totpvfy3", NameLen);
+        memcpy(lp->password, pw, strlen(pw) + 1);
+        sendEnc(sv[SockParent], &cliKey, &cliSeq, MsgLoginReq, lp, plen);
+        OPENSSL_cleanse(lp, plen);
+        free(lp);
+    }
+    {
+        Packet pkt;
+        memset(&pkt, 0, sizeof(pkt));
+        ASSERT_INT_EQ(recvDec(sv[SockParent], &cliKey, &pkt), 0);
+        ASSERT_INT_EQ(pkt.header.messageType, MsgTOTPVerifyReq);
+        packetClear(&pkt);
+    }
+    /* Send undersized payload (1 byte instead of 4) */
+    uint8_t badByte = 0;
+    sendEnc(sv[SockParent], &cliKey, &cliSeq, MsgTOTPVerifyResp, &badByte,
+            sizeof(badByte));
+    {
+        Packet pkt;
+        memset(&pkt, 0, sizeof(pkt));
+        ASSERT_INT_EQ(recvDec(sv[SockParent], &cliKey, &pkt), 0);
+        ASSERT_INT_EQ(pkt.header.messageType, MsgLoginResp);
+        ASSERT_TRUE(pkt.header.payloadLength >= sizeof(LoginResponsePayload));
+        LoginResponsePayload *lr = (LoginResponsePayload *)pkt.payload;
+        ASSERT_UINT_EQ(lr->uid, 0);
+        packetClear(&pkt);
+    }
+    socketClose(&sv[SockParent]);
+    waitpid(child, NULL, 0);
+}
+
+/* ═══════════════════════  State Machine Violations  ═════════════════════ */
+
+static void testSessionTOTPVerifyStateViolation(void) {
+    enum { TotpUid = 803, SockParent = 0, SockChild = 1, NameLen = 9 };
+    DB *userDB = ensureTestUser("totpvfy4", TotpUid, "tvpw4");
+    ASSERT_TRUE(userDB != NULL);
+
+    SocketFD sv[2];
+    ASSERT_INT_EQ(makeSocketPair(sv), 0);
+    dbClose(userDB);
+
+    pid_t child = fork();
+    if (child == 0) {
+        socketClose(&sv[SockParent]);
+        userDB = dbInit(UserDB);
+        AESGCMKey srvKey;
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[SockChild], &srvKey), COMM_SUCC);
+        uint32_t seq = 0;
+        /* Login → TOTP challenge */
+        {
+            Packet pkt;
+            memset(&pkt, 0, sizeof(pkt));
+            ASSERT_INT_EQ(recvDec(sv[SockChild], &srvKey, &pkt), 0);
+            packetClear(&pkt);
+        }
+        sendEnc(sv[SockChild], &srvKey, &seq, MsgTOTPVerifyReq, NULL, 0);
+        /* Client sends MsgChat in SessionTOTPVerify → violation.
+         * Child receives it (valid packet), sees unexpected type,
+         * closes connection. */
+        {
+            Packet pkt;
+            memset(&pkt, 0, sizeof(pkt));
+            int ret = recvDec(sv[SockChild], &srvKey, &pkt);
+            ASSERT_INT_EQ(ret, 0);
+            ASSERT_INT_EQ(pkt.header.messageType, MsgChat);
+            packetClear(&pkt);
+        }
+        dbClose(userDB);
+        socketClose(&sv[SockChild]);
+        _exit(0);
+    }
+
+    socketClose(&sv[SockChild]);
+    AESGCMKey cliKey;
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[SockParent], &cliKey), COMM_SUCC);
+    uint32_t cliSeq = 0;
+
+    {
+        const char *pw = "tvpw4";
+        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
+        LoginRequestPayload *lp = calloc(1, plen);
+        memcpy(lp->username, "totpvfy4", NameLen);
+        memcpy(lp->password, pw, strlen(pw) + 1);
+        sendEnc(sv[SockParent], &cliKey, &cliSeq, MsgLoginReq, lp, plen);
+        OPENSSL_cleanse(lp, plen);
+        free(lp);
+    }
+    {
+        Packet pkt;
+        memset(&pkt, 0, sizeof(pkt));
+        ASSERT_INT_EQ(recvDec(sv[SockParent], &cliKey, &pkt), 0);
+        ASSERT_INT_EQ(pkt.header.messageType, MsgTOTPVerifyReq);
+        packetClear(&pkt);
+    }
+    /* Send MsgChat in SessionTOTPVerify state */
+    ASSERT_INT_EQ(sendEnc(sv[SockParent], &cliKey, &cliSeq, MsgChat, NULL, 0),
+                  0);
+    /* Child should disconnect — subsequent recv should fail */
+    {
+        Packet pkt;
+        memset(&pkt, 0, sizeof(pkt));
+        int ret = recvDec(sv[SockParent], &cliKey, &pkt);
+        ASSERT_INT_EQ(ret, -1);
+    }
+
+    socketClose(&sv[SockParent]);
+    waitpid(child, NULL, 0);
+}
+
 /* ═══════════════════════  Protocol Edge-Case Tests  ═══════════════════════ */
 
 /** @brief Login with payload smaller than MinLoginPayload => StatusFailure. */
@@ -2471,6 +3045,12 @@ int main(void) {
     RUN_TEST(testRegisterAfterLogin);
     RUN_TEST(testHeartbeatEcho);
     RUN_TEST(testLoginEmptyPassword);
+    RUN_TEST(testTOTPSetupAfterLogin);
+    RUN_TEST(testTOTPSetupAlreadyEnabled);
+    RUN_TEST(testTOTPVerifySuccess);
+    RUN_TEST(testTOTPVerifyWrongCode);
+    RUN_TEST(testTOTPVerifyMalformedPayload);
+    RUN_TEST(testSessionTOTPVerifyStateViolation);
 
     removeDBFiles();
 

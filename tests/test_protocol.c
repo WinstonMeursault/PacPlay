@@ -172,17 +172,21 @@ static void testMessageTypeValues(void) {
     ASSERT_INT_EQ(MsgLoginResp, 4);
     ASSERT_INT_EQ(MsgRegisterReq, 5);
     ASSERT_INT_EQ(MsgRegisterResp, 6);
-    ASSERT_INT_EQ(MsgRoomListReq, 7);
-    ASSERT_INT_EQ(MsgRoomListResp, 8);
-    ASSERT_INT_EQ(MsgCreateRoom, 9);
-    ASSERT_INT_EQ(MsgCreateRoomResp, 10);
-    ASSERT_INT_EQ(MsgJoinRoom, 11);
-    ASSERT_INT_EQ(MsgJoinRoomResp, 12);
-    ASSERT_INT_EQ(MsgChat, 13);
-    ASSERT_INT_EQ(MsgLogout, 14);
-    ASSERT_INT_EQ(MsgHeartbeat, 15);
-    ASSERT_INT_EQ(MsgGameStart, 16);
-    ASSERT_INT_EQ(MsgGameStop, 17);
+    ASSERT_INT_EQ(MsgTOTPSetupReq, 7);
+    ASSERT_INT_EQ(MsgTOTPSetupResp, 8);
+    ASSERT_INT_EQ(MsgTOTPVerifyReq, 9);
+    ASSERT_INT_EQ(MsgTOTPVerifyResp, 10);
+    ASSERT_INT_EQ(MsgRoomListReq, 11);
+    ASSERT_INT_EQ(MsgRoomListResp, 12);
+    ASSERT_INT_EQ(MsgCreateRoom, 13);
+    ASSERT_INT_EQ(MsgCreateRoomResp, 14);
+    ASSERT_INT_EQ(MsgJoinRoom, 15);
+    ASSERT_INT_EQ(MsgJoinRoomResp, 16);
+    ASSERT_INT_EQ(MsgChat, 17);
+    ASSERT_INT_EQ(MsgLogout, 18);
+    ASSERT_INT_EQ(MsgHeartbeat, 19);
+    ASSERT_INT_EQ(MsgGameStart, 20);
+    ASSERT_INT_EQ(MsgGameStop, 21);
 }
 
 /** @brief NULL_SOCKETFD sentinel value. */
@@ -274,7 +278,7 @@ static void testRegisterRequestPayloadSize(void) {
 static void testLoginResponsePayloadSize(void) {
     ASSERT_UINT_EQ(sizeof(LoginResponsePayload),
                    (size_t)(sizeof(uint32_t) + LOGIN_USERNAME_LEN +
-                            LOGIN_NICKNAME_LEN));
+                            LOGIN_NICKNAME_LEN + sizeof(uint8_t)));
 }
 
 /** @brief LoginResponsePayload fields are at deterministic offsets. */
@@ -284,6 +288,21 @@ static void testLoginResponsePayloadOffsets(void) {
                    sizeof(uint32_t));
     ASSERT_UINT_EQ(offsetof(LoginResponsePayload, nickname),
                    sizeof(uint32_t) + LOGIN_USERNAME_LEN);
+    ASSERT_UINT_EQ(offsetof(LoginResponsePayload, totpEnabled),
+                   sizeof(uint32_t) + LOGIN_USERNAME_LEN +
+                       LOGIN_NICKNAME_LEN);
+}
+
+/* ─── TOTPVerifyPayload layout ────────────────────────────────────────── */
+
+/** @brief sizeof(TOTPVerifyPayload) == sizeof(uint32_t). */
+static void testTOTPVerifyPayloadSize(void) {
+    ASSERT_UINT_EQ(sizeof(TOTPVerifyPayload), sizeof(uint32_t));
+}
+
+/** @brief TOTPVerifyPayload.code is at offset 0. */
+static void testTOTPVerifyPayloadOffset(void) {
+    ASSERT_UINT_EQ(offsetof(TOTPVerifyPayload, code), (size_t)0);
 }
 
 /* ─── ChatPacketPayload layout ───────────────────────────────────────── */
@@ -316,6 +335,16 @@ static void testChatBroadcastPayloadSize(void) {
     /* 4B uid + 8B msgId + 8B timestamp = 20B fixed. */
     enum { ExpectedFixedSize = 20 };
     ASSERT_UINT_EQ(sizeof(ChatBroadcastPayload), ExpectedFixedSize);
+}
+
+/** @brief TOTPSetupRespPayload is 33 bytes (32-char Base32 + NUL). */
+static void testTOTPSetupRespPayloadSize(void) {
+    ASSERT_UINT_EQ(sizeof(TOTPSetupRespPayload), TOTP_SETUP_SECRET_LEN);
+}
+
+/** @brief TOTPSetupRespPayload.secret is at offset zero. */
+static void testTOTPSetupRespPayloadOffset(void) {
+    ASSERT_UINT_EQ(offsetof(TOTPSetupRespPayload, secret), 0);
 }
 
 /* ═══════════════════════  3. packetClear  ══════════════════════════════ */
@@ -1640,6 +1669,7 @@ static void testLoginResponsePayloadProtocolRoundtrip(void) {
     resp.uid = testUid;
     memcpy(resp.username, un, strlen(un) + 1);
     memcpy(resp.nickname, nn, strlen(nn) + 1);
+    resp.totpEnabled = 1;
 
     Packet pkt;
     memset(&pkt, 0, sizeof(pkt));
@@ -1663,13 +1693,73 @@ static void testLoginResponsePayloadProtocolRoundtrip(void) {
     ASSERT_UINT_EQ(rd->uid, testUid);
     ASSERT_STR_EQ(rd->username, un);
     ASSERT_STR_EQ(rd->nickname, nn);
+    ASSERT_UINT_EQ(rd->totpEnabled, 1);
 
     packetClear(&pkt2);
 }
 
-/** @brief MessageType enum has exactly 15 values. */
+static void testTOTPVerifyPayloadProtocolRoundtrip(void) {
+    TOTPVerifyPayload vp;
+    enum { TestCode = 123456 };
+    vp.code = TestCode;
+
+    Packet pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    ASSERT_INT_EQ(
+        packetInit(&pkt, MsgTOTPVerifyResp, 1, PlaintextPacket, &vp,
+                   sizeof(vp)),
+        PROTOCOL_SUCC);
+
+    uint8_t buf[TestSerBufSize];
+    size_t serLen = 0;
+    ASSERT_INT_EQ(packetSerialize(&pkt, buf, sizeof(buf), &serLen),
+                  PROTOCOL_SUCC);
+    packetClear(&pkt);
+
+    Packet pkt2;
+    memset(&pkt2, 0, sizeof(pkt2));
+    ASSERT_INT_EQ(packetDeserialize(buf, serLen, &pkt2), PROTOCOL_SUCC);
+    ASSERT_UINT_EQ(pkt2.header.payloadLength, sizeof(TOTPVerifyPayload));
+
+    TOTPVerifyPayload *rd = (TOTPVerifyPayload *)pkt2.payload;
+    ASSERT_UINT_EQ(rd->code, TestCode);
+
+    packetClear(&pkt2);
+}
+
+static void testTOTPSetupRespPayloadProtocolRoundtrip(void) {
+    TOTPSetupRespPayload sp;
+    memset(&sp, 0, sizeof(sp));
+    enum { TestSecretLen = 16 };
+    memcpy(sp.secret, "JBSWY3DPEHPK3PXP", TestSecretLen);
+
+    Packet pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    ASSERT_INT_EQ(
+        packetInit(&pkt, MsgTOTPSetupResp, 1, PlaintextPacket, &sp,
+                   sizeof(sp)),
+        PROTOCOL_SUCC);
+
+    uint8_t buf[TestSerBufSize];
+    size_t serLen = 0;
+    ASSERT_INT_EQ(packetSerialize(&pkt, buf, sizeof(buf), &serLen),
+                  PROTOCOL_SUCC);
+    packetClear(&pkt);
+
+    Packet pkt2;
+    memset(&pkt2, 0, sizeof(pkt2));
+    ASSERT_INT_EQ(packetDeserialize(buf, serLen, &pkt2), PROTOCOL_SUCC);
+    ASSERT_UINT_EQ(pkt2.header.payloadLength, sizeof(TOTPSetupRespPayload));
+
+    TOTPSetupRespPayload *rd = (TOTPSetupRespPayload *)pkt2.payload;
+    ASSERT_STR_EQ(rd->secret, "JBSWY3DPEHPK3PXP");
+
+    packetClear(&pkt2);
+}
+
+/** @brief MessageType enum has exactly 21 values. */
 static void testMessageTypeCount(void) {
-    ASSERT_INT_EQ(MsgGameStop, 17);
+    ASSERT_INT_EQ(MsgGameStop, 21);
 }
 
 /* ═══════════════════════  main  ════════════════════════════════════════ */
@@ -1703,10 +1793,14 @@ int main(void) {
     RUN_TEST(testRegisterRequestPayloadSize);
     RUN_TEST(testLoginResponsePayloadSize);
     RUN_TEST(testLoginResponsePayloadOffsets);
+    RUN_TEST(testTOTPVerifyPayloadSize);
+    RUN_TEST(testTOTPVerifyPayloadOffset);
     RUN_TEST(testChatPacketPayloadOffsets);
     RUN_TEST(testChatPacketPayloadSize);
     RUN_TEST(testChatBroadcastPayloadOffsets);
     RUN_TEST(testChatBroadcastPayloadSize);
+    RUN_TEST(testTOTPSetupRespPayloadSize);
+    RUN_TEST(testTOTPSetupRespPayloadOffset);
 
     /* 3. packetClear */
     RUN_TEST(testPacketClearFreesPayload);
@@ -1811,6 +1905,8 @@ int main(void) {
     RUN_TEST(testLoginPayloadProtocolRoundtrip);
     RUN_TEST(testRegisterPayloadProtocolRoundtrip);
     RUN_TEST(testLoginResponsePayloadProtocolRoundtrip);
+    RUN_TEST(testTOTPVerifyPayloadProtocolRoundtrip);
+    RUN_TEST(testTOTPSetupRespPayloadProtocolRoundtrip);
     RUN_TEST(testMessageTypeCount);
 
     return TEST_REPORT();

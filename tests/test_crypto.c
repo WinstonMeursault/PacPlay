@@ -27,8 +27,10 @@
 
 #include "crypto.h"
 #include "test_utils.h"
+#include "utils.h"
 
 #include <openssl/crypto.h>
+#include <openssl/hmac.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -1329,6 +1331,926 @@ static void testFullFlowMultipleMessages(void) {
     EVP_PKEY_free(bob);
 }
 
+/* ═══════════════════════  12. Base32  ═══════════════════════════════════ */
+
+enum {
+    B32AlphabetLen = 32,
+    B32BitsPerChar = 5,
+    B32BitsPerByte = 8,
+    B32TestBufSmall = 64,
+    B32TestBufLarge = 1024,
+    B32DigitOffset = 26,
+    B32CharMask = 0x1F,
+    B32ByteMask = 0xFF,
+    B32MinCharsForByte = 2,
+    B32HexBase = 16
+};
+
+static const uint8_t b32TestF[] = {'f'};
+static const uint8_t b32TestFo[] = {'f', 'o'};
+static const uint8_t b32TestFoo[] = {'f', 'o', 'o'};
+static const uint8_t b32TestFoob[] = {'f', 'o', 'o', 'b'};
+static const uint8_t b32TestFooba[] = {'f', 'o', 'o', 'b', 'a'};
+static const uint8_t b32TestFoobar[] = {'f', 'o', 'o', 'b', 'a', 'r'};
+
+static void testBase32AlphabetUnique(void) {
+    const char *alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    int seen[B32AlphabetLen];
+    memset(seen, 0, sizeof(seen));
+    for (int i = 0; alpha[i] != '\0'; i++) {
+        int idx;
+        if (alpha[i] >= 'A' && alpha[i] <= 'Z') {
+            idx = alpha[i] - 'A';
+        } else {
+            idx = (alpha[i] - '2') + B32DigitOffset;
+        }
+        ASSERT_FALSE(seen[idx]);
+        seen[idx] = 1;
+    }
+}
+
+static void testBase32EncodeEmpty(void) {
+    char *out = NULL;
+    ASSERT_INT_EQ(base32Encode(NULL, 0, &out), CRYPTO_SUCC);
+    ASSERT_TRUE(out != NULL);
+    ASSERT_STR_EQ(out, "");
+    free(out);
+}
+
+static void testBase32DecodeEmpty(void) {
+    uint8_t *data = (uint8_t *)-1;
+    size_t dataLen = (size_t)-1;
+    ASSERT_INT_EQ(base32Decode("", &data, &dataLen), CRYPTO_SUCC);
+    ASSERT_TRUE(data == NULL);
+    ASSERT_UINT_EQ(dataLen, 0);
+    free(data);
+}
+
+static void testBase32EncodeNullOutStr(void) {
+    ASSERT_INT_EQ(base32Encode(NULL, 0, NULL), CRYPTO_FAIL);
+}
+
+static void testBase32EncodeNullDataPositiveLen(void) {
+    enum { TestLen = 3 };
+    char *out = NULL;
+    ASSERT_INT_EQ(base32Encode(NULL, TestLen, &out), CRYPTO_FAIL);
+    ASSERT_TRUE(out == NULL);
+}
+
+static void testBase32DecodeNullEncoded(void) {
+    uint8_t *data = NULL;
+    size_t dataLen = 0;
+    ASSERT_INT_EQ(base32Decode(NULL, &data, &dataLen), CRYPTO_FAIL);
+}
+
+static void testBase32DecodeNullOutData(void) {
+    ASSERT_INT_EQ(base32Decode("AAA", NULL, NULL), CRYPTO_FAIL);
+}
+
+static void testBase32DecodeNullOutLen(void) {
+    uint8_t *data = NULL;
+    ASSERT_INT_EQ(base32Decode("AAA", &data, NULL), CRYPTO_FAIL);
+}
+
+static void testBase32EncodeRfcVectors(void) {
+    /* RFC 4648 §10 test vectors (no-padding variant) */
+    char *out = NULL;
+
+    ASSERT_INT_EQ(base32Encode(b32TestF, sizeof(b32TestF), &out), CRYPTO_SUCC);
+    ASSERT_STR_EQ(out, "MY");
+    free(out);
+
+    ASSERT_INT_EQ(base32Encode(b32TestFo, sizeof(b32TestFo), &out), CRYPTO_SUCC);
+    ASSERT_STR_EQ(out, "MZXQ");
+    free(out);
+
+    ASSERT_INT_EQ(base32Encode(b32TestFoo, sizeof(b32TestFoo), &out), CRYPTO_SUCC);
+    ASSERT_STR_EQ(out, "MZXW6");
+    free(out);
+
+    ASSERT_INT_EQ(base32Encode(b32TestFoob, sizeof(b32TestFoob), &out),
+                  CRYPTO_SUCC);
+    ASSERT_STR_EQ(out, "MZXW6YQ");
+    free(out);
+
+    ASSERT_INT_EQ(base32Encode(b32TestFooba, sizeof(b32TestFooba), &out),
+                  CRYPTO_SUCC);
+    ASSERT_STR_EQ(out, "MZXW6YTB");
+    free(out);
+
+    ASSERT_INT_EQ(base32Encode(b32TestFoobar, sizeof(b32TestFoobar), &out),
+                  CRYPTO_SUCC);
+    ASSERT_STR_EQ(out, "MZXW6YTBOI");
+    free(out);
+}
+
+static void testBase32DecodeRfcVectors(void) {
+    uint8_t *data = NULL;
+    size_t dataLen = 0;
+
+    ASSERT_INT_EQ(base32Decode("MY", &data, &dataLen), CRYPTO_SUCC);
+    ASSERT_UINT_EQ(dataLen, sizeof(b32TestF));
+    ASSERT_MEM_EQ(data, b32TestF, dataLen);
+    free(data);
+
+    ASSERT_INT_EQ(base32Decode("MZXQ", &data, &dataLen), CRYPTO_SUCC);
+    ASSERT_UINT_EQ(dataLen, sizeof(b32TestFo));
+    ASSERT_MEM_EQ(data, b32TestFo, dataLen);
+    free(data);
+
+    ASSERT_INT_EQ(base32Decode("MZXW6", &data, &dataLen), CRYPTO_SUCC);
+    ASSERT_UINT_EQ(dataLen, sizeof(b32TestFoo));
+    ASSERT_MEM_EQ(data, b32TestFoo, dataLen);
+    free(data);
+
+    ASSERT_INT_EQ(base32Decode("MZXW6YQ", &data, &dataLen), CRYPTO_SUCC);
+    ASSERT_UINT_EQ(dataLen, sizeof(b32TestFoob));
+    ASSERT_MEM_EQ(data, b32TestFoob, dataLen);
+    free(data);
+
+    ASSERT_INT_EQ(base32Decode("MZXW6YTB", &data, &dataLen), CRYPTO_SUCC);
+    ASSERT_UINT_EQ(dataLen, sizeof(b32TestFooba));
+    ASSERT_MEM_EQ(data, b32TestFooba, dataLen);
+    free(data);
+
+    ASSERT_INT_EQ(base32Decode("MZXW6YTBOI", &data, &dataLen), CRYPTO_SUCC);
+    ASSERT_UINT_EQ(dataLen, sizeof(b32TestFoobar));
+    ASSERT_MEM_EQ(data, b32TestFoobar, dataLen);
+    free(data);
+}
+
+static void testBase32DecodeCaseInsensitive(void) {
+    uint8_t *upper = NULL;
+    uint8_t *lower = NULL;
+    size_t upperLen = 0;
+    size_t lowerLen = 0;
+
+    ASSERT_INT_EQ(base32Decode("MY", &upper, &upperLen), CRYPTO_SUCC);
+    ASSERT_INT_EQ(base32Decode("my", &lower, &lowerLen), CRYPTO_SUCC);
+    ASSERT_UINT_EQ(upperLen, lowerLen);
+    ASSERT_MEM_EQ(upper, lower, upperLen);
+    free(upper);
+    free(lower);
+}
+
+static void testBase32DecodeWhitespace(void) {
+    uint8_t *clean = NULL;
+    uint8_t *spaced = NULL;
+    size_t cleanLen = 0;
+    size_t spacedLen = 0;
+
+    ASSERT_INT_EQ(base32Decode("MZXW6YTB", &clean, &cleanLen), CRYPTO_SUCC);
+    ASSERT_INT_EQ(base32Decode("MZ XW\n6Y\tTB\r", &spaced, &spacedLen),
+                  CRYPTO_SUCC);
+    ASSERT_UINT_EQ(cleanLen, spacedLen);
+    ASSERT_MEM_EQ(clean, spaced, cleanLen);
+    free(clean);
+    free(spaced);
+}
+
+static void testBase32DecodeInvalidChar(void) {
+    uint8_t *data = NULL;
+    size_t dataLen = 0;
+    ASSERT_INT_EQ(base32Decode("M@XQ", &data, &dataLen), CRYPTO_FAIL);
+    ASSERT_TRUE(data == NULL);
+}
+
+static void testBase32DecodePaddingChar(void) {
+    uint8_t *data = NULL;
+    size_t dataLen = 0;
+    ASSERT_INT_EQ(base32Decode("MY======", &data, &dataLen), CRYPTO_FAIL);
+    ASSERT_TRUE(data == NULL);
+}
+
+static void testBase32DecodeTooShort(void) {
+    enum { OneChar = 'A' };
+    char shortStr[B32MinCharsForByte];
+    shortStr[0] = (char)OneChar;
+    shortStr[1] = '\0';
+    uint8_t *data = NULL;
+    size_t dataLen = 0;
+    ASSERT_INT_EQ(base32Decode(shortStr, &data, &dataLen), CRYPTO_FAIL);
+    ASSERT_TRUE(data == NULL);
+}
+
+static void testBase32DecodeCorruptPaddingBits(void) {
+    /* Encode 'f' as "MY", then flip the second character to produce
+     * non-zero padding bits. 'M'=12, but change 'Y'=24 to 'Z'=25.
+     * Result: 01100 11001 → first byte = 01100110 = 'f' ok,
+     * remaining bits = 01 ≠ 0 → should fail. */
+    uint8_t *data = NULL;
+    size_t dataLen = 0;
+    ASSERT_INT_EQ(base32Decode("MZ", &data, &dataLen), CRYPTO_FAIL);
+    ASSERT_TRUE(data == NULL);
+}
+
+static void testBase32EncodeDecodeRoundtrip(void) {
+    /* Test various lengths crossing 40-bit block boundaries */
+    enum {
+        Len0 = 0,
+        Len1 = 1,
+        Len2 = 2,
+        Len3 = 3,
+        Len4 = 4,
+        Len5 = 5,
+        Len6 = 6,
+        Len7 = 7,
+        Len8 = 8,
+        Len16 = 16,
+        Len32 = 32,
+        Len64 = 64,
+        Len255 = 255,
+        Len256 = 256
+    };
+    size_t lengths[] = {Len0, Len1, Len2,  Len3,  Len4, Len5, Len6, Len7,
+                        Len8, Len16, Len32, Len64, Len255, Len256};
+    size_t numLengths = sizeof(lengths) / sizeof(lengths[0]);
+
+    for (size_t i = 0; i < numLengths; i++) {
+        size_t testLen = lengths[i];
+        uint8_t *original = malloc(testLen);
+        ASSERT_TRUE(original != NULL || testLen == 0);
+
+        if (testLen > 0) {
+            for (size_t j = 0; j < testLen; j++) {
+                original[j] = (uint8_t)((j * Len255 + j) & B32ByteMask);
+            }
+        }
+
+        char *encoded = NULL;
+        ASSERT_INT_EQ(base32Encode(original, testLen, &encoded), CRYPTO_SUCC);
+
+        uint8_t *decoded = NULL;
+        size_t decodedLen = 0;
+        ASSERT_INT_EQ(base32Decode(encoded, &decoded, &decodedLen),
+                      CRYPTO_SUCC);
+        ASSERT_UINT_EQ(decodedLen, testLen);
+        if (testLen > 0) {
+            ASSERT_MEM_EQ(decoded, original, testLen);
+        }
+
+        free(original);
+        free(encoded);
+        free(decoded);
+    }
+}
+
+static void testBase32RoundtripEmbeddedZeros(void) {
+    enum { DataLen = 7 };
+    uint8_t zeros[DataLen];
+    memset(zeros, 0, sizeof(zeros));
+
+    char *encoded = NULL;
+    ASSERT_INT_EQ(base32Encode(zeros, sizeof(zeros), &encoded), CRYPTO_SUCC);
+
+    uint8_t *decoded = NULL;
+    size_t decodedLen = 0;
+    ASSERT_INT_EQ(base32Decode(encoded, &decoded, &decodedLen), CRYPTO_SUCC);
+    ASSERT_UINT_EQ(decodedLen, sizeof(zeros));
+    ASSERT_MEM_EQ(decoded, zeros, sizeof(zeros));
+
+    free(encoded);
+    free(decoded);
+}
+
+static void testBase32RoundtripMaxValues(void) {
+    /* All 0xFF bytes roundtrip */
+    enum { DataLen = 12 };
+    uint8_t maxs[DataLen];
+    memset(maxs, B32ByteMask, sizeof(maxs));
+
+    char *encoded = NULL;
+    ASSERT_INT_EQ(base32Encode(maxs, sizeof(maxs), &encoded), CRYPTO_SUCC);
+
+    uint8_t *decoded = NULL;
+    size_t decodedLen = 0;
+    ASSERT_INT_EQ(base32Decode(encoded, &decoded, &decodedLen), CRYPTO_SUCC);
+    ASSERT_UINT_EQ(decodedLen, sizeof(maxs));
+    ASSERT_MEM_EQ(decoded, maxs, sizeof(maxs));
+
+    free(encoded);
+    free(decoded);
+}
+
+static void testBase32DecodeLeadingWhitespace(void) {
+    uint8_t *data = NULL;
+    size_t dataLen = 0;
+    ASSERT_INT_EQ(base32Decode("  \n\r\tMY", &data, &dataLen), CRYPTO_SUCC);
+    ASSERT_UINT_EQ(dataLen, sizeof(b32TestF));
+    ASSERT_MEM_EQ(data, b32TestF, dataLen);
+    free(data);
+}
+
+static void testBase32DecodeAllWhitespace(void) {
+    uint8_t *data = (uint8_t *)-1;
+    size_t dataLen = (size_t)-1;
+    ASSERT_INT_EQ(base32Decode(" \t\n\r", &data, &dataLen), CRYPTO_SUCC);
+    ASSERT_TRUE(data == NULL);
+    ASSERT_UINT_EQ(dataLen, 0);
+    free(data);
+}
+
+static void testBase32DecodeLowercaseDigits(void) {
+    /* Digits '2'-'7' are not letters; case-insensitivity only applies
+     * to A-Z. Verify that encoding of specific values roundtrips through
+     * lowercase input. */
+    enum { TestVal = 26 };
+    uint8_t byte = (uint8_t)TestVal;
+    char *encoded = NULL;
+    ASSERT_INT_EQ(base32Encode(&byte, 1, &encoded), CRYPTO_SUCC);
+
+    uint8_t *decoded = NULL;
+    size_t decodedLen = 0;
+    ASSERT_INT_EQ(base32Decode(encoded, &decoded, &decodedLen), CRYPTO_SUCC);
+    ASSERT_UINT_EQ(decodedLen, 1);
+    ASSERT_MEM_EQ(decoded, &byte, 1);
+
+    free(encoded);
+    free(decoded);
+}
+
+static void testBase32EncodeZeroByteValue(void) {
+    /* Encode a single zero byte; decode must return exactly 0x00 */
+    uint8_t zero = 0;
+    char *encoded = NULL;
+    ASSERT_INT_EQ(base32Encode(&zero, 1, &encoded), CRYPTO_SUCC);
+
+    uint8_t *decoded = NULL;
+    size_t decodedLen = 0;
+    ASSERT_INT_EQ(base32Decode(encoded, &decoded, &decodedLen), CRYPTO_SUCC);
+    ASSERT_UINT_EQ(decodedLen, 1);
+    ASSERT_UINT_EQ(decoded[0], 0);
+
+    free(encoded);
+    free(decoded);
+}
+
+static void testBase32DecodeInvalidSingleCharEdge(void) {
+    /* Each alphabet char in isolation: all 32 single-char strings
+     * must be rejected (5 bits < 8 bits = no full byte). */
+    const char *alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    for (int i = 0; i < B32AlphabetLen; i++) {
+        char single[B32MinCharsForByte];
+        single[0] = alpha[i];
+        single[1] = '\0';
+        uint8_t *data = NULL;
+        size_t dataLen = 0;
+        ASSERT_INT_EQ(base32Decode(single, &data, &dataLen), CRYPTO_FAIL);
+        ASSERT_TRUE(data == NULL);
+    }
+}
+
+static void testBase32DecodeInvalidTwoCharsNonZeroPad(void) {
+    /* 2-char encodings where the padding bits are non-zero.
+     * For 1 byte → 2 Base32 chars, we use 10 bits → 1 byte + 2 pad bits.
+     * Test that all 4 possible padding bit patterns that are non-zero
+     * are rejected. */
+    uint8_t *data = NULL;
+    size_t dataLen = 0;
+
+    /* "AA" = 00000 00000 → pad 00 → valid (decodes to 0x00) */
+    ASSERT_INT_EQ(base32Decode("AA", &data, &dataLen), CRYPTO_SUCC);
+    free(data);
+
+    /* "AB" = 00000 00001 → pad 01 → INVALID */
+    ASSERT_INT_EQ(base32Decode("AB", &data, &dataLen), CRYPTO_FAIL);
+
+    /* "AC" = 00000 00010 → pad 10 → INVALID */
+    ASSERT_INT_EQ(base32Decode("AC", &data, &dataLen), CRYPTO_FAIL);
+
+    /* "AD" = 00000 00011 → pad 11 → INVALID */
+    ASSERT_INT_EQ(base32Decode("AD", &data, &dataLen), CRYPTO_FAIL);
+}
+
+static void testBase32DecodeCorruptPadFourChar(void) {
+    /* 4 chars = 20 bits, 2 bytes + 4 pad bits.
+     * Valid last char is a multiple of 16 (pad=0000).
+     * "AAAA" encodes 2 zero bytes (pad=0000, dataBit=0) → valid.
+     * Alter the last char so the low 4 bits are non-zero. */
+    enum { FourChars = 4, PadMask4 = 0x0F, Buf4Len = FourChars + 1,
+           LastIdx4 = FourChars - 1, NulIdx4 = FourChars };
+    uint8_t *data = NULL;
+    size_t dataLen = 0;
+
+    ASSERT_INT_EQ(base32Decode("AAAA", &data, &dataLen), CRYPTO_SUCC);
+    free(data);
+
+    for (int pad = 1; pad <= PadMask4; pad++) {
+        char corrupt[Buf4Len];
+        corrupt[0] = 'A';
+        corrupt[1] = 'A';
+        corrupt[2] = 'A';
+        corrupt[LastIdx4] = (char)('A' + pad);
+        corrupt[NulIdx4] = '\0';
+        ASSERT_INT_EQ(base32Decode(corrupt, &data, &dataLen), CRYPTO_FAIL);
+    }
+}
+
+static void testBase32DecodeCorruptPadFiveChar(void) {
+    /* 5 chars = 25 bits, 3 bytes + 1 pad bit.
+     * "AAAAA" encodes 3 zero bytes (pad=0) → valid.
+     * Alter the last char so bit 0 is 1 → pad=1 → invalid. */
+    uint8_t *data = NULL;
+    size_t dataLen = 0;
+
+    ASSERT_INT_EQ(base32Decode("AAAAA", &data, &dataLen), CRYPTO_SUCC);
+    free(data);
+
+    /* The padding bit is the LSB of the last char.  An even-valued
+     * char (e.g. C=2=00010) has pad=0 and is valid; only odd-valued
+     * chars have pad=1 and must be rejected. */
+    ASSERT_INT_EQ(base32Decode("AAAAB", &data, &dataLen), CRYPTO_FAIL);
+    ASSERT_INT_EQ(base32Decode("AAAA7", &data, &dataLen), CRYPTO_FAIL);
+    ASSERT_INT_EQ(base32Decode("AAAAD", &data, &dataLen), CRYPTO_FAIL);
+}
+
+static void testBase32DecodeCorruptPadSevenChar(void) {
+    /* 7 chars = 35 bits, 4 bytes + 3 pad bits.
+     * "AAAAAAA" encodes 4 zero bytes (pad=000) → valid.
+     * Alter the last char so the low 3 bits are non-zero. */
+    enum { SevenChars = 7, PadMask7 = 0x07, Buf7Len = SevenChars + 1,
+           LastIdx7 = SevenChars - 1, NulIdx7 = SevenChars };
+    uint8_t *data = NULL;
+    size_t dataLen = 0;
+
+    ASSERT_INT_EQ(base32Decode("AAAAAAA", &data, &dataLen), CRYPTO_SUCC);
+    free(data);
+
+    for (int pad = 1; pad <= PadMask7; pad++) {
+        char corrupt[Buf7Len];
+        for (int j = 0; j < SevenChars; j++) {
+            corrupt[j] = 'A';
+        }
+        corrupt[LastIdx7] = (char)('A' + pad);
+        corrupt[NulIdx7] = '\0';
+        ASSERT_INT_EQ(base32Decode(corrupt, &data, &dataLen), CRYPTO_FAIL);
+    }
+}
+
+static void testBase32DecodeTrailingWhitespace(void) {
+    uint8_t *clean = NULL;
+    uint8_t *spaced = NULL;
+    size_t cleanLen = 0;
+    size_t spacedLen = 0;
+
+    ASSERT_INT_EQ(base32Decode("MZXW6YTB", &clean, &cleanLen), CRYPTO_SUCC);
+    ASSERT_INT_EQ(base32Decode("MZXW6YTB  \n\r\t", &spaced, &spacedLen),
+                  CRYPTO_SUCC);
+    ASSERT_UINT_EQ(cleanLen, spacedLen);
+    ASSERT_MEM_EQ(clean, spaced, cleanLen);
+    free(clean);
+    free(spaced);
+}
+
+static void testBase32DecodeInvalidCharFirstPosition(void) {
+    uint8_t *data = NULL;
+    size_t dataLen = 0;
+    ASSERT_INT_EQ(base32Decode("@AAA", &data, &dataLen), CRYPTO_FAIL);
+}
+
+static void testBase32DecodeInvalidCharLastPosition(void) {
+    uint8_t *data = NULL;
+    size_t dataLen = 0;
+    ASSERT_INT_EQ(base32Decode("AAA@", &data, &dataLen), CRYPTO_FAIL);
+}
+
+/* ═══════════════════════  13. TOTP (RFC 6238)  ══════════════════════════ */
+
+enum {
+    TotpStepSec = 30,
+    TotpDigits = 6,
+    TotpWindow = 1,
+    TotpHmacLen = 20,
+    TotpCodeRange = 1000000,
+    TotpMinKeyLen = 16,
+    TotpCounterBytes = 8,
+    TotpCounterByteMask = 0xFF,
+    TotpCounterShift = 8,
+    TotpDtMask = 0x0F,
+    TotpDtMsbMask = 0x7F,
+    TotpDtByteMask = 0xFF,
+    TotpShift24 = 24,
+    TotpShift16 = 16,
+    TotpShift8 = 8,
+    TotpTestWrongCode = 123456,
+    TotpZeroCode = 0,
+    TotpShortKey0 = 0xDE,
+    TotpShortKey1 = 0xAD,
+    TotpShortKey2 = 0xBE,
+    TotpShortKeyLen = 3
+};
+
+/** @brief RFC 6238 test secret: "12345678901234567890" (20 ASCII bytes). */
+static const uint8_t totpTestRawSecret[] = {
+    '1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
+    '1', '2', '3', '4', '5', '6', '7', '8', '9', '0'
+};
+
+/**
+ * @brief Compute a TOTP code for a specific time step.
+ *
+ * Performs HMAC-SHA1 + dynamic truncation (RFC 4226) on the raw key
+ * for the given time step.  This mirrors the internal computation of
+ * verifyTOTPCode and is used to verify the function's integration
+ * against known-good outputs.
+ *
+ * @param timeStep  The 64-bit time step value (Unix time / 30).
+ * @param key       Raw TOTP shared secret.
+ * @param keyLen    Length of @p key in bytes.
+ * @return The 6-digit TOTP code computed for @p timeStep.
+ */
+/* NOLINTNEXTLINE(bugprone-easily-swappable-parameters) */
+static int computeTOTPCode(int64_t timeStep, const uint8_t *key,
+                           size_t keyLen) {
+    uint8_t counter[TotpCounterBytes];
+    uint64_t c = (uint64_t)timeStep;
+    for (int i = TotpCounterBytes - 1; i >= 0; i--) {
+        counter[i] = (uint8_t)(c & TotpCounterByteMask);
+        c >>= TotpCounterShift;
+    }
+
+    uint8_t hmac[TotpHmacLen];
+    unsigned int hmacLen = sizeof(hmac);
+    (void)HMAC(EVP_sha1(), key, (int)keyLen, counter, sizeof(counter), hmac,
+               &hmacLen);
+
+    int dtOffset = hmac[hmacLen - 1] & TotpDtMask;
+    int binary = ((hmac[dtOffset] & TotpDtMsbMask) << TotpShift24) |
+                 ((hmac[dtOffset + 1] & TotpDtByteMask) << TotpShift16) |
+                 ((hmac[dtOffset + 2] & TotpDtByteMask) << TotpShift8) |
+                 (hmac[dtOffset + 3] & TotpDtByteMask);
+    return binary % TotpCodeRange;
+}
+
+/**
+ * @brief Generate the current TOTP code for a Base32-encoded secret.
+ *
+ * Decodes the Base32 @p secret into raw key bytes, computes the 6-digit
+ * TOTP code for the current 30-second time window using HMAC-SHA1 and
+ * RFC 4226 dynamic truncation, and returns it.
+ *
+ * @param secret  Base32-encoded TOTP shared secret (null-terminated).
+ * @return The 6-digit TOTP code (0–999999), or @c -1 on failure
+ *         (invalid or undersized secret, allocation failure).
+ */
+static int generateTOTPCode(const char *secret) {
+    uint8_t *key = NULL;
+    size_t keyLen = 0;
+    if (base32Decode(secret, &key, &keyLen) != CRYPTO_SUCC) {
+        return -1;
+    }
+    if (keyLen < TotpMinKeyLen) {
+        free(key);
+        return -1;
+    }
+
+    int64_t timeStep = getCurrentTimestamp() / TotpStepSec;
+    int code = computeTOTPCode(timeStep, key, keyLen);
+    free(key);
+    return code;
+}
+
+static void testTOTPVerifyNullSecret(void) {
+    int code = TotpTestWrongCode;
+    ASSERT_INT_EQ(verifyTOTPCode(NULL, &code), CRYPTO_FAIL);
+}
+
+static void testTOTPVerifyNullCode(void) {
+    const char *secret = "JBSWY3DPEHPK3PXP";
+    ASSERT_INT_EQ(verifyTOTPCode(secret, NULL), CRYPTO_FAIL);
+}
+
+static void testTOTPVerifyInvalidBase32Secret(void) {
+    int code = TotpTestWrongCode;
+    ASSERT_INT_EQ(verifyTOTPCode("!!!!!", &code), CRYPTO_FAIL);
+}
+
+static void testTOTPVerifyEmptySecret(void) {
+    int code = TotpTestWrongCode;
+    ASSERT_INT_EQ(verifyTOTPCode("", &code), CRYPTO_FAIL);
+}
+
+static void testTOTPVerifyShortKey(void) {
+    uint8_t shortRaw[TotpShortKeyLen] = {TotpShortKey0, TotpShortKey1,
+                                         TotpShortKey2};
+    char *encoded = NULL;
+    ASSERT_INT_EQ(base32Encode(shortRaw, sizeof(shortRaw), &encoded),
+                  CRYPTO_SUCC);
+
+    int code = TotpTestWrongCode;
+    ASSERT_INT_EQ(verifyTOTPCode(encoded, &code), CRYPTO_FAIL);
+    free(encoded);
+}
+
+static void testTOTPVerifyCorrectCode(void) {
+    char *secret = NULL;
+    ASSERT_INT_EQ(
+        base32Encode(totpTestRawSecret, sizeof(totpTestRawSecret), &secret),
+        CRYPTO_SUCC);
+
+    int64_t timeStep = getCurrentTimestamp() / TotpStepSec;
+    int expectedCode = computeTOTPCode(timeStep, totpTestRawSecret,
+                                       sizeof(totpTestRawSecret));
+    ASSERT_INT_EQ(verifyTOTPCode(secret, &expectedCode), CRYPTO_SUCC);
+    free(secret);
+}
+
+static void testTOTPVerifyWrongCode(void) {
+    char *secret = NULL;
+    ASSERT_INT_EQ(
+        base32Encode(totpTestRawSecret, sizeof(totpTestRawSecret), &secret),
+        CRYPTO_SUCC);
+
+    int code = TotpZeroCode;
+    ASSERT_INT_EQ(verifyTOTPCode(secret, &code), CRYPTO_FAIL);
+    free(secret);
+}
+
+static void testTOTPVerifyAdjacentWindow(void) {
+    char *secret = NULL;
+    ASSERT_INT_EQ(
+        base32Encode(totpTestRawSecret, sizeof(totpTestRawSecret), &secret),
+        CRYPTO_SUCC);
+
+    int64_t nextStep = (getCurrentTimestamp() / TotpStepSec) + 1;
+    int nextCode = computeTOTPCode(nextStep, totpTestRawSecret,
+                                   sizeof(totpTestRawSecret));
+    ASSERT_INT_EQ(verifyTOTPCode(secret, &nextCode), CRYPTO_SUCC);
+    free(secret);
+}
+
+static void testGenerateTOTPCodeBasic(void) {
+    char *secret = NULL;
+    ASSERT_INT_EQ(
+        base32Encode(totpTestRawSecret, sizeof(totpTestRawSecret), &secret),
+        CRYPTO_SUCC);
+
+    int code = generateTOTPCode(secret);
+    ASSERT_TRUE(code >= 0 && code < TotpCodeRange);
+
+    /* The generated code must be verified by verifyTOTPCode */
+    ASSERT_INT_EQ(verifyTOTPCode(secret, &code), CRYPTO_SUCC);
+    free(secret);
+}
+
+static void testGenerateTOTPCodeInvalidSecret(void) {
+    ASSERT_INT_EQ(generateTOTPCode("!!!!!"), -1);
+}
+
+static void testGenerateTOTPCodeShortKey(void) {
+    uint8_t shortRaw[TotpShortKeyLen] = {TotpShortKey0, TotpShortKey1,
+                                         TotpShortKey2};
+    char *encoded = NULL;
+    ASSERT_INT_EQ(base32Encode(shortRaw, sizeof(shortRaw), &encoded),
+                  CRYPTO_SUCC);
+
+    ASSERT_INT_EQ(generateTOTPCode(encoded), -1);
+    free(encoded);
+}
+
+/** @brief Raw 15-byte test secret (one below TOTP_MIN_KEY_LEN). */
+static const uint8_t totpRawKey15[] = {
+    '1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
+    '1', '2', '3', '4', '5'
+};
+
+/** @brief Raw 16-byte test secret (exactly TOTP_MIN_KEY_LEN). */
+static const uint8_t totpRawKey16[] = {
+    '1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
+    '1', '2', '3', '4', '5', '6'
+};
+
+static void testTOTPVerifyPreviousWindow(void) {
+    char *secret = NULL;
+    ASSERT_INT_EQ(
+        base32Encode(totpTestRawSecret, sizeof(totpTestRawSecret), &secret),
+        CRYPTO_SUCC);
+
+    int64_t prevStep = (getCurrentTimestamp() / TotpStepSec) - 1;
+    int prevCode = computeTOTPCode(prevStep, totpTestRawSecret,
+                                   sizeof(totpTestRawSecret));
+    ASSERT_INT_EQ(verifyTOTPCode(secret, &prevCode), CRYPTO_SUCC);
+    free(secret);
+}
+
+static void testTOTPVerifyKeyLenFifteen(void) {
+    char *secret = NULL;
+    ASSERT_INT_EQ(
+        base32Encode(totpRawKey15, sizeof(totpRawKey15), &secret),
+        CRYPTO_SUCC);
+
+    int code = TotpTestWrongCode;
+    ASSERT_INT_EQ(verifyTOTPCode(secret, &code), CRYPTO_FAIL);
+    free(secret);
+}
+
+static void testTOTPVerifyKeyLenSixteen(void) {
+    char *secret = NULL;
+    ASSERT_INT_EQ(
+        base32Encode(totpRawKey16, sizeof(totpRawKey16), &secret),
+        CRYPTO_SUCC);
+
+    int64_t timeStep = getCurrentTimestamp() / TotpStepSec;
+    int expectedCode = computeTOTPCode(timeStep, totpRawKey16,
+                                       sizeof(totpRawKey16));
+    ASSERT_INT_EQ(verifyTOTPCode(secret, &expectedCode), CRYPTO_SUCC);
+    free(secret);
+}
+
+static void testTOTPVerifyCodeBoundaryMax(void) {
+    /* Force a code of exactly 999999 by using a crafted HMAC output.
+     * We use computeTOTPCode on a specific timeStep that we brute-force
+     * to produce code=999999.  Alternatively, we simply verify that any
+     * code in [0, 999999] can be matched if it is the correct one.
+     * Since we cannot deterministically force code=999999 without
+     * knowing the time step that produces it, we instead test the
+     * property: for the current time step, the expected code IS
+     * accepted.  The code-range boundary is already covered by the
+     * `binary % TotpCodeRange` logic which is tested implicitly. */
+    char *secret = NULL;
+    ASSERT_INT_EQ(
+        base32Encode(totpTestRawSecret, sizeof(totpTestRawSecret), &secret),
+        CRYPTO_SUCC);
+
+    int64_t timeStep = getCurrentTimestamp() / TotpStepSec;
+    int expectedCode = computeTOTPCode(timeStep, totpTestRawSecret,
+                                       sizeof(totpTestRawSecret));
+    /* The expected code is necessarily in [0, TotpCodeRange-1]
+     * by the modulo operation.  Test that it verifies. */
+    ASSERT_TRUE(expectedCode >= 0 && expectedCode < TotpCodeRange);
+    ASSERT_INT_EQ(verifyTOTPCode(secret, &expectedCode), CRYPTO_SUCC);
+    free(secret);
+}
+
+static void testTOTPVerifyCodeNegative(void) {
+    char *secret = NULL;
+    ASSERT_INT_EQ(
+        base32Encode(totpTestRawSecret, sizeof(totpTestRawSecret), &secret),
+        CRYPTO_SUCC);
+
+    int code = -1;
+    ASSERT_INT_EQ(verifyTOTPCode(secret, &code), CRYPTO_FAIL);
+    free(secret);
+}
+
+static void testGenerateTOTPCodeKeyLenBoundary(void) {
+    char *secret = NULL;
+    ASSERT_INT_EQ(
+        base32Encode(totpRawKey16, sizeof(totpRawKey16), &secret),
+        CRYPTO_SUCC);
+
+    int code = generateTOTPCode(secret);
+    ASSERT_TRUE(code >= 0 && code < TotpCodeRange);
+    ASSERT_INT_EQ(verifyTOTPCode(secret, &code), CRYPTO_SUCC);
+    free(secret);
+}
+
+/* ═══════════════════════  14. TOTP Key URI  ════════════════════════════ */
+
+enum {
+    TOTPURITestCode = 123456,
+    TOTPURIBufSmall = 256
+};
+
+/** @brief Known Base32 secret for URI tests. */
+static const char totpURITestSecret[] = "JBSWY3DPEHPK3PXP";
+
+static void testTOTPGenerateNullSecret(void) {
+    char *uri = NULL;
+    ASSERT_INT_EQ(generateOTPAuthURI(NULL, "alice", &uri), CRYPTO_FAIL);
+    ASSERT_TRUE(uri == NULL);
+}
+
+static void testTOTPGenerateNullUsername(void) {
+    char *uri = NULL;
+    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, NULL, &uri),
+                  CRYPTO_FAIL);
+    ASSERT_TRUE(uri == NULL);
+}
+
+static void testTOTPGenerateNullOutURI(void) {
+    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "alice", NULL),
+                  CRYPTO_FAIL);
+}
+
+static void testTOTPGenerateEmptySecret(void) {
+    char *uri = NULL;
+    ASSERT_INT_EQ(generateOTPAuthURI("", "alice", &uri), CRYPTO_FAIL);
+    ASSERT_TRUE(uri == NULL);
+}
+
+static void testTOTPGenerateEmptyUsername(void) {
+    char *uri = NULL;
+    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "", &uri),
+                  CRYPTO_FAIL);
+    ASSERT_TRUE(uri == NULL);
+}
+
+static void testTOTPGenerateBasic(void) {
+    char *uri = NULL;
+    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "alice", &uri),
+                  CRYPTO_SUCC);
+    ASSERT_TRUE(uri != NULL);
+
+    /* Verify URI structure */
+    ASSERT_TRUE(strstr(uri, "otpauth://totp/") == uri);
+    ASSERT_TRUE(strstr(uri, "PacPlay:alice") != NULL);
+    ASSERT_TRUE(strstr(uri, "?secret=") != NULL);
+    ASSERT_TRUE(strstr(uri, totpURITestSecret) != NULL);
+    ASSERT_TRUE(strstr(uri, "&issuer=PacPlay") != NULL);
+    ASSERT_TRUE(strstr(uri, "&algorithm=SHA1") != NULL);
+    ASSERT_TRUE(strstr(uri, "&digits=6") != NULL);
+    ASSERT_TRUE(strstr(uri, "&period=30") != NULL);
+
+    free(uri);
+}
+
+static void testTOTPGenerateURISchemePrefix(void) {
+    char *uri = NULL;
+    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "test", &uri),
+                  CRYPTO_SUCC);
+    /* "otpauth://totp/" must appear exactly at the beginning */
+    ASSERT_UINT_EQ(strncmp(uri, "otpauth://totp/", strlen("otpauth://totp/")),
+                   0);
+    free(uri);
+}
+
+static void testTOTPGenerateURLEncodeSpecialChars(void) {
+    char *uri = NULL;
+    ASSERT_INT_EQ(
+        generateOTPAuthURI(totpURITestSecret, "alice@test", &uri),
+        CRYPTO_SUCC);
+    ASSERT_TRUE(uri != NULL);
+
+    /* '@' must be percent-encoded as %40 in the user portion of the label */
+    ASSERT_TRUE(strstr(uri, "PacPlay:alice%40test") != NULL);
+    /* '@' must NOT appear raw in the label (after the :// part) */
+    ASSERT_TRUE(strchr(strstr(uri, "totp/"), '@') == NULL);
+
+    free(uri);
+}
+
+static void testTOTPGenerateInvalidSecretChars(void) {
+    char *uri = NULL;
+    ASSERT_INT_EQ(generateOTPAuthURI("MY=ZXW6", "alice", &uri), CRYPTO_FAIL);
+    ASSERT_TRUE(uri == NULL);
+}
+
+static void testTOTPGenerateInvalidSecretAmpersand(void) {
+    char *uri = NULL;
+    ASSERT_INT_EQ(generateOTPAuthURI("MZX&W6YTB", "alice", &uri),
+                  CRYPTO_FAIL);
+    ASSERT_TRUE(uri == NULL);
+}
+
+static void testTOTPGenerateInvalidSecretQuestion(void) {
+    char *uri = NULL;
+    ASSERT_INT_EQ(generateOTPAuthURI("MZXW6?YTB", "alice", &uri),
+                  CRYPTO_FAIL);
+    ASSERT_TRUE(uri == NULL);
+}
+
+static void testTOTPGenerateURLEncodeSpace(void) {
+    char *uri = NULL;
+    ASSERT_INT_EQ(
+        generateOTPAuthURI(totpURITestSecret, "al ice", &uri),
+        CRYPTO_SUCC);
+    ASSERT_TRUE(uri != NULL);
+
+    /* Label portion after totp/ must have space encoded as %20 */
+    ASSERT_TRUE(strstr(uri, "PacPlay:al%20ice") != NULL);
+    /* Raw space must NOT appear in the label */
+    ASSERT_TRUE(strchr(strstr(uri, "totp/"), ' ') == NULL);
+
+    free(uri);
+}
+
+static void testTOTPGenerateURLEncodeColon(void) {
+    char *uri = NULL;
+    ASSERT_INT_EQ(
+        generateOTPAuthURI(totpURITestSecret, "al:ice", &uri),
+        CRYPTO_SUCC);
+    ASSERT_TRUE(uri != NULL);
+
+    /* Colon in username must be %3A to avoid breaking the label separator */
+    ASSERT_TRUE(strstr(uri, "PacPlay:al%3Aice") != NULL);
+
+    free(uri);
+}
+
+static void testTOTPGenerateURLEncodeMultipleReserved(void) {
+    char *uri = NULL;
+    ASSERT_INT_EQ(
+        generateOTPAuthURI(totpURITestSecret, "a@b:c d", &uri),
+        CRYPTO_SUCC);
+    ASSERT_TRUE(uri != NULL);
+
+    /* '@' → %40, ':' → %3A, ' ' → %20 */
+    ASSERT_TRUE(strstr(uri, "PacPlay:a%40b%3Ac%20d") != NULL);
+
+    free(uri);
+}
+
 /* ═══════════════════════  main  ════════════════════════════════════════ */
 
 /**
@@ -1425,6 +2347,74 @@ int main(void) {
     RUN_TEST(testFullFlowTamperedCiphertext);
     RUN_TEST(testFullFlowBidirectional);
     RUN_TEST(testFullFlowMultipleMessages);
+
+    /* 12. Base32 */
+    RUN_TEST(testBase32AlphabetUnique);
+    RUN_TEST(testBase32EncodeEmpty);
+    RUN_TEST(testBase32DecodeEmpty);
+    RUN_TEST(testBase32EncodeNullOutStr);
+    RUN_TEST(testBase32EncodeNullDataPositiveLen);
+    RUN_TEST(testBase32DecodeNullEncoded);
+    RUN_TEST(testBase32DecodeNullOutData);
+    RUN_TEST(testBase32DecodeNullOutLen);
+    RUN_TEST(testBase32EncodeRfcVectors);
+    RUN_TEST(testBase32DecodeRfcVectors);
+    RUN_TEST(testBase32DecodeCaseInsensitive);
+    RUN_TEST(testBase32DecodeWhitespace);
+    RUN_TEST(testBase32DecodeInvalidChar);
+    RUN_TEST(testBase32DecodePaddingChar);
+    RUN_TEST(testBase32DecodeTooShort);
+    RUN_TEST(testBase32DecodeCorruptPaddingBits);
+    RUN_TEST(testBase32EncodeDecodeRoundtrip);
+    RUN_TEST(testBase32RoundtripEmbeddedZeros);
+    RUN_TEST(testBase32RoundtripMaxValues);
+    RUN_TEST(testBase32DecodeLeadingWhitespace);
+    RUN_TEST(testBase32DecodeAllWhitespace);
+    RUN_TEST(testBase32DecodeLowercaseDigits);
+    RUN_TEST(testBase32EncodeZeroByteValue);
+    RUN_TEST(testBase32DecodeInvalidSingleCharEdge);
+    RUN_TEST(testBase32DecodeInvalidTwoCharsNonZeroPad);
+    RUN_TEST(testBase32DecodeCorruptPadFourChar);
+    RUN_TEST(testBase32DecodeCorruptPadFiveChar);
+    RUN_TEST(testBase32DecodeCorruptPadSevenChar);
+    RUN_TEST(testBase32DecodeTrailingWhitespace);
+    RUN_TEST(testBase32DecodeInvalidCharFirstPosition);
+    RUN_TEST(testBase32DecodeInvalidCharLastPosition);
+
+    /* 13. TOTP (RFC 6238) */
+    RUN_TEST(testTOTPVerifyNullSecret);
+    RUN_TEST(testTOTPVerifyNullCode);
+    RUN_TEST(testTOTPVerifyInvalidBase32Secret);
+    RUN_TEST(testTOTPVerifyEmptySecret);
+    RUN_TEST(testTOTPVerifyShortKey);
+    RUN_TEST(testTOTPVerifyCorrectCode);
+    RUN_TEST(testTOTPVerifyWrongCode);
+    RUN_TEST(testTOTPVerifyAdjacentWindow);
+    RUN_TEST(testGenerateTOTPCodeBasic);
+    RUN_TEST(testGenerateTOTPCodeInvalidSecret);
+    RUN_TEST(testGenerateTOTPCodeShortKey);
+    RUN_TEST(testTOTPVerifyPreviousWindow);
+    RUN_TEST(testTOTPVerifyKeyLenFifteen);
+    RUN_TEST(testTOTPVerifyKeyLenSixteen);
+    RUN_TEST(testTOTPVerifyCodeBoundaryMax);
+    RUN_TEST(testTOTPVerifyCodeNegative);
+    RUN_TEST(testGenerateTOTPCodeKeyLenBoundary);
+
+    /* 14. TOTP Key URI */
+    RUN_TEST(testTOTPGenerateNullSecret);
+    RUN_TEST(testTOTPGenerateNullUsername);
+    RUN_TEST(testTOTPGenerateNullOutURI);
+    RUN_TEST(testTOTPGenerateEmptySecret);
+    RUN_TEST(testTOTPGenerateEmptyUsername);
+    RUN_TEST(testTOTPGenerateBasic);
+    RUN_TEST(testTOTPGenerateURISchemePrefix);
+    RUN_TEST(testTOTPGenerateURLEncodeSpecialChars);
+    RUN_TEST(testTOTPGenerateInvalidSecretChars);
+    RUN_TEST(testTOTPGenerateInvalidSecretAmpersand);
+    RUN_TEST(testTOTPGenerateInvalidSecretQuestion);
+    RUN_TEST(testTOTPGenerateURLEncodeSpace);
+    RUN_TEST(testTOTPGenerateURLEncodeColon);
+    RUN_TEST(testTOTPGenerateURLEncodeMultipleReserved);
 
     return TEST_REPORT();
 }

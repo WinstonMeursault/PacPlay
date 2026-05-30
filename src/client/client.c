@@ -129,8 +129,7 @@ int clientLogin(Client *client) {
     OPENSSL_cleanse(login, payloadLen);
     free(login);
 
-    /* Wait for login response — now a full LoginResponsePayload.
-     * uid == 0 indicates failure. */
+    /* Wait for response — may be a TOTP challenge or direct login response. */
     Packet respPkt;
     memset(&respPkt, 0, sizeof(respPkt));
     if (recvEncryptedPacket(client, &respPkt) != CLIENT_SUCC) {
@@ -138,9 +137,44 @@ int clientLogin(Client *client) {
         return CLIENT_FAIL;
     }
 
+    if (respPkt.header.messageType == MsgTOTPVerifyReq) {
+        packetClear(&respPkt);
+
+        /* TOTP required — prompt for verification code */
+        char codeBuf[TOTP_SETUP_SECRET_LEN];
+        printf("TOTP code: ");
+        fflush(stdout);
+        if (fgets(codeBuf, (int)sizeof(codeBuf), stdin) == NULL) {
+            return CLIENT_FAIL;
+        }
+        enum { DecBase = 10 };
+        long codeVal = strtol(codeBuf, NULL, DecBase);
+        enum { MinCode = 0, MaxCode = 999999 };
+        if (codeVal < MinCode || codeVal > MaxCode) {
+            printf("Invalid TOTP code.\n");
+            return CLIENT_FAIL;
+        }
+
+        TOTPVerifyPayload tvp;
+        tvp.code = (uint32_t)codeVal;
+        if (sendEncryptedPacket(client, MsgTOTPVerifyResp, &tvp,
+                                sizeof(tvp)) != CLIENT_SUCC) {
+            return CLIENT_FAIL;
+        }
+
+        /* Wait for final login response */
+        memset(&respPkt, 0, sizeof(respPkt));
+        if (recvEncryptedPacket(client, &respPkt) != CLIENT_SUCC) {
+            LOG_ERROR("clientLogin: no response after TOTP");
+            return CLIENT_FAIL;
+        }
+    }
+
     if (respPkt.header.messageType != MsgLoginResp ||
         respPkt.header.payloadLength < sizeof(LoginResponsePayload)) {
-        LOG_ERROR("clientLogin: invalid login response");
+        LOG_ERROR("clientLogin: invalid login response (type=%d, len=%u)",
+                  (int)respPkt.header.messageType,
+                  respPkt.header.payloadLength);
         packetClear(&respPkt);
         return CLIENT_FAIL;
     }
@@ -155,6 +189,10 @@ int clientLogin(Client *client) {
 
     client->uid = resp->uid;
     printf("Login successful. Welcome, %s!\n", resp->nickname);
+    if (resp->totpEnabled == 0) {
+        printf("Security tip: enable TOTP with [t]otp setup for "
+               "stronger account protection.\n");
+    }
     packetClear(&respPkt);
     return CLIENT_SUCC;
 }
@@ -277,7 +315,7 @@ refresh:
     packetClear(&resp);
 
     for (;;) {
-        printf("\n[c]reate room  [j]oin room  [r]efresh  [q]uit\n");
+        printf("\n[c]reate room  [j]oin room  [t]otp setup  [r]efresh  [q]uit\n");
         printf("Choice: ");
         fflush(stdout);
 
@@ -362,6 +400,9 @@ refresh:
             printf("Joined room %u.\n", roomId);
             return CLIENT_SUCC;
 
+        } else if (strcmp(choice, "t") == 0) {
+            clientTOTPSetup(client);
+
         } else if (strcmp(choice, "r") == 0) {
             /* Refresh: re-request room list (goto label above) */
             goto refresh;
@@ -371,6 +412,55 @@ refresh:
             return CLIENT_FAIL; /* Signal disconnect */
         }
     }
+}
+
+int clientTOTPSetup(Client *client) {
+    if (sendEncryptedPacket(client, MsgTOTPSetupReq, NULL, 0) != CLIENT_SUCC) {
+        LOG_ERROR("clientTOTPSetup: failed to send request");
+        return CLIENT_FAIL;
+    }
+
+    Packet resp;
+    memset(&resp, 0, sizeof(resp));
+    if (recvEncryptedPacket(client, &resp) != CLIENT_SUCC) {
+        LOG_ERROR("clientTOTPSetup: no response from server");
+        return CLIENT_FAIL;
+    }
+
+    if (resp.header.messageType != MsgTOTPSetupResp ||
+        resp.header.payloadLength < sizeof(TOTPSetupRespPayload)) {
+        LOG_ERROR("clientTOTPSetup: invalid response (type=%d, len=%u)",
+                  (int)resp.header.messageType, resp.header.payloadLength);
+        packetClear(&resp);
+        return CLIENT_FAIL;
+    }
+
+    TOTPSetupRespPayload *payload = (TOTPSetupRespPayload *)resp.payload;
+    if (payload->secret[0] == '\0') {
+        printf("TOTP is already enabled or setup failed.\n");
+        packetClear(&resp);
+        return CLIENT_SUCC;
+    }
+
+    char *uri = NULL;
+    char username[TOTP_SETUP_SECRET_LEN];
+    snprintf(username, sizeof(username), "user%u", client->uid);
+    if (generateOTPAuthURI(payload->secret, username, &uri) == CRYPTO_SUCC) {
+        printf("\n--- TOTP Secret ---\n");
+        printf("Base32: %s\n", payload->secret);
+        printf("URI:    %s\n", uri);
+        printf("--------------------\n");
+        printf("Scan the URI with your authenticator app.\n");
+        free(uri);
+    } else {
+        printf("\n--- TOTP Secret ---\n");
+        printf("Base32: %s\n", payload->secret);
+        printf("--------------------\n");
+        printf("Manually enter this secret into your authenticator app.\n");
+    }
+
+    packetClear(&resp);
+    return CLIENT_SUCC;
 }
 
 int clientChatLoop(Client *client) {
