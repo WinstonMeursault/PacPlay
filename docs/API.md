@@ -588,23 +588,23 @@ logSetLock(lockFn, NULL);
 
 ### 1.4 Container 容器模块
 
-**接口**： `include/container.h`
+**接口**：`include/container.h`
 
-**实现**： `src/common/container.c`
+提供泛型数据容器，为服务端与客户端提供通用数据结构支持。当前包含泛型环形缓冲区（QueueT）与泛型动态数组（ArrayT）。
 
-提供泛型数据容器，为服务端与客户端提供通用数据结构支持。当前包含泛型环形缓冲区。
+所有函数均为 `static inline`，通过单步预处理器宏在编译期生成。`#include "container.h"` 后调用 `QUEUE_DEFINE(T)` 或 `ARRAY_DEFINE(T)` 即可使用，无需单独的 `.c` 实现文件。
 
 #### 1.4.1 泛型环形缓冲区（QueueT）
 
-通过 `QUEUE_DECLARE(T)` / `QUEUE_IMPLEMENT(T)` 两步预处理器宏模拟 C++ 模板，在编译期为任意数据类型生成类型安全的循环队列（环形缓冲区）实现，支持自动扩容、O(1) 推入/弹出及完整生命周期管理。
+通过 `QUEUE_DEFINE(T)` 单步预处理器宏为任意数据类型生成类型安全的循环队列（环形缓冲区）实现，支持自动扩容、O(1) 推入/弹出及完整生命周期管理。
 
 ##### 常量与宏
 
 | 宏                         | 值    | 说明                                                                              |
 | -------------------------- | ----- | --------------------------------------------------------------------------------- |
 | `QUEUE_DEFAULT_CAPACITY` | `8` | 队列初始容量（槽位数）。当 `Init` 传入容量为 `0` 时自动采用此默认值           |
-| `QUEUE_DECLARE(T)` | —    | 为类型 `T` 声明队列结构体及函数原型。放置于头文件                               |
-| `QUEUE_IMPLEMENT(T)` | —    | 为类型 `T` 生成所有函数实现。每种类型在**唯一一个** `.c` 文件中调用一次 |
+| `USE_DEFAULT_CAPACITY`   | `0` | 哨兵值，传入 `Init` 表示使用默认容量                                           |
+| `QUEUE_DEFINE(T)`        | —    | 为类型 `T` 一步生成结构体定义及全部 `static inline` 函数。直接放在需要使用的翻译单元中 |
 
 ##### 类型定义
 
@@ -616,17 +616,17 @@ typedef enum { ContainerSucc = 0, ContainerFail = -1 } ContainerRes;
 
 所有容器函数的统一返回值。 `ContainerSucc` 表示操作成功， `ContainerFail` 表示失败（队空、内存不足等）。
 
-**QueueT**（由 `QUEUE_DECLARE(T)` 展开）
+**QueueT**（由 `QUEUE_DEFINE(T)` 展开）
 
-以 `T = int` 为例， `QUEUE_DECLARE(int)` 展开后生成如下结构体：
+以 `typedef int Int; QUEUE_DEFINE(Int)` 为例，展开后生成如下结构体：
 
 ```c
 typedef struct {
-    int *buf;         // 环形缓冲区，动态分配于堆上
+    Int *buf;         // 环形缓冲区，动态分配于堆上
     size_t capacity;  // 当前容量（槽位数，以 sizeof(T) 为单位）
     size_t head;      // 队首索引（下一出队位置）
     size_t tail;      // 队尾索引（下一入队位置）
-} Queueint;
+} QueueInt;
 ```
 
 环形缓冲区的核心不变式：
@@ -654,12 +654,12 @@ Push 操作将元素写入 `buf[tail]` 后 `tail = (tail + 1) % capacity` ；Pop
 
 `##` 拼接运算符将类型名 `T` 直接拼入标识符。调用者传入的类型名大小写决定最终函数名：
 
-| 宏调用                    | 结构体名        | Init 函数名         | Push 函数名         |
-| ------------------------- | --------------- | ------------------- | ------------------- |
-| `QUEUE_DECLARE(int)` | `Queueint` | `queueintInit` | `queueintPush` |
-| `QUEUE_DECLARE(Packet)` | `QueuePacket` | `queuePacketInit` | `queuePacketPush` |
+| 宏调用                     | 结构体名        | Init 函数名         | Push 函数名         |
+| -------------------------- | --------------- | ------------------- | ------------------- |
+| `QUEUE_DEFINE(Int)`      | `QueueInt`    | `queueIntInit`    | `queueIntPush`    |
+| `QUEUE_DEFINE(Packet)`   | `QueuePacket` | `queuePacketInit` | `queuePacketPush` |
 
-**推荐使用 `typedef` 别名**统一命名风格（参见下方完整使用示例）。
+**推荐使用 `typedef` 别名**以获得符合命名规范的 CamelCase 结构体名（如 `typedef int Int;`）。
 
 ##### 公开 API
 
@@ -693,9 +693,9 @@ flowchart TD
 
 关键保证：
 
-* **原子性**：分配失败时完整恢复 `self->buf` 指向旧缓冲区，队列状态与扩容前完全一致。
-* **线性化**：旧环形缓冲区中的元素按 `head → tail` 顺序被拷贝到新缓冲区的连续区间 `[0, n)`，`head` 与 `tail` 重置为 `0` 和 `n`。
-* **触发时机**：仅在 `Push` 导致 `(tail + 1) % capacity == head`（即 `tail` 追上 `head`）时触发，而非预判式扩容。
+- **错误回滚**：分配失败时完整恢复 `self->buf` 指向旧缓冲区，队列状态与扩容前完全一致。
+- **线性化**：旧环形缓冲区中的元素按 `head → tail` 顺序被拷贝到新缓冲区的连续区间 `[0, n)`，`head` 与 `tail` 重置为 `0` 和 `n`。
+- **触发时机**：仅在 `Push` 导致 `(tail + 1) % capacity == head`（即 `tail` 追上 `head`）时触发，而非预判式扩容。
 
 ##### 容量语义
 
@@ -707,63 +707,48 @@ flowchart TD
 `capacity == 0` 是非法的——容量为 0 的队列没有存储槽位，Push 后 `tail == head` （队满），触发 `Reserve` 时 `0 × 2 = 0` 导致死循环。因此，本模块将 `capacity == 0` 作为"使用默认值"的哨兵：
 
 ```c
-Queueint q;
-queueintInit(&q, 0);   // 等价于 queueintInit(&q, 8)
-queueintInit(&q, 256); // 显式指定 256 槽位
+QueueInt q;
+queueIntInit(&q, 0);   // 等价于 queueIntInit(&q, 8)
+queueIntInit(&q, 256); // 显式指定 256 槽位
 ```
 
 ##### 完整使用示例
 
-以 `uint32_t` 为例演示声明、实现及使用的完整流程：
-
-**第一步 — 头文件中声明（如 `my_queue.h` ）**
+以 `int` 为例演示单步使用的完整流程：
 
 ```c
 #include "container.h"
 
-QUEUE_DECLARE(uint32_t)
-```
-
-**第二步 — 源文件中实现（如 `my_queue.c` ，仅此一处）**
-
-```c
-#include "my_queue.h"
-
-QUEUE_IMPLEMENT(uint32_t)
-```
-
-**第三步 — 业务代码中使用**
-
-```c
-#include "my_queue.h"
+typedef int Int;
+QUEUE_DEFINE(Int)
 
 void example(void) {
-    Queueuint32_t q;
+    QueueInt q;
 
     // 初始化（使用默认容量 8）
-    if (queueuint32_tInit(&q, 0) == ContainerFail) {
+    if (queueIntInit(&q, 0) == ContainerFail) {
         LOG_ERROR("OOM");
         return;
     }
 
     // 推入
-    for (uint32_t i = 1; i <= 100; i++) {
-        if (queueuint32_tPush(&q, i) == ContainerFail) {
-            LOG_ERROR("Push failed at %u", i);
+    for (int i = 1; i <= 100; i++) {
+        if (queueIntPush(&q, i) == ContainerFail) {
+            LOG_ERROR("Push failed at %d", i);
             break;
         }
     }
 
     // 依次取出并处理
-    uint32_t val;
-    while (!queueuint32_tIsEmpty(&q)) {
-        queueuint32_tFront(&q, &val); // 获取队首
-        queueuint32_tPop(&q);         // 弹出
-        printf("%u\n", val);
+    Int val;
+    while (!queueIntIsEmpty(&q)) {
+        queueIntFront(&q, &val); // 获取队首
+        queueIntPop(&q);         // 弹出
+        printf("%d\n", val);
     }
 
     // 释放
-    queueuint32_tDeinit(&q);
+    queueIntDeinit(&q);
 }
 ```
 
@@ -771,7 +756,7 @@ void example(void) {
 
 ##### 使用要点
 
-1. **声明与实现的分离**：`QUEUE_DECLARE(T)` 可放入头文件供多个翻译单元使用，但 `QUEUE_IMPLEMENT(T)` **必须在唯一一个 `.c` 文件中调用一次**，否则链接时产生多重定义错误。这与 C++ 模板的隐式实例化不同，需显式管理。
+1. **单步实例化**：`QUEUE_DEFINE(T)` 生成 `static inline` 函数，可在任何需要使用的翻译单元中直接调用。由于函数带有 `static` 链接属性，多个翻译单元各自实例化同一类型不会导致多重定义错误。
 2. **内存所有权**：`Init` 在堆上分配 `buf`，`Deinit` 释放之。若 `T` 本身包含指向堆内存的指针（如 `char *`），`Deinit` **仅释放 `buf` 数组本身**，不递归释放 `T` 内部的指针。调用者须在 `Deinit` 前手动遍历释放每个元素的嵌套内存。
 3. **`Pop` 不返回元素**：`Pop` 仅移动 `head` 指针，不返回弹出值。获取队首值须先调用 `Front`。对于大型结构体，可避免不必要的数据拷贝。
 4. **非线程安全**：所有函数未加锁。多线程环境下须由调用者在外部施加同步（如 `pthread_mutex_t`）。
@@ -781,7 +766,7 @@ void example(void) {
 
 ##### Packet 类型特化风险
 
-`QueuePacket` （通过 `QUEUE_DECLARE(Packet)` 声明）在实际使用中需特别注意，因为 `Packet` 结构体内部含有堆分配指针 `payload` ，而队列的所有操作均为**浅拷贝**。以下逐一说明风险场景及正确用法。
+`QueuePacket`（通过 `QUEUE_DEFINE(Packet)` 生成）在实际使用中需特别注意，因为 `Packet` 结构体内部含有堆分配指针 `payload`，而队列的所有操作均为**浅拷贝**。以下逐一说明风险场景及正确用法。
 
 **8. 浅拷贝与 payload 所有权**
 
@@ -838,6 +823,176 @@ queuePacketDeinit(&q);    // 仅释放 buf B
 **12. `Reserve` 扩容时的所有权转移**
 
 当队列满触发 `Reserve` 扩容时，旧缓冲区中的 `Packet` 通过浅拷贝转移至新缓冲区，旧缓冲区随后被 `free` 。 `payload` 指针在此过程中被正确转移（未被重复释放），因此扩容不会导致 payload 泄漏。所有元素在扩容后仍保持有效。
+
+---
+
+#### 1.4.2 泛型动态数组（ArrayT）
+
+通过 `ARRAY_DEFINE(T)` 单步预处理器宏为任意数据类型生成类型安全的动态数组实现，支持自动扩容、O(1) 尾部追加/弹出、O(1) 随机读写及完整生命周期管理。与队列不同，数组元素存储在**连续内存区间**中，支持按索引直接访问。
+
+##### 常量与宏
+
+| 宏                         | 值    | 说明                                                                              |
+| -------------------------- | ----- | --------------------------------------------------------------------------------- |
+| `ARRAY_DEFAULT_CAPACITY` | `8` | 数组初始容量（槽位数）。当 `Init` 传入容量为 `0` 时自动采用此默认值           |
+| `USE_DEFAULT_CAPACITY`   | `0` | 哨兵值，传入 `Init` 表示使用默认容量                                           |
+| `ARRAY_DEFINE(T)`        | —    | 为类型 `T` 一步生成结构体定义及全部 `static inline` 函数。直接放在需要使用的翻译单元中 |
+
+##### 类型定义
+
+**ArrayT**（由 `ARRAY_DEFINE(T)` 展开）
+
+以 `typedef int Int; ARRAY_DEFINE(Int)` 为例，展开后生成如下结构体：
+
+```c
+typedef struct {
+    Int *buf;         // 连续存储区，动态分配于堆上
+    size_t capacity;  // 当前容量（槽位数，以 sizeof(T) 为单位）
+    size_t size;      // 当前已存储元素个数
+} ArrayInt;
+```
+
+动态数组的核心不变式：
+
+- **`0 ≤ size ≤ capacity`**：已使用槽位不超过总容量，空余槽位位于 `[size, capacity)`。
+- **连续存储**：元素 `0..size-1` 存储于 `buf[0]..buf[size-1]`，无需模运算。
+- **自动扩容**：`PushBack` 在 `size >= capacity` 时触发扩容（2 倍），与队列的扩容触发条件（写后 `tail == head`）不同。
+
+下图为容量为 8、已存储 4 个元素的动态数组内存布局（绿色槽位为已占用）：
+
+```mermaid
+graph LR
+    b0["A"] --- b1["B"] --- b2["C"] --- b3["D"] --- b4[" "] --- b5[" "] --- b6[" "] --- b7[" "]
+    style b0 fill:#4a4
+    style b1 fill:#4a4
+    style b2 fill:#4a4
+    style b3 fill:#4a4
+```
+
+##### 命名规则
+
+`##` 拼接运算符将类型名 `T` 直接拼入标识符。调用者传入的类型名大小写决定最终函数名：
+
+| 宏调用                    | 结构体名       | Init 函数名        | PushBack 函数名        |
+| ------------------------- | -------------- | ------------------ | ---------------------- |
+| `ARRAY_DEFINE(Int)`     | `ArrayInt`   | `arrayIntInit`   | `arrayIntPushBack`   |
+| `ARRAY_DEFINE(Packet)`  | `ArrayPacket` | `arrayPacketInit` | `arrayPacketPushBack` |
+
+**推荐使用 `typedef` 别名**以获得符合命名规范的 CamelCase 结构体名。
+
+##### 公开 API
+
+| 函数               | 签名                                                                       | 返回                                  | 说明                                                                                                                                                |
+| ------------------ | -------------------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `arrayTInit`     | `ContainerRes arrayTInit(ArrayT *self, size_t capacity)`                | `ContainerSucc` / `ContainerFail` | 分配 `capacity * sizeof(T)` 字节堆内存并初始化各字段。`capacity == 0` 时使用 `ARRAY_DEFAULT_CAPACITY`。`malloc` 失败返回 `ContainerFail` |
+| `arrayTDeinit`   | `void arrayTDeinit(ArrayT *self)`                                        | void                                  | 释放 `self->buf` 并置 NULL。传入 NULL 安全返回。对同一 Array 重复调用安全（double-free 安全）                                                      |
+| `arrayTSet`      | `ContainerRes arrayTSet(ArrayT *self, size_t index, T data)`              | `ContainerSucc` / `ContainerFail` | 将 `data` 写入 `buf[index]`（浅拷贝）。`index >= size` 时返回 `ContainerFail`，`buf` 不变                                                      |
+| `arrayTGet`      | `ContainerRes arrayTGet(ArrayT *self, size_t index, T *dest)`             | `ContainerSucc` / `ContainerFail` | 将 `buf[index]` **拷贝**至 `*dest`。`index >= size` 时返回 `ContainerFail`，`*dest` 不变                                                      |
+| `arrayTPushBack` | `ContainerRes arrayTPushBack(ArrayT *self, T data)`                       | `ContainerSucc` / `ContainerFail` | 将 `data` 追加至 `buf[size]`，`size` 递增。写前若 `size >= capacity` 自动调用内部 `Reserve` 扩容为 2 倍。扩容 OOM 时返回 `ContainerFail`，旧数据无损 |
+| `arrayTPopBack`  | `ContainerRes arrayTPopBack(ArrayT *self)`                                | `ContainerSucc` / `ContainerFail` | `size` 递减一位，**不返回弹出元素**。`size == 0` 时返回 `ContainerFail`                                                                       |
+| `arrayTSize`     | `size_t arrayTSize(const ArrayT *self)`                                   | 当前元素个数                          | 直接返回 `self->size`                                                                                                                              |
+
+**注意**：`arrayTPopBack` 不返回被弹出元素的值。如需获取后弹出，先调用 `arrayTGet(&a, arrayTSize(&a) - 1, &val)` 后 `arrayTPopBack(&a)`。
+
+##### 内部扩容机制（`arrayTReserve`）
+
+`Reserve` 为 `static` 函数，对外不可见，仅在 `size >= capacity` 时由 `PushBack` 自动触发。与队列的 `Reserve` 不同，数组使用 `realloc` 而非 `malloc` + 逐元素拷贝 + `free`：
+
+```mermaid
+flowchart TD
+    A["PushBack 前 size >= capacity"] --> B["realloc(self->buf, 2 × capacity × sizeof(T))"]
+    B --> C{分配成功?}
+    C -->|否| D["LOG_ERROR / 原有 buf 和 capacity 不变"]
+    D --> E["返回 ContainerFail（旧数据无损）"]
+    C -->|是| F["self->capacity *= 2; self->buf = new 指针"]
+    F --> G["写入 data 至 buf[size]; ++size"]
+    G --> H["返回 ContainerSucc"]
+```
+
+关键保证：
+
+- **错误回滚**：`realloc` 失败时返回 NULL，原内存块不受影响——本函数在确认成功前不更新 `self->buf` 和 `self->capacity`。
+- **原地扩展**：`realloc` 在后续内存充足时可原地扩展，减少拷贝开销；否则自动搬移数据至新位置。
+- **触发时机**：在 `PushBack` 的**写入前**检测 `size >= capacity`，与队列的"写入后检测"（`tail == head`）形成对比。
+
+##### 容量语义
+
+```
+容量 = 可用槽位数。size 个元素占用槽位 [0, size)。
+PushBack N 次后，若 N ≤ capacity，无需扩容。
+若 N > capacity，扩容为 2 × capacity，可容纳至多 2N 个元素。
+```
+
+与队列相同，`capacity == 0` 被作为"使用默认值"的哨兵：
+
+```c
+ArrayInt a;
+arrayIntInit(&a, 0);   // 等价于 arrayIntInit(&a, 8)
+arrayIntInit(&a, 256); // 显式指定 256 槽位
+```
+
+##### 完整使用示例
+
+以 `int` 为例演示单步使用的完整流程：
+
+```c
+#include "container.h"
+
+typedef int Int;
+ARRAY_DEFINE(Int)
+
+void example(void) {
+    ArrayInt a;
+
+    if (arrayIntInit(&a, 0) == ContainerFail) {
+        LOG_ERROR("OOM");
+        return;
+    }
+
+    for (int i = 1; i <= 10; i++) {
+        arrayIntPushBack(&a, i);
+    }
+
+    arrayIntSet(&a, 0, 42); /* 覆盖第一个元素 */
+
+    for (size_t idx = 0; idx < arrayIntSize(&a); idx++) {
+        Int val;
+        arrayIntGet(&a, idx, &val);
+        printf("[%zu] = %d\n", idx, val);
+    }
+
+    while (arrayIntSize(&a) > 0) {
+        arrayIntPopBack(&a);
+    }
+
+    arrayIntDeinit(&a);
+}
+```
+
+此例中首次扩容发生在第 9 次 PushBack（容量 8 → 16）。
+
+##### 使用要点
+
+1. **单步实例化**：`ARRAY_DEFINE(T)` 生成 `static inline` 函数，可在任何需要使用的翻译单元中直接调用。由于函数带有 `static` 链接属性，多个翻译单元各自实例化同一类型不会导致多重定义错误。
+2. **内存所有权**：`Init` 在堆上分配 `buf`，`Deinit` 释放之。若 `T` 本身包含指向堆内存的指针，`Deinit` **仅释放 `buf` 数组本身**，不递归释放 `T` 内部的指针。调用者须在 `Deinit` 前手动遍历释放每个元素的嵌套内存。
+3. **`PopBack` 不返回元素**：`PopBack` 仅递减 `size`，不返回弹出值。获取末尾值须先调用 `Get` 配合 `Size() - 1`。
+4. **非线程安全**：所有函数未加锁。多线程环境下须由调用者在外部施加同步。
+5. **元素拷贝语义**：`PushBack`、`Set` 和 `Get` 均为**值拷贝**（浅拷贝），通过 `=` 赋值完成。对于包含指针成员的复杂类型，需注意浅拷贝导致的悬挂指针问题。
+6. **边界检查**：`Set` 和 `Get` 按 `size`（而非 `capacity`）进行边界检查——不允许访问 `[size, capacity)` 的未初始化槽位。
+7. **哨兵容量值**：`Init` 的 `capacity` 参数取 `0` 时使用默认容量 8。传入非零值则将严格使用该值。
+8. **Double-Init 导致旧缓冲区泄漏**：`Init` 不检查数组是否已初始化。对同一 Array 调用两次 `Init`（中间未调用 `Deinit`），第一次分配的缓冲区将被覆盖且无法追踪，导致永久内存泄漏。防范方式与队列相同。
+
+##### 队列与数组的对比
+
+| 特性               | QueueT（环形缓冲区）           | ArrayT（动态数组）             |
+| ------------------ | ------------------------------ | ------------------------------ |
+| 存储结构           | 环形，head/tail 双指针模容量移动 | 连续存储，按索引直接访问       |
+| 扩容触发           | `Push` 写入后 `tail == head` | `PushBack` 写入前 `size >= capacity` |
+| 扩容方式           | `malloc` 新缓冲 + 逐元素拷贝 + `free` 旧缓冲 | `realloc`（可原地扩展） |
+| 随机访问           | 不支持（需通过 `Front` + `Pop` 顺序遍历） | 支持（O(1) 按索引 `Set`/`Get`） |
+| 获取当前元素数     | 不提供（需自行推导）           | 提供 `Size()`             |
+| 头部操作           | O(1) `Push` / `Front` / `Pop` | 不支持（仅尾部追加/弹出）      |
+| 适用场景           | FIFO 消息队列、生产者-消费者   | 动态集合、随机存取缓存         |
 
 ---
 

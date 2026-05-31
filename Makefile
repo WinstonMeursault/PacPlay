@@ -139,16 +139,18 @@ $(BIN_DIR):
 
 ## Build and run all tests
 test: $(TEST_BIN)
-	@echo -e '$(C_GREEN)Running tests...$(C_RESET)'
-	@failCount=0; \
+	@total=$(words $(TEST_BIN)); \
+	echo -e '$(C_GREEN)Running tests...$(C_RESET)'; \
+	failCount=0; \
 	for t in $(TEST_BIN); do \
 		if ! ./$$t; then failCount=$$((failCount + 1)); fi; \
 	done; \
+	passCount=$$((total - failCount)); \
 	if [ $$failCount -ne 0 ]; then \
-		echo -e '$(C_RED)$$failCount test suite(s) failed.$(C_RESET)'; \
+		echo -e '$(C_RED)'"$$passCount"'/'"$$total"' test suite(s) passed. '"$$failCount"' failed.$(C_RESET)'; \
 		exit 1; \
 	fi; \
-	echo -e '$(C_GREEN)All test suites passed.$(C_RESET)'
+	echo -e '$(C_GREEN)All '"$$passCount"'/'"$$total"' test suites passed.$(C_RESET)'
 
 # Compile test source files
 $(BUILD_DIR)/tests/%.o: $(TEST_DIR)/%.c

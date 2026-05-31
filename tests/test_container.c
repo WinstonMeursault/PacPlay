@@ -1,55 +1,57 @@
 /**
  * @file test_container.c
- * @brief Comprehensive unit tests for the PacPlay container module.
+ * @brief Unit tests for the PacPlay container module (Queue and Array).
  *
- * Covers QueuePacket (circular buffer with automatic growth via Reserve)
- * for the Packet type.  Tests include boundary conditions, Reserve from
- * non-zero head, lifecycle safety, lifecycle reuse, and adversarial
- * scenarios.
+ * Instantiated types: QueuePacket, QueueInt, ArrayPacket, ArrayInt.
  *
- * @date 2026-05-30
+ * @date 2026-05-31
  * @copyright GPLv3 License
- * @section LICENSE
- * PacPlay
- * Copyright (C) 2026 Winston Meursault & Kiraterin
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
 #include "container.h"
+#include "protocol.h"
 #include "test_utils.h"
 
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* ───────────── helper constants ────────────────────────────────────────── */
+/* ──────────── type instantiations ─────────────────────────────────────── */
 
-enum { ExpectedDefaultCap = 8 };
+typedef int Int;
+QUEUE_DEFINE(Packet)
+QUEUE_DEFINE(Int)
+ARRAY_DEFINE(Packet)
+ARRAY_DEFINE(Int)
 
-/* ───────────── helpers ─────────────────────────────────────────────────── */
+/* ──────────── helper constants ────────────────────────────────────────── */
 
-/**
- * @brief Create a stack-allocated Packet with a zero-length payload for
- *        testing.
- *
- * The returned Packet has @c payload set to @c NULL and requires no
- * separate cleanup.  Callers that push this Packet into a QueuePacket own
- * the responsibility to manage any heap payloads independently — the
- * queue copies the Packet struct (shallow copy) and never frees
- * individual element payloads during Pop or Deinit.
- */
+enum {
+    DefaultCap = 8,
+    TestCap = 4,
+    MinCap = 1,
+    LargeCap = 10000,
+    SentinelSeq = 0x0DEAD,
+    SeqA = 42,
+    SeqB = 7,
+    SeqC = 30,
+    SeqFirst = 0,
+    SeqSecond = 1,
+    IntNegMax = INT_MIN,
+    IntPosMax = INT_MAX,
+    IntNegOne = -1,
+    IntZero = 0,
+    IntOne = 1,
+    IntValA = 100,
+    IntValB = 200,
+    IntValC = 300,
+    IntBogus = 999,
+    PayloadFillByte = 0xAB
+};
+
+/* ──────────── Packet helper ───────────────────────────────────────────── */
+
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static Packet makeTestPacket(MessageType msgType, uint32_t seqID) {
     Packet pkt;
@@ -63,25 +65,32 @@ static Packet makeTestPacket(MessageType msgType, uint32_t seqID) {
     return pkt;
 }
 
-/* ═══════════════════════  1. Constants  ══════════════════════════════════ */
-
-/** @brief ContainerRes and QUEUE_DEFAULT_CAPACITY have stable values. */
-static void testContainerConstants(void) {
-    ASSERT_INT_EQ(ContainerSucc, 0);
-    ASSERT_INT_EQ(ContainerFail, -1);
-    ASSERT_UINT_EQ(QUEUE_DEFAULT_CAPACITY, ExpectedDefaultCap);
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static Packet makeTestPacketWithPayload(MessageType msgType, uint32_t seqID,
+                                        size_t payloadLen) {
+    Packet pkt = makeTestPacket(msgType, seqID);
+    pkt.header.payloadLength = (uint32_t)payloadLen;
+    pkt.payload = malloc(payloadLen);
+    if (pkt.payload != NULL) {
+        memset(pkt.payload, PayloadFillByte, payloadLen);
+    }
+    return pkt;
 }
 
-/* ═══════════════════════  2. Init basics & boundaries  ═══════════════════ */
+/* ════════════════════════════════════════════════════════════════════════
+   QueuePacket tests
+   ════════════════════════════════════════════════════════════════════════ */
 
-/** @brief Init with a normal capacity sets up fields correctly. */
-static void testInitValidCapacity(void) {
-    enum { TestCap = 4 };
+static void testQueuePacketConstants(void) {
+    ASSERT_INT_EQ(ContainerSucc, 0);
+    ASSERT_INT_EQ(ContainerFail, -1);
+    ASSERT_UINT_EQ(QUEUE_DEFAULT_CAPACITY, DefaultCap);
+}
 
+static void testQueuePacketInitValid(void) {
     QueuePacket q;
     memset(&q, 0, sizeof(q));
     ContainerRes res = queuePacketInit(&q, TestCap);
-
     ASSERT_INT_EQ(res, ContainerSucc);
     ASSERT_UINT_EQ(q.capacity, TestCap);
     ASSERT_UINT_EQ(q.head, 0);
@@ -91,47 +100,33 @@ static void testInitValidCapacity(void) {
     queuePacketDeinit(&q);
 }
 
-/** @brief Init with capacity 0 falls back to QUEUE_DEFAULT_CAPACITY. */
-static void testInitZeroCapacityDefault(void) {
+static void testQueuePacketInitZeroDefault(void) {
     QueuePacket q;
     memset(&q, 0, sizeof(q));
-    ContainerRes res = queuePacketInit(&q, 0);
-
-    ASSERT_INT_EQ(res, ContainerSucc);
+    ASSERT_INT_EQ(queuePacketInit(&q, USE_DEFAULT_CAPACITY), ContainerSucc);
     ASSERT_UINT_EQ(q.capacity, QUEUE_DEFAULT_CAPACITY);
     ASSERT_TRUE(queuePacketIsEmpty(&q));
     queuePacketDeinit(&q);
 }
 
-/** @brief Init with capacity 1 — the minimum that does not trigger the
- *         default fallback — works correctly.  With cap=1 every push
- *         triggers Reserve because tail immediately wraps to head;
- *         after two pushes capacity reaches 1→2→4. */
-static void testInitCapacityOne(void) {
-    enum { MinCap = 1, ExpectedAfterTwoPushes = 4 };
-    enum { SeqFirst = 0, SeqSecond = 1 };
+static void testQueuePacketInitCapacityOne(void) {
+    enum { ExpectedAfterTwoPushes = 4 };
 
     QueuePacket q;
     memset(&q, 0, sizeof(q));
     ASSERT_INT_EQ(queuePacketInit(&q, MinCap), ContainerSucc);
     ASSERT_UINT_EQ(q.capacity, MinCap);
 
-    /* First push: tail wraps to 0 == head → Reserve (cap 1→2). */
     Packet pkt = makeTestPacket(MsgChat, SeqFirst);
     ASSERT_INT_EQ(queuePacketPush(&q, pkt), ContainerSucc);
-
-    /* Second push: head=0,tail=1,cap=2. Push writes buf[1], tail wraps to
-     * 0 == head → Reserve (cap 2→4). */
     Packet pkt2 = makeTestPacket(MsgChat, SeqSecond);
     ASSERT_INT_EQ(queuePacketPush(&q, pkt2), ContainerSucc);
     ASSERT_UINT_EQ(q.capacity, ExpectedAfterTwoPushes);
 
-    /* Verify FIFO order survived the Reserve. */
     Packet front;
     ASSERT_INT_EQ(queuePacketFront(&q, &front), ContainerSucc);
     ASSERT_UINT_EQ(front.header.sequenceID, SeqFirst);
     ASSERT_INT_EQ(queuePacketPop(&q), ContainerSucc);
-
     ASSERT_INT_EQ(queuePacketFront(&q, &front), ContainerSucc);
     ASSERT_UINT_EQ(front.header.sequenceID, SeqSecond);
     ASSERT_INT_EQ(queuePacketPop(&q), ContainerSucc);
@@ -140,40 +135,33 @@ static void testInitCapacityOne(void) {
     queuePacketDeinit(&q);
 }
 
-/* ═══════════════════════  3. Init error paths  ═══════════════════════════ */
-
-/** @brief Init with a capacity huge enough to overflow the allocation
- *         size returns ContainerFail and leaves the queue usable for a
- *         subsequent valid Init. */
-static void testInitOverflowCapacity(void) {
-    enum { ValidCap = 4 };
-
+static void testQueuePacketInitOverflow(void) {
     QueuePacket q;
     memset(&q, 0, sizeof(q));
     ContainerRes res = queuePacketInit(&q, SIZE_MAX);
-
-    /* malloc(sizeof(Packet) * SIZE_MAX) must fail on any real system. */
     ASSERT_INT_EQ(res, ContainerFail);
+    ASSERT_TRUE(queuePacketIsEmpty(&q));
+    ASSERT_INT_EQ(queuePacketPop(&q), ContainerFail);
 
-    /* The queue must still be usable after a failed Init. */
-    res = queuePacketInit(&q, ValidCap);
+    Packet dest = makeTestPacket(MsgChat, SentinelSeq);
+    ASSERT_INT_EQ(queuePacketFront(&q, &dest), ContainerFail);
+    ASSERT_UINT_EQ(dest.header.sequenceID, SentinelSeq);
+
+    res = queuePacketInit(&q, TestCap);
     ASSERT_INT_EQ(res, ContainerSucc);
     ASSERT_TRUE(queuePacketIsEmpty(&q));
     queuePacketDeinit(&q);
 }
 
-/** @brief Calling Init on an already-initialised queue leaks the old
- *         buffer — this test documents the lack of a defensive guard. */
-static void testDoubleInitLeak(void) {
-    enum { FirstCap = 4, SecondCap = 8 };
+static void testQueuePacketDoubleInitLeak(void) {
+    enum { SecondCap = 8 };
 
     QueuePacket q;
     memset(&q, 0, sizeof(q));
-    ASSERT_INT_EQ(queuePacketInit(&q, FirstCap), ContainerSucc);
+    ASSERT_INT_EQ(queuePacketInit(&q, TestCap), ContainerSucc);
     void *firstBuf = q.buf;
     ASSERT_TRUE(firstBuf != NULL);
 
-    /* Second Init overwrites buf — firstBuf is leaked. */
     ASSERT_INT_EQ(queuePacketInit(&q, SecondCap), ContainerSucc);
     ASSERT_UINT_EQ(q.capacity, SecondCap);
     ASSERT_TRUE(q.buf != firstBuf);
@@ -182,24 +170,15 @@ static void testDoubleInitLeak(void) {
     queuePacketDeinit(&q);
 }
 
-/* ═══════════════════════  4. Deinit safety  ══════════════════════════════ */
-
-/** @brief Deinit on NULL or a zero-initialised struct is safe. */
-static void testDeinitNullSafety(void) {
-    /* NULL pointer — explicitly guarded. */
+static void testQueuePacketDeinitSafety(void) {
     queuePacketDeinit(NULL);
 
-    /* Zero-initialised stack struct — buf is NULL, free(NULL) is safe. */
     QueuePacket q;
     memset(&q, 0, sizeof(q));
     queuePacketDeinit(&q);
 }
 
-/** @brief Calling Deinit twice on the same queue is safe — the second
- *         call sees buf == NULL and free(NULL) is a no-op. */
-static void testDeinitDoubleSafety(void) {
-    enum { TestCap = 4 };
-
+static void testQueuePacketDeinitDoubleSafe(void) {
     QueuePacket q;
     memset(&q, 0, sizeof(q));
     queuePacketInit(&q, TestCap);
@@ -207,80 +186,67 @@ static void testDeinitDoubleSafety(void) {
     queuePacketDeinit(&q);
 }
 
-/* ═══════════════════════  5. Lifecycle  ══════════════════════════════════ */
-
-/** @brief Init → Deinit → Init with a different capacity reuses the
- *         queue struct correctly. */
-static void testInitDeinitInitReuse(void) {
-    enum { FirstCap = 4, SecondCap = 16 };
-    enum { TestSeq = 42 };
+static void testQueuePacketLifecycleReuse(void) {
+    enum { SecondCap = 16 };
 
     QueuePacket q;
     memset(&q, 0, sizeof(q));
-
-    ASSERT_INT_EQ(queuePacketInit(&q, FirstCap), ContainerSucc);
-    ASSERT_UINT_EQ(q.capacity, FirstCap);
+    ASSERT_INT_EQ(queuePacketInit(&q, TestCap), ContainerSucc);
+    ASSERT_UINT_EQ(q.capacity, TestCap);
     queuePacketDeinit(&q);
 
     ASSERT_INT_EQ(queuePacketInit(&q, SecondCap), ContainerSucc);
     ASSERT_UINT_EQ(q.capacity, SecondCap);
     ASSERT_TRUE(queuePacketIsEmpty(&q));
 
-    Packet pkt = makeTestPacket(MsgChat, TestSeq);
+    Packet pkt = makeTestPacket(MsgChat, SeqA);
     ASSERT_INT_EQ(queuePacketPush(&q, pkt), ContainerSucc);
     ASSERT_FALSE(queuePacketIsEmpty(&q));
 
     queuePacketDeinit(&q);
 }
 
-/* ═══════════════════════  6. Memory safety  ══════════════════════════════ */
-
-/** @brief Operations on a Deinit-ed queue that avoid dereferencing the
- *         now-NULL buf are safe; Push would crash and is documented as
- *         undefined behaviour after Deinit. */
-static void testUseAfterDeinit(void) {
-    enum { TestCap = 4 };
-
+static void testQueuePacketPostDeinitStaleFields(void) {
     QueuePacket q;
     memset(&q, 0, sizeof(q));
     queuePacketInit(&q, TestCap);
+    queuePacketPush(&q, makeTestPacket(MsgChat, SeqA));
+    queuePacketPush(&q, makeTestPacket(MsgChat, SeqB));
+
+    size_t savedHead = q.head;
+    size_t savedTail = q.tail;
+    size_t savedCapacity = q.capacity;
     queuePacketDeinit(&q);
 
-    /* IsEmpty reads head == tail (still 0 from Init) → true. */
-    ASSERT_TRUE(queuePacketIsEmpty(&q));
+    ASSERT_TRUE(q.buf == NULL);
+    ASSERT_UINT_EQ(q.capacity, savedCapacity);
+    ASSERT_UINT_EQ(q.head, savedHead);
+    ASSERT_UINT_EQ(q.tail, savedTail);
+    ASSERT_FALSE(queuePacketIsEmpty(&q));
 
-    /* Pop checks IsEmpty first — returns ContainerFail without touching buf. */
+    ASSERT_INT_EQ(queuePacketPop(&q), ContainerSucc);
+    ASSERT_UINT_EQ(q.head, savedHead + 1);
+    ASSERT_INT_EQ(queuePacketPop(&q), ContainerSucc);
+    ASSERT_TRUE(queuePacketIsEmpty(&q));
     ASSERT_INT_EQ(queuePacketPop(&q), ContainerFail);
 }
 
-/* ═══════════════════════  7. Empty queue operations  ═════════════════════ */
-
-/** @brief Front and Pop on an empty queue both return ContainerFail. */
-static void testEmptyQueueOperations(void) {
-    enum { TestCap = 4 };
-
+static void testQueuePacketEmptyOperations(void) {
     QueuePacket q;
     memset(&q, 0, sizeof(q));
     queuePacketInit(&q, TestCap);
 
     ASSERT_TRUE(queuePacketIsEmpty(&q));
-
-    Packet result;
-    ASSERT_INT_EQ(queuePacketFront(&q, &result), ContainerFail);
+    Packet dest;
+    ASSERT_INT_EQ(queuePacketFront(&q, &dest), ContainerFail);
     ASSERT_INT_EQ(queuePacketPop(&q), ContainerFail);
+    ASSERT_INT_EQ(queuePacketPop(&q), ContainerFail);
+    ASSERT_TRUE(queuePacketIsEmpty(&q));
 
     queuePacketDeinit(&q);
 }
 
-/* ═══════════════════════  8. Push / Front round-trip  ════════════════════ */
-
-/** @brief Push followed by Front returns an identical Packet struct
- *         (header fields and payload pointer).  Front on a non-empty
- *         queue is idempotent. */
-static void testPushFrontRoundTrip(void) {
-    enum { TestCap = 4 };
-    enum { SeqA = 42, SeqB = 7 };
-
+static void testQueuePacketPushFrontRoundTrip(void) {
     QueuePacket q;
     memset(&q, 0, sizeof(q));
     queuePacketInit(&q, TestCap);
@@ -297,7 +263,7 @@ static void testPushFrontRoundTrip(void) {
     ASSERT_UINT_EQ(front.header.sequenceID, SeqA);
     ASSERT_TRUE(front.payload == NULL);
 
-    /* Front is idempotent — still returns the first element. */
+    /* Front is idempotent. */
     Packet pkt2 = makeTestPacket(MsgLoginReq, SeqB);
     ASSERT_INT_EQ(queuePacketPush(&q, pkt2), ContainerSucc);
     ASSERT_INT_EQ(queuePacketFront(&q, &front), ContainerSucc);
@@ -306,13 +272,8 @@ static void testPushFrontRoundTrip(void) {
     queuePacketDeinit(&q);
 }
 
-/* ═══════════════════════  9. FIFO order  ═════════════════════════════════ */
-
-/** @brief Push N elements, then Front + Pop N times yields the elements
- *         in the same order.  Pop genuinely advances — Front afterwards
- *         returns the next element. */
-static void testPushPopFifoOrder(void) {
-    enum { TestCap = 4, NumPkts = 3 };
+static void testQueuePacketFifoOrder(void) {
+    enum { NumPkts = 5 };
 
     QueuePacket q;
     memset(&q, 0, sizeof(q));
@@ -334,32 +295,21 @@ static void testPushPopFifoOrder(void) {
     queuePacketDeinit(&q);
 }
 
-/* ═══════════════════════ 10. Capacity boundary  ══════════════════════════ */
-
-/** @brief Pushing capacity elements triggers Reserve on the last push;
- *         all elements survive the reallocation and are retrievable in
- *         FIFO order. */
-static void testPushToFullCapacity(void) {
-    enum { TestCap = 4 };
-
+static void testQueuePacketPushToFullCapacity(void) {
     QueuePacket q;
     memset(&q, 0, sizeof(q));
     queuePacketInit(&q, TestCap);
 
-    /* Push TestCap-1 elements — no Reserve yet. */
     for (uint32_t i = 0; i < (uint32_t)(TestCap - 1); i++) {
         Packet pkt = makeTestPacket(MsgChat, i);
         ASSERT_INT_EQ(queuePacketPush(&q, pkt), ContainerSucc);
     }
-    ASSERT_FALSE(queuePacketIsEmpty(&q));
     ASSERT_UINT_EQ(q.capacity, TestCap);
 
-    /* The TestCap-th push wraps tail → Reserve doubles capacity. */
     Packet last = makeTestPacket(MsgChat, (uint32_t)(TestCap - 1));
     ASSERT_INT_EQ(queuePacketPush(&q, last), ContainerSucc);
     ASSERT_UINT_EQ(q.capacity, TestCap * 2);
 
-    /* All elements still in FIFO order. */
     for (uint32_t i = 0; i < TestCap; i++) {
         Packet front;
         ASSERT_INT_EQ(queuePacketFront(&q, &front), ContainerSucc);
@@ -370,64 +320,12 @@ static void testPushToFullCapacity(void) {
     queuePacketDeinit(&q);
 }
 
-/* ═══════════════════════ 11. Reserve from non-zero head  ═════════════════ */
-
-/** @brief The most complex code path in Reserve: head > 0 when the
- *         buffer fills up.  The do-while copy loop must correctly
- *         linearise elements that wrap around the old circular buffer. */
-static void testReserveFromNonZeroHead(void) {
-    enum { InitCap = 4, PopCount = 2, PushAfterPop = 6 };
+static void testQueuePacketMultipleReserveCycles(void) {
+    enum { TotalPushes = 11, ExpectedFinalCap = 16 };
 
     QueuePacket q;
     memset(&q, 0, sizeof(q));
-    queuePacketInit(&q, InitCap);
-
-    /* Fill to capacity → Reserve: head=0, tail=4, cap=8. */
-    for (uint32_t i = 0; i < InitCap; i++) {
-        Packet pkt = makeTestPacket(MsgChat, i);
-        ASSERT_INT_EQ(queuePacketPush(&q, pkt), ContainerSucc);
-    }
-    ASSERT_UINT_EQ(q.capacity, InitCap * 2);
-
-    /* Pop 2 elements — head moves to 2. */
-    for (int i = 0; i < PopCount; i++) {
-        ASSERT_INT_EQ(queuePacketPop(&q), ContainerSucc);
-    }
-    ASSERT_UINT_EQ(q.head, (size_t)PopCount);
-
-    /* Push 6 more.  tail wraps past capacity end and catches head at
-     * position 2, triggering a second Reserve from head=2. */
-    for (uint32_t i = InitCap; i < InitCap + (uint32_t)PushAfterPop; i++) {
-        Packet pkt = makeTestPacket(MsgChat, i);
-        ASSERT_INT_EQ(queuePacketPush(&q, pkt), ContainerSucc);
-    }
-    ASSERT_UINT_EQ(q.capacity, InitCap * 2 * 2);
-
-    /* Verify FIFO order: elements 2 through 9. */
-    for (uint32_t i = (uint32_t)PopCount; i < InitCap + (uint32_t)PushAfterPop;
-         i++) {
-        Packet front;
-        ASSERT_INT_EQ(queuePacketFront(&q, &front), ContainerSucc);
-        ASSERT_UINT_EQ(front.header.sequenceID, i);
-        ASSERT_INT_EQ(queuePacketPop(&q), ContainerSucc);
-    }
-    ASSERT_TRUE(queuePacketIsEmpty(&q));
-    queuePacketDeinit(&q);
-}
-
-/* ═══════════════════════ 12. Multiple Reserve cycles  ════════════════════ */
-
-/** @brief Pushing well beyond initial capacity triggers multiple
- *         successive Reserve calls; capacity doubles each time and all
- *         data survives. */
-static void testMultipleReserveCycles(void) {
-    enum { InitCap = 4, TotalPushes = 10 };
-    /* Expected: 4 → Reserve on push #4 → 8 → Reserve on push #8 → 16. */
-    enum { ExpectedFinalCap = 16 };
-
-    QueuePacket q;
-    memset(&q, 0, sizeof(q));
-    queuePacketInit(&q, InitCap);
+    queuePacketInit(&q, TestCap);
 
     for (uint32_t i = 0; i < TotalPushes; i++) {
         Packet pkt = makeTestPacket(MsgChat, i);
@@ -445,20 +343,13 @@ static void testMultipleReserveCycles(void) {
     queuePacketDeinit(&q);
 }
 
-/* ═══════════════════════ 13. Empty and refill  ═══════════════════════════ */
-
-/** @brief After draining a queue completely, pushing new elements
- *         reuses the existing buffer without triggering Reserve and
- *         without leaking stale data. */
-static void testEmptyAndRefill(void) {
-    enum { TestCap = 4 };
+static void testQueuePacketEmptyAndRefill(void) {
     enum { NewSeq = 99 };
 
     QueuePacket q;
     memset(&q, 0, sizeof(q));
     queuePacketInit(&q, TestCap);
 
-    /* Fill and drain. */
     for (uint32_t i = 0; i < TestCap; i++) {
         Packet pkt = makeTestPacket(MsgChat, i);
         ASSERT_INT_EQ(queuePacketPush(&q, pkt), ContainerSucc);
@@ -469,7 +360,6 @@ static void testEmptyAndRefill(void) {
     ASSERT_TRUE(queuePacketIsEmpty(&q));
     size_t capAfterDrain = q.capacity;
 
-    /* Refill with a single element. */
     Packet newPkt = makeTestPacket(MsgLoginReq, NewSeq);
     ASSERT_INT_EQ(queuePacketPush(&q, newPkt), ContainerSucc);
     ASSERT_FALSE(queuePacketIsEmpty(&q));
@@ -483,31 +373,82 @@ static void testEmptyAndRefill(void) {
     queuePacketDeinit(&q);
 }
 
-/* ═══════════════════════ 14. Large capacity stress  ══════════════════════ */
+static void testQueuePacketReserveFromNonZeroHead(void) {
+    enum { PopCount = 2, PushAfterPop = 6, InitCap = 4 };
 
-/** @brief A queue initialised with a large capacity survives a full
- *         Reserve cycle and all elements remain retrievable. */
-static void testLargeCapacityStress(void) {
-    enum { LargeCap = 10000 };
+    QueuePacket q;
+    memset(&q, 0, sizeof(q));
+    queuePacketInit(&q, InitCap);
 
+    for (uint32_t i = 0; i < InitCap; i++) {
+        Packet pkt = makeTestPacket(MsgChat, i);
+        ASSERT_INT_EQ(queuePacketPush(&q, pkt), ContainerSucc);
+    }
+    ASSERT_UINT_EQ(q.capacity, InitCap * 2);
+
+    for (int i = 0; i < PopCount; i++) {
+        ASSERT_INT_EQ(queuePacketPop(&q), ContainerSucc);
+    }
+    ASSERT_UINT_EQ(q.head, (size_t)PopCount);
+
+    for (uint32_t i = InitCap; i < InitCap + (uint32_t)PushAfterPop; i++) {
+        Packet pkt = makeTestPacket(MsgChat, i);
+        ASSERT_INT_EQ(queuePacketPush(&q, pkt), ContainerSucc);
+    }
+    ASSERT_UINT_EQ(q.capacity, InitCap * 2 * 2);
+
+    for (uint32_t i = (uint32_t)PopCount; i < InitCap + (uint32_t)PushAfterPop;
+         i++) {
+        Packet front;
+        ASSERT_INT_EQ(queuePacketFront(&q, &front), ContainerSucc);
+        ASSERT_UINT_EQ(front.header.sequenceID, i);
+        ASSERT_INT_EQ(queuePacketPop(&q), ContainerSucc);
+    }
+    ASSERT_TRUE(queuePacketIsEmpty(&q));
+    queuePacketDeinit(&q);
+}
+
+static void testQueuePacketInterleavedPushPop(void) {
+    QueuePacket q;
+    memset(&q, 0, sizeof(q));
+    queuePacketInit(&q, TestCap);
+
+    ASSERT_INT_EQ(queuePacketPush(&q, makeTestPacket(MsgChat, SeqA)),
+                  ContainerSucc);
+    ASSERT_INT_EQ(queuePacketPush(&q, makeTestPacket(MsgChat, SeqB)),
+                  ContainerSucc);
+    ASSERT_INT_EQ(queuePacketPop(&q), ContainerSucc);
+    ASSERT_INT_EQ(queuePacketPush(&q, makeTestPacket(MsgChat, SeqC)),
+                  ContainerSucc);
+
+    Packet front;
+    ASSERT_INT_EQ(queuePacketFront(&q, &front), ContainerSucc);
+    ASSERT_UINT_EQ(front.header.sequenceID, SeqB);
+    ASSERT_INT_EQ(queuePacketPop(&q), ContainerSucc);
+    ASSERT_INT_EQ(queuePacketFront(&q, &front), ContainerSucc);
+    ASSERT_UINT_EQ(front.header.sequenceID, SeqC);
+    ASSERT_INT_EQ(queuePacketPop(&q), ContainerSucc);
+    ASSERT_TRUE(queuePacketIsEmpty(&q));
+
+    queuePacketDeinit(&q);
+}
+
+static void testQueuePacketLargeCapacityStress(void) {
     QueuePacket q;
     memset(&q, 0, sizeof(q));
     ASSERT_INT_EQ(queuePacketInit(&q, LargeCap), ContainerSucc);
     ASSERT_UINT_EQ(q.capacity, LargeCap);
 
-    /* Push LargeCap-1 elements — no Reserve yet. */
     for (uint32_t i = 0; i < (uint32_t)(LargeCap - 1); i++) {
         Packet pkt = makeTestPacket(MsgChat, i);
         ASSERT_INT_EQ(queuePacketPush(&q, pkt), ContainerSucc);
     }
     ASSERT_UINT_EQ(q.capacity, LargeCap);
 
-    /* The LargeCap-th push triggers Reserve. */
     Packet last = makeTestPacket(MsgChat, (uint32_t)(LargeCap - 1));
     ASSERT_INT_EQ(queuePacketPush(&q, last), ContainerSucc);
     ASSERT_UINT_EQ(q.capacity, LargeCap * 2);
 
-    /* Verify every element. */
     for (uint32_t i = 0; i < LargeCap; i++) {
         Packet front;
         ASSERT_INT_EQ(queuePacketFront(&q, &front), ContainerSucc);
@@ -518,56 +459,1004 @@ static void testLargeCapacityStress(void) {
     queuePacketDeinit(&q);
 }
 
-/* ═══════════════════════  main  ══════════════════════════════════════════ */
+static void testQueuePacketDeinitWithElements(void) {
+    QueuePacket q;
+    memset(&q, 0, sizeof(q));
+    queuePacketInit(&q, TestCap);
+
+    /* Deinit with elements still queued — buf is freed, struct fields are
+     * stale but the call does not crash. */
+    queuePacketPush(&q, makeTestPacket(MsgChat, SeqA));
+    queuePacketDeinit(&q);
+}
+
+static void testQueuePacketNonPayloadRoundTrip(void) {
+    enum { PayloadLen = 5 };
+    /* PayloadLen is small to avoid magic numbers in memcmp. */
+
+    QueuePacket q;
+    memset(&q, 0, sizeof(q));
+    queuePacketInit(&q, TestCap);
+
+    Packet pkt = makeTestPacketWithPayload(MsgChat, SeqA, PayloadLen);
+    ASSERT_TRUE(pkt.payload != NULL);
+    ASSERT_UINT_EQ(pkt.header.payloadLength, PayloadLen);
+
+    ASSERT_INT_EQ(queuePacketPush(&q, pkt), ContainerSucc);
+
+    Packet front;
+    ASSERT_INT_EQ(queuePacketFront(&q, &front), ContainerSucc);
+    ASSERT_UINT_EQ(front.header.sequenceID, SeqA);
+    ASSERT_UINT_EQ(front.header.payloadLength, PayloadLen);
+    ASSERT_TRUE(front.payload != NULL);
+    ASSERT_TRUE(front.payload == pkt.payload);
+    ASSERT_MEM_EQ(front.payload, pkt.payload, PayloadLen);
+
+    ASSERT_INT_EQ(queuePacketPop(&q), ContainerSucc);
+    ASSERT_TRUE(queuePacketIsEmpty(&q));
+
+    free(pkt.payload);
+    queuePacketDeinit(&q);
+}
+
+static void testQueuePacketFrontFailureLeavesDestUnchanged(void) {
+    QueuePacket q;
+    memset(&q, 0, sizeof(q));
+    queuePacketInit(&q, TestCap);
+
+    Packet dest = makeTestPacket(MsgChat, SentinelSeq);
+    ASSERT_INT_EQ(queuePacketFront(&q, &dest), ContainerFail);
+    ASSERT_UINT_EQ(dest.header.sequenceID, SentinelSeq);
+    ASSERT_UINT_EQ(dest.header.magic, PACKET_MAGIC);
+
+    queuePacketDeinit(&q);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   QueueInt tests
+   ════════════════════════════════════════════════════════════════════════ */
+
+static void testQueueIntInitValid(void) {
+    QueueInt q;
+    memset(&q, 0, sizeof(q));
+    ASSERT_INT_EQ(queueIntInit(&q, TestCap), ContainerSucc);
+    ASSERT_UINT_EQ(q.capacity, TestCap);
+    ASSERT_UINT_EQ(q.head, 0);
+    ASSERT_UINT_EQ(q.tail, 0);
+    ASSERT_TRUE(queueIntIsEmpty(&q));
+    ASSERT_TRUE(q.buf != NULL);
+    queueIntDeinit(&q);
+}
+
+static void testQueueIntInitZeroDefault(void) {
+    QueueInt q;
+    memset(&q, 0, sizeof(q));
+    ASSERT_INT_EQ(queueIntInit(&q, USE_DEFAULT_CAPACITY), ContainerSucc);
+    ASSERT_UINT_EQ(q.capacity, QUEUE_DEFAULT_CAPACITY);
+    ASSERT_TRUE(queueIntIsEmpty(&q));
+    queueIntDeinit(&q);
+}
+
+static void testQueueIntInitOverflow(void) {
+    QueueInt q;
+    memset(&q, 0, sizeof(q));
+    ASSERT_INT_EQ(queueIntInit(&q, SIZE_MAX), ContainerFail);
+    ASSERT_TRUE(queueIntIsEmpty(&q));
+
+    ASSERT_INT_EQ(queueIntInit(&q, TestCap), ContainerSucc);
+    ASSERT_TRUE(queueIntIsEmpty(&q));
+    queueIntDeinit(&q);
+}
+
+static void testQueueIntDeinitSafety(void) {
+    queueIntDeinit(NULL);
+
+    QueueInt q;
+    memset(&q, 0, sizeof(q));
+    queueIntInit(&q, TestCap);
+    queueIntDeinit(&q);
+    queueIntDeinit(&q);
+}
+
+static void testQueueIntEmptyOperations(void) {
+    QueueInt q;
+    memset(&q, 0, sizeof(q));
+    queueIntInit(&q, TestCap);
+
+    ASSERT_TRUE(queueIntIsEmpty(&q));
+    Int val;
+    ASSERT_INT_EQ(queueIntFront(&q, &val), ContainerFail);
+    ASSERT_INT_EQ(queueIntPop(&q), ContainerFail);
+
+    queueIntDeinit(&q);
+}
+
+static void testQueueIntPushFrontRoundTrip(void) {
+    QueueInt q;
+    memset(&q, 0, sizeof(q));
+    queueIntInit(&q, TestCap);
+
+    ASSERT_INT_EQ(queueIntPush(&q, (Int)SeqA), ContainerSucc);
+    ASSERT_FALSE(queueIntIsEmpty(&q));
+
+    Int front;
+    ASSERT_INT_EQ(queueIntFront(&q, &front), ContainerSucc);
+    ASSERT_INT_EQ(front, (Int)SeqA);
+
+    /* Idempotent Front. */
+    ASSERT_INT_EQ(queueIntPush(&q, (Int)SeqB), ContainerSucc);
+    ASSERT_INT_EQ(queueIntFront(&q, &front), ContainerSucc);
+    ASSERT_INT_EQ(front, (Int)SeqA);
+
+    queueIntDeinit(&q);
+}
+
+static void testQueueIntExtremeValues(void) {
+    QueueInt q;
+    memset(&q, 0, sizeof(q));
+    queueIntInit(&q, TestCap);
+
+    ASSERT_INT_EQ(queueIntPush(&q, (Int)IntNegMax), ContainerSucc);
+    ASSERT_INT_EQ(queueIntPush(&q, (Int)IntNegOne), ContainerSucc);
+    ASSERT_INT_EQ(queueIntPush(&q, (Int)IntZero), ContainerSucc);
+    ASSERT_INT_EQ(queueIntPush(&q, (Int)IntOne), ContainerSucc);
+    ASSERT_INT_EQ(queueIntPush(&q, (Int)IntPosMax), ContainerSucc);
+
+    Int front;
+    ASSERT_INT_EQ(queueIntFront(&q, &front), ContainerSucc);
+    ASSERT_INT_EQ(front, (Int)IntNegMax);
+    ASSERT_INT_EQ(queueIntPop(&q), ContainerSucc);
+    ASSERT_INT_EQ(queueIntFront(&q, &front), ContainerSucc);
+    ASSERT_INT_EQ(front, (Int)IntNegOne);
+    ASSERT_INT_EQ(queueIntPop(&q), ContainerSucc);
+    ASSERT_INT_EQ(queueIntFront(&q, &front), ContainerSucc);
+    ASSERT_INT_EQ(front, (Int)IntZero);
+    ASSERT_INT_EQ(queueIntPop(&q), ContainerSucc);
+    ASSERT_INT_EQ(queueIntFront(&q, &front), ContainerSucc);
+    ASSERT_INT_EQ(front, (Int)IntOne);
+    ASSERT_INT_EQ(queueIntPop(&q), ContainerSucc);
+    ASSERT_INT_EQ(queueIntFront(&q, &front), ContainerSucc);
+    ASSERT_INT_EQ(front, (Int)IntPosMax);
+
+    queueIntDeinit(&q);
+}
+
+static void testQueueIntFifoOrder(void) {
+    enum { NumVals = 5 };
+
+    QueueInt q;
+    memset(&q, 0, sizeof(q));
+    queueIntInit(&q, TestCap);
+
+    for (Int i = 0; i < (Int)NumVals; i++) {
+        ASSERT_INT_EQ(queueIntPush(&q, i * (Int)10), ContainerSucc);
+    }
+
+    for (Int i = 0; i < (Int)NumVals; i++) {
+        Int front;
+        ASSERT_INT_EQ(queueIntFront(&q, &front), ContainerSucc);
+        ASSERT_INT_EQ(front, i * (Int)10);
+        ASSERT_INT_EQ(queueIntPop(&q), ContainerSucc);
+    }
+
+    ASSERT_TRUE(queueIntIsEmpty(&q));
+    queueIntDeinit(&q);
+}
+
+static void testQueueIntReserveAndRefill(void) {
+    enum { TotalPushes = 10, ExpectedFinalCap = 16 };
+
+    QueueInt q;
+    memset(&q, 0, sizeof(q));
+    queueIntInit(&q, TestCap);
+
+    for (Int i = 0; i < (Int)TotalPushes; i++) {
+        ASSERT_INT_EQ(queueIntPush(&q, i), ContainerSucc);
+    }
+    ASSERT_UINT_EQ(q.capacity, ExpectedFinalCap);
+
+    for (Int i = 0; i < (Int)TotalPushes; i++) {
+        Int front;
+        ASSERT_INT_EQ(queueIntFront(&q, &front), ContainerSucc);
+        ASSERT_INT_EQ(front, i);
+        ASSERT_INT_EQ(queueIntPop(&q), ContainerSucc);
+    }
+    ASSERT_TRUE(queueIntIsEmpty(&q));
+
+    /* Refill. */
+    ASSERT_INT_EQ(queueIntPush(&q, (Int)IntValA), ContainerSucc);
+    Int front;
+    ASSERT_INT_EQ(queueIntFront(&q, &front), ContainerSucc);
+    ASSERT_INT_EQ(front, (Int)IntValA);
+
+    queueIntDeinit(&q);
+}
+
+static void testQueueIntInterleavedPushPop(void) {
+    QueueInt q;
+    memset(&q, 0, sizeof(q));
+    queueIntInit(&q, TestCap);
+
+    ASSERT_INT_EQ(queueIntPush(&q, (Int)10), ContainerSucc);
+    ASSERT_INT_EQ(queueIntPush(&q, (Int)20), ContainerSucc);
+    ASSERT_INT_EQ(queueIntPop(&q), ContainerSucc);
+    ASSERT_INT_EQ(queueIntPush(&q, (Int)30), ContainerSucc);
+
+    Int front;
+    ASSERT_INT_EQ(queueIntFront(&q, &front), ContainerSucc);
+    ASSERT_INT_EQ(front, (Int)20);
+    ASSERT_INT_EQ(queueIntPop(&q), ContainerSucc);
+    ASSERT_INT_EQ(queueIntFront(&q, &front), ContainerSucc);
+    ASSERT_INT_EQ(front, (Int)30);
+    ASSERT_INT_EQ(queueIntPop(&q), ContainerSucc);
+    ASSERT_TRUE(queueIntIsEmpty(&q));
+
+    queueIntDeinit(&q);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   ArrayPacket tests
+   ════════════════════════════════════════════════════════════════════════ */
+
+static void testArrayPacketConstants(void) {
+    ASSERT_UINT_EQ(ARRAY_DEFAULT_CAPACITY, DefaultCap);
+}
+
+static void testArrayPacketInitValid(void) {
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    ASSERT_INT_EQ(arrayPacketInit(&a, TestCap), ContainerSucc);
+    ASSERT_UINT_EQ(a.capacity, TestCap);
+    ASSERT_UINT_EQ(a.size, 0);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), 0);
+    ASSERT_TRUE(a.buf != NULL);
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketInitZeroDefault(void) {
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    ASSERT_INT_EQ(arrayPacketInit(&a, USE_DEFAULT_CAPACITY), ContainerSucc);
+    ASSERT_UINT_EQ(a.capacity, ARRAY_DEFAULT_CAPACITY);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), 0);
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketInitOverflow(void) {
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    ASSERT_INT_EQ(arrayPacketInit(&a, SIZE_MAX), ContainerFail);
+
+    ASSERT_UINT_EQ(arrayPacketSize(&a), 0);
+    ASSERT_INT_EQ(arrayPacketPopBack(&a), ContainerFail);
+
+    Packet dest = makeTestPacket(MsgChat, SentinelSeq);
+    ASSERT_INT_EQ(arrayPacketGet(&a, 0, &dest), ContainerFail);
+    ASSERT_UINT_EQ(dest.header.sequenceID, SentinelSeq);
+
+    ASSERT_INT_EQ(arrayPacketInit(&a, TestCap), ContainerSucc);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), 0);
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketDoubleInitLeak(void) {
+    enum { SecondCap = 8 };
+
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    ASSERT_INT_EQ(arrayPacketInit(&a, TestCap), ContainerSucc);
+    void *firstBuf = a.buf;
+    ASSERT_TRUE(firstBuf != NULL);
+
+    ASSERT_INT_EQ(arrayPacketInit(&a, SecondCap), ContainerSucc);
+    ASSERT_UINT_EQ(a.capacity, SecondCap);
+    ASSERT_TRUE(a.buf != firstBuf);
+    ASSERT_TRUE(a.buf != NULL);
+
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketDeinitSafety(void) {
+    arrayPacketDeinit(NULL);
+
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketDeinitDoubleSafe(void) {
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+    arrayPacketDeinit(&a);
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketLifecycleReuse(void) {
+    enum { SecondCap = 16 };
+
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    ASSERT_INT_EQ(arrayPacketInit(&a, TestCap), ContainerSucc);
+    ASSERT_UINT_EQ(a.capacity, TestCap);
+    arrayPacketDeinit(&a);
+
+    ASSERT_INT_EQ(arrayPacketInit(&a, SecondCap), ContainerSucc);
+    ASSERT_UINT_EQ(a.capacity, SecondCap);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), 0);
+
+    Packet pkt = makeTestPacket(MsgChat, SeqA);
+    ASSERT_INT_EQ(arrayPacketPushBack(&a, pkt), ContainerSucc);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), 1);
+
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketPostDeinitStaleFields(void) {
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+    arrayPacketPushBack(&a, makeTestPacket(MsgChat, SeqA));
+
+    size_t savedCapacity = a.capacity;
+    size_t savedSize = a.size;
+    arrayPacketDeinit(&a);
+
+    ASSERT_TRUE(a.buf == NULL);
+    ASSERT_UINT_EQ(a.capacity, savedCapacity);
+    ASSERT_UINT_EQ(a.size, savedSize);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), savedSize);
+
+    ASSERT_INT_EQ(arrayPacketPopBack(&a), ContainerSucc);
+    ASSERT_UINT_EQ(a.size, savedSize - 1);
+    ASSERT_INT_EQ(arrayPacketPopBack(&a), ContainerFail);
+}
+
+static void testArrayPacketEmptyOperations(void) {
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+
+    ASSERT_UINT_EQ(arrayPacketSize(&a), 0);
+    ASSERT_INT_EQ(arrayPacketPopBack(&a), ContainerFail);
+    ASSERT_INT_EQ(arrayPacketPopBack(&a), ContainerFail);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), 0);
+
+    Packet dest = makeTestPacket(MsgChat, SentinelSeq);
+    ASSERT_INT_EQ(arrayPacketGet(&a, 0, &dest), ContainerFail);
+    ASSERT_UINT_EQ(dest.header.sequenceID, SentinelSeq);
+
+    ASSERT_INT_EQ(arrayPacketSet(&a, 0, dest), ContainerFail);
+
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketPushBackGetRoundTrip(void) {
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+
+    Packet pkt = makeTestPacket(MsgChat, SeqA);
+    ASSERT_INT_EQ(arrayPacketPushBack(&a, pkt), ContainerSucc);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), 1);
+
+    Packet got;
+    ASSERT_INT_EQ(arrayPacketGet(&a, 0, &got), ContainerSucc);
+    ASSERT_UINT_EQ(got.header.magic, PACKET_MAGIC);
+    ASSERT_UINT_EQ(got.header.sequenceID, SeqA);
+    ASSERT_TRUE(got.payload == NULL);
+
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketMultiPushBackOrder(void) {
+    enum { NumPkts = 5 };
+
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+
+    for (uint32_t i = 0; i < NumPkts; i++) {
+        Packet pkt = makeTestPacket(MsgChat, i);
+        ASSERT_INT_EQ(arrayPacketPushBack(&a, pkt), ContainerSucc);
+    }
+    ASSERT_UINT_EQ(arrayPacketSize(&a), NumPkts);
+
+    for (uint32_t i = 0; i < NumPkts; i++) {
+        Packet got;
+        ASSERT_INT_EQ(arrayPacketGet(&a, (size_t)i, &got), ContainerSucc);
+        ASSERT_UINT_EQ(got.header.sequenceID, i);
+    }
+
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketSetGetRoundTrip(void) {
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+
+    ASSERT_INT_EQ(arrayPacketPushBack(&a, makeTestPacket(MsgChat, SeqA)),
+                  ContainerSucc);
+
+    Packet replacement = makeTestPacket(MsgLoginReq, SeqB);
+    ASSERT_INT_EQ(arrayPacketSet(&a, 0, replacement), ContainerSucc);
+
+    Packet got;
+    ASSERT_INT_EQ(arrayPacketGet(&a, 0, &got), ContainerSucc);
+    ASSERT_UINT_EQ(got.header.sequenceID, SeqB);
+    ASSERT_UINT_EQ(got.header.messageType, (uint32_t)MsgLoginReq);
+
+    /* OOB Set must fail and leave existing data intact. */
+    ASSERT_INT_EQ(arrayPacketSet(&a, 1, makeTestPacket(MsgChat, IntBogus)),
+                  ContainerFail);
+    ASSERT_INT_EQ(arrayPacketGet(&a, 0, &got), ContainerSucc);
+    ASSERT_UINT_EQ(got.header.sequenceID, SeqB);
+
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketPopBackSequence(void) {
+    enum { PushCount = 3 };
+
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+
+    ASSERT_INT_EQ(arrayPacketPushBack(&a, makeTestPacket(MsgChat, 10)),
+                  ContainerSucc);
+    ASSERT_INT_EQ(arrayPacketPushBack(&a, makeTestPacket(MsgChat, 20)),
+                  ContainerSucc);
+    ASSERT_INT_EQ(arrayPacketPushBack(&a, makeTestPacket(MsgChat, 30)),
+                  ContainerSucc);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), PushCount);
+
+    ASSERT_INT_EQ(arrayPacketPopBack(&a), ContainerSucc);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), PushCount - 1);
+
+    /* Index 2 now OOB. */
+    Packet got;
+    ASSERT_INT_EQ(arrayPacketGet(&a, 2, &got), ContainerFail);
+
+    /* Index 1 still valid. */
+    ASSERT_INT_EQ(arrayPacketGet(&a, 1, &got), ContainerSucc);
+    ASSERT_UINT_EQ(got.header.sequenceID, 20);
+
+    ASSERT_INT_EQ(arrayPacketPopBack(&a), ContainerSucc);
+    ASSERT_INT_EQ(arrayPacketPopBack(&a), ContainerSucc);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), 0);
+    ASSERT_INT_EQ(arrayPacketPopBack(&a), ContainerFail);
+
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketCapacityReserve(void) {
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+
+    for (uint32_t i = 0; i < TestCap; i++) {
+        ASSERT_INT_EQ(arrayPacketPushBack(&a, makeTestPacket(MsgChat, i)),
+                      ContainerSucc);
+    }
+    ASSERT_UINT_EQ(a.capacity, TestCap);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), TestCap);
+
+    ASSERT_INT_EQ(arrayPacketPushBack(&a, makeTestPacket(MsgChat, TestCap)),
+                  ContainerSucc);
+    ASSERT_UINT_EQ(a.capacity, TestCap * 2);
+
+    for (uint32_t i = 0; i <= TestCap; i++) {
+        Packet got;
+        ASSERT_INT_EQ(arrayPacketGet(&a, (size_t)i, &got), ContainerSucc);
+        ASSERT_UINT_EQ(got.header.sequenceID, i);
+    }
+
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketMultipleReserveCycles(void) {
+    enum { TotalPushes = 10, ExpectedFinalCap = 16 };
+
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+
+    for (uint32_t i = 0; i < TotalPushes; i++) {
+        ASSERT_INT_EQ(arrayPacketPushBack(&a, makeTestPacket(MsgChat, i)),
+                      ContainerSucc);
+    }
+    ASSERT_UINT_EQ(a.capacity, ExpectedFinalCap);
+
+    for (uint32_t i = 0; i < TotalPushes; i++) {
+        Packet got;
+        ASSERT_INT_EQ(arrayPacketGet(&a, (size_t)i, &got), ContainerSucc);
+        ASSERT_UINT_EQ(got.header.sequenceID, i);
+    }
+
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketEmptyAndRefill(void) {
+    enum { NewSeq = 99 };
+
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+
+    for (uint32_t i = 0; i < TestCap; i++) {
+        ASSERT_INT_EQ(arrayPacketPushBack(&a, makeTestPacket(MsgChat, i)),
+                      ContainerSucc);
+    }
+    for (uint32_t i = 0; i < TestCap; i++) {
+        ASSERT_INT_EQ(arrayPacketPopBack(&a), ContainerSucc);
+    }
+    ASSERT_UINT_EQ(arrayPacketSize(&a), 0);
+    size_t capAfterDrain = a.capacity;
+
+    ASSERT_INT_EQ(arrayPacketPushBack(&a, makeTestPacket(MsgLoginReq, NewSeq)),
+                  ContainerSucc);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), 1);
+    ASSERT_UINT_EQ(a.capacity, capAfterDrain);
+
+    Packet got;
+    ASSERT_INT_EQ(arrayPacketGet(&a, 0, &got), ContainerSucc);
+    ASSERT_UINT_EQ(got.header.sequenceID, NewSeq);
+
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketAdversarialIndexBounds(void) {
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+
+    ASSERT_INT_EQ(arrayPacketPushBack(&a, makeTestPacket(MsgChat, SeqA)),
+                  ContainerSucc);
+
+    Packet dest = makeTestPacket(MsgChat, SentinelSeq);
+    ASSERT_INT_EQ(arrayPacketGet(&a, 1, &dest), ContainerFail);
+    ASSERT_UINT_EQ(dest.header.sequenceID, SentinelSeq);
+
+    ASSERT_INT_EQ(arrayPacketSet(&a, 1, makeTestPacket(MsgChat, IntBogus)),
+                  ContainerFail);
+    ASSERT_INT_EQ(arrayPacketGet(&a, 0, &dest), ContainerSucc);
+    ASSERT_UINT_EQ(dest.header.sequenceID, SeqA);
+
+    ASSERT_INT_EQ(arrayPacketGet(&a, SIZE_MAX, &dest), ContainerFail);
+    ASSERT_INT_EQ(arrayPacketSet(&a, SIZE_MAX, makeTestPacket(MsgChat, 0)),
+                  ContainerFail);
+
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketNonPayloadRoundTrip(void) {
+    enum { PayloadLen = 16 };
+
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+
+    Packet pkt = makeTestPacketWithPayload(MsgChat, SeqA, PayloadLen);
+    ASSERT_TRUE(pkt.payload != NULL);
+
+    ASSERT_INT_EQ(arrayPacketPushBack(&a, pkt), ContainerSucc);
+
+    Packet got;
+    ASSERT_INT_EQ(arrayPacketGet(&a, 0, &got), ContainerSucc);
+    ASSERT_UINT_EQ(got.header.payloadLength, PayloadLen);
+    ASSERT_TRUE(got.payload != NULL);
+    ASSERT_TRUE(got.payload == pkt.payload);
+    ASSERT_MEM_EQ(got.payload, pkt.payload, PayloadLen);
+
+    free(pkt.payload);
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketInterleavedPushPop(void) {
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+
+    ASSERT_INT_EQ(arrayPacketPushBack(&a, makeTestPacket(MsgChat, 10)),
+                  ContainerSucc);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), 1);
+    ASSERT_INT_EQ(arrayPacketPushBack(&a, makeTestPacket(MsgChat, 20)),
+                  ContainerSucc);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), 2);
+
+    ASSERT_INT_EQ(arrayPacketPopBack(&a), ContainerSucc);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), 1);
+
+    ASSERT_INT_EQ(arrayPacketPushBack(&a, makeTestPacket(MsgChat, 30)),
+                  ContainerSucc);
+    ASSERT_UINT_EQ(arrayPacketSize(&a), 2);
+
+    Packet got;
+    ASSERT_INT_EQ(arrayPacketGet(&a, 0, &got), ContainerSucc);
+    ASSERT_UINT_EQ(got.header.sequenceID, 10);
+    ASSERT_INT_EQ(arrayPacketGet(&a, 1, &got), ContainerSucc);
+    ASSERT_UINT_EQ(got.header.sequenceID, 30);
+
+    arrayPacketDeinit(&a);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   ArrayInt tests
+   ════════════════════════════════════════════════════════════════════════ */
+
+static void testArrayIntInitValid(void) {
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    ASSERT_INT_EQ(arrayIntInit(&a, TestCap), ContainerSucc);
+    ASSERT_UINT_EQ(a.capacity, TestCap);
+    ASSERT_UINT_EQ(a.size, 0);
+    ASSERT_UINT_EQ(arrayIntSize(&a), 0);
+    ASSERT_TRUE(a.buf != NULL);
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntInitZeroDefault(void) {
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    ASSERT_INT_EQ(arrayIntInit(&a, USE_DEFAULT_CAPACITY), ContainerSucc);
+    ASSERT_UINT_EQ(a.capacity, ARRAY_DEFAULT_CAPACITY);
+    ASSERT_UINT_EQ(arrayIntSize(&a), 0);
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntInitOverflow(void) {
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    ASSERT_INT_EQ(arrayIntInit(&a, SIZE_MAX), ContainerFail);
+
+    ASSERT_UINT_EQ(arrayIntSize(&a), 0);
+    ASSERT_INT_EQ(arrayIntPopBack(&a), ContainerFail);
+
+    Int dest = (Int)IntBogus;
+    ASSERT_INT_EQ(arrayIntGet(&a, 0, &dest), ContainerFail);
+    ASSERT_INT_EQ(dest, (Int)IntBogus);
+
+    ASSERT_INT_EQ(arrayIntInit(&a, TestCap), ContainerSucc);
+    ASSERT_TRUE(a.buf != NULL);
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntDeinitSafety(void) {
+    arrayIntDeinit(NULL);
+
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    arrayIntInit(&a, TestCap);
+    arrayIntDeinit(&a);
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntEmptyOperations(void) {
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    arrayIntInit(&a, TestCap);
+
+    ASSERT_UINT_EQ(arrayIntSize(&a), 0);
+    ASSERT_INT_EQ(arrayIntPopBack(&a), ContainerFail);
+    ASSERT_INT_EQ(arrayIntPopBack(&a), ContainerFail);
+    ASSERT_UINT_EQ(arrayIntSize(&a), 0);
+
+    Int dest = (Int)IntBogus;
+    ASSERT_INT_EQ(arrayIntGet(&a, 0, &dest), ContainerFail);
+    ASSERT_INT_EQ(dest, (Int)IntBogus);
+
+    ASSERT_INT_EQ(arrayIntSet(&a, 0, (Int)IntValA), ContainerFail);
+
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntPushBackGetRoundTrip(void) {
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    arrayIntInit(&a, TestCap);
+
+    ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)IntNegMax), ContainerSucc);
+    ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)IntNegOne), ContainerSucc);
+    ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)IntZero), ContainerSucc);
+    ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)IntOne), ContainerSucc);
+    ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)IntPosMax), ContainerSucc);
+    ASSERT_UINT_EQ(arrayIntSize(&a), 5);
+
+    Int val;
+    ASSERT_INT_EQ(arrayIntGet(&a, 0, &val), ContainerSucc);
+    ASSERT_INT_EQ(val, (Int)IntNegMax);
+    ASSERT_INT_EQ(arrayIntGet(&a, 1, &val), ContainerSucc);
+    ASSERT_INT_EQ(val, (Int)IntNegOne);
+    ASSERT_INT_EQ(arrayIntGet(&a, 2, &val), ContainerSucc);
+    ASSERT_INT_EQ(val, (Int)IntZero);
+    ASSERT_INT_EQ(arrayIntGet(&a, 3, &val), ContainerSucc);
+    ASSERT_INT_EQ(val, (Int)IntOne);
+    ASSERT_INT_EQ(arrayIntGet(&a, 4, &val), ContainerSucc);
+    ASSERT_INT_EQ(val, (Int)IntPosMax);
+
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntMultiPushBackOrder(void) {
+    enum { NumVals = 5 };
+
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    arrayIntInit(&a, TestCap);
+
+    for (Int i = 0; i < (Int)NumVals; i++) {
+        ASSERT_INT_EQ(arrayIntPushBack(&a, i * (Int)10), ContainerSucc);
+    }
+    ASSERT_UINT_EQ(arrayIntSize(&a), NumVals);
+
+    for (Int i = 0; i < (Int)NumVals; i++) {
+        Int val;
+        ASSERT_INT_EQ(arrayIntGet(&a, (size_t)i, &val), ContainerSucc);
+        ASSERT_INT_EQ(val, i * (Int)10);
+    }
+
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntSetGetRoundTrip(void) {
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    arrayIntInit(&a, TestCap);
+
+    ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)IntValA), ContainerSucc);
+    ASSERT_INT_EQ(arrayIntSet(&a, 0, (Int)IntValB), ContainerSucc);
+
+    Int val;
+    ASSERT_INT_EQ(arrayIntGet(&a, 0, &val), ContainerSucc);
+    ASSERT_INT_EQ(val, (Int)IntValB);
+
+    ASSERT_INT_EQ(arrayIntSet(&a, 1, (Int)IntBogus), ContainerFail);
+    ASSERT_INT_EQ(arrayIntGet(&a, 0, &val), ContainerSucc);
+    ASSERT_INT_EQ(val, (Int)IntValB);
+
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntPopBackSequence(void) {
+    enum { PushCount = 3 };
+
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    arrayIntInit(&a, TestCap);
+
+    ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)IntValA), ContainerSucc);
+    ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)IntValB), ContainerSucc);
+    ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)IntValC), ContainerSucc);
+    ASSERT_UINT_EQ(arrayIntSize(&a), PushCount);
+
+    ASSERT_INT_EQ(arrayIntPopBack(&a), ContainerSucc);
+    ASSERT_UINT_EQ(arrayIntSize(&a), PushCount - 1);
+
+    Int val;
+    ASSERT_INT_EQ(arrayIntGet(&a, 2, &val), ContainerFail);
+    ASSERT_INT_EQ(arrayIntGet(&a, 1, &val), ContainerSucc);
+    ASSERT_INT_EQ(val, (Int)IntValB);
+
+    ASSERT_INT_EQ(arrayIntPopBack(&a), ContainerSucc);
+    ASSERT_INT_EQ(arrayIntPopBack(&a), ContainerSucc);
+    ASSERT_UINT_EQ(arrayIntSize(&a), 0);
+    ASSERT_INT_EQ(arrayIntPopBack(&a), ContainerFail);
+    ASSERT_UINT_EQ(arrayIntSize(&a), 0);
+
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntCapacityReserve(void) {
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    arrayIntInit(&a, TestCap);
+
+    for (uint32_t i = 0; i < TestCap; i++) {
+        ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)i), ContainerSucc);
+    }
+    ASSERT_UINT_EQ(a.capacity, TestCap);
+
+    ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)TestCap), ContainerSucc);
+    ASSERT_UINT_EQ(a.capacity, TestCap * 2);
+
+    for (uint32_t i = 0; i <= TestCap; i++) {
+        Int val;
+        ASSERT_INT_EQ(arrayIntGet(&a, (size_t)i, &val), ContainerSucc);
+        ASSERT_INT_EQ(val, (Int)i);
+    }
+
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntMultipleReserveCycles(void) {
+    enum { TotalPushes = 10, ExpectedFinalCap = 16 };
+
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    arrayIntInit(&a, TestCap);
+
+    for (Int i = 0; i < (Int)TotalPushes; i++) {
+        ASSERT_INT_EQ(arrayIntPushBack(&a, i), ContainerSucc);
+    }
+    ASSERT_UINT_EQ(a.capacity, ExpectedFinalCap);
+
+    for (Int i = 0; i < (Int)TotalPushes; i++) {
+        Int val;
+        ASSERT_INT_EQ(arrayIntGet(&a, (size_t)i, &val), ContainerSucc);
+        ASSERT_INT_EQ(val, i);
+    }
+
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntEmptyAndRefill(void) {
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    arrayIntInit(&a, TestCap);
+
+    for (uint32_t i = 0; i < TestCap; i++) {
+        ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)i), ContainerSucc);
+    }
+    for (uint32_t i = 0; i < TestCap; i++) {
+        ASSERT_INT_EQ(arrayIntPopBack(&a), ContainerSucc);
+    }
+    ASSERT_UINT_EQ(arrayIntSize(&a), 0);
+    size_t capAfterDrain = a.capacity;
+
+    ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)IntValC), ContainerSucc);
+    ASSERT_UINT_EQ(arrayIntSize(&a), 1);
+    ASSERT_UINT_EQ(a.capacity, capAfterDrain);
+
+    Int val;
+    ASSERT_INT_EQ(arrayIntGet(&a, 0, &val), ContainerSucc);
+    ASSERT_INT_EQ(val, (Int)IntValC);
+
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntAdversarialIndexBounds(void) {
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    arrayIntInit(&a, TestCap);
+
+    ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)IntValA), ContainerSucc);
+
+    Int dest = (Int)IntBogus;
+    ASSERT_INT_EQ(arrayIntGet(&a, 1, &dest), ContainerFail);
+    ASSERT_INT_EQ(dest, (Int)IntBogus);
+
+    ASSERT_INT_EQ(arrayIntSet(&a, 1, (Int)IntBogus), ContainerFail);
+    ASSERT_INT_EQ(arrayIntGet(&a, 0, &dest), ContainerSucc);
+    ASSERT_INT_EQ(dest, (Int)IntValA);
+
+    ASSERT_INT_EQ(arrayIntGet(&a, SIZE_MAX, &dest), ContainerFail);
+    ASSERT_INT_EQ(arrayIntSet(&a, SIZE_MAX, (Int)IntBogus), ContainerFail);
+
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntInterleavedPushPop(void) {
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    arrayIntInit(&a, TestCap);
+
+    ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)IntValA), ContainerSucc);
+    ASSERT_UINT_EQ(arrayIntSize(&a), 1);
+    ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)IntValB), ContainerSucc);
+    ASSERT_UINT_EQ(arrayIntSize(&a), 2);
+
+    ASSERT_INT_EQ(arrayIntPopBack(&a), ContainerSucc);
+    ASSERT_UINT_EQ(arrayIntSize(&a), 1);
+
+    ASSERT_INT_EQ(arrayIntPushBack(&a, (Int)IntValC), ContainerSucc);
+    ASSERT_UINT_EQ(arrayIntSize(&a), 2);
+
+    Int val;
+    ASSERT_INT_EQ(arrayIntGet(&a, 0, &val), ContainerSucc);
+    ASSERT_INT_EQ(val, (Int)IntValA);
+    ASSERT_INT_EQ(arrayIntGet(&a, 1, &val), ContainerSucc);
+    ASSERT_INT_EQ(val, (Int)IntValC);
+
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntPostDeinitSizeZero(void) {
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    arrayIntInit(&a, TestCap);
+    arrayIntDeinit(&a);
+
+    ASSERT_UINT_EQ(arrayIntSize(&a), 0);
+    ASSERT_INT_EQ(arrayIntPopBack(&a), ContainerFail);
+
+    Int dest = (Int)IntBogus;
+    ASSERT_INT_EQ(arrayIntGet(&a, 0, &dest), ContainerFail);
+    ASSERT_INT_EQ(dest, (Int)IntBogus);
+    ASSERT_INT_EQ(arrayIntSet(&a, 0, (Int)IntBogus), ContainerFail);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   main
+   ════════════════════════════════════════════════════════════════════════ */
 
 int main(void) {
     printf("test_container:\n");
 
-    /* 1. Constants */
-    RUN_TEST(testContainerConstants);
+    /* QueuePacket */
+    RUN_TEST(testQueuePacketConstants);
+    RUN_TEST(testQueuePacketInitValid);
+    RUN_TEST(testQueuePacketInitZeroDefault);
+    RUN_TEST(testQueuePacketInitCapacityOne);
+    RUN_TEST(testQueuePacketInitOverflow);
+    RUN_TEST(testQueuePacketDoubleInitLeak);
+    RUN_TEST(testQueuePacketDeinitSafety);
+    RUN_TEST(testQueuePacketDeinitDoubleSafe);
+    RUN_TEST(testQueuePacketLifecycleReuse);
+    RUN_TEST(testQueuePacketPostDeinitStaleFields);
+    RUN_TEST(testQueuePacketEmptyOperations);
+    RUN_TEST(testQueuePacketPushFrontRoundTrip);
+    RUN_TEST(testQueuePacketFifoOrder);
+    RUN_TEST(testQueuePacketPushToFullCapacity);
+    RUN_TEST(testQueuePacketMultipleReserveCycles);
+    RUN_TEST(testQueuePacketEmptyAndRefill);
+    RUN_TEST(testQueuePacketReserveFromNonZeroHead);
+    RUN_TEST(testQueuePacketInterleavedPushPop);
+    RUN_TEST(testQueuePacketLargeCapacityStress);
+    RUN_TEST(testQueuePacketDeinitWithElements);
+    RUN_TEST(testQueuePacketNonPayloadRoundTrip);
+    RUN_TEST(testQueuePacketFrontFailureLeavesDestUnchanged);
 
-    /* 2. Init basics & boundaries */
-    RUN_TEST(testInitValidCapacity);
-    RUN_TEST(testInitZeroCapacityDefault);
-    RUN_TEST(testInitCapacityOne);
+    /* QueueInt */
+    RUN_TEST(testQueueIntInitValid);
+    RUN_TEST(testQueueIntInitZeroDefault);
+    RUN_TEST(testQueueIntInitOverflow);
+    RUN_TEST(testQueueIntDeinitSafety);
+    RUN_TEST(testQueueIntEmptyOperations);
+    RUN_TEST(testQueueIntPushFrontRoundTrip);
+    RUN_TEST(testQueueIntExtremeValues);
+    RUN_TEST(testQueueIntFifoOrder);
+    RUN_TEST(testQueueIntReserveAndRefill);
+    RUN_TEST(testQueueIntInterleavedPushPop);
 
-    /* 3. Init error paths */
-    RUN_TEST(testInitOverflowCapacity);
-    RUN_TEST(testDoubleInitLeak);
+    /* ArrayPacket */
+    RUN_TEST(testArrayPacketConstants);
+    RUN_TEST(testArrayPacketInitValid);
+    RUN_TEST(testArrayPacketInitZeroDefault);
+    RUN_TEST(testArrayPacketInitOverflow);
+    RUN_TEST(testArrayPacketDoubleInitLeak);
+    RUN_TEST(testArrayPacketDeinitSafety);
+    RUN_TEST(testArrayPacketDeinitDoubleSafe);
+    RUN_TEST(testArrayPacketLifecycleReuse);
+    RUN_TEST(testArrayPacketPostDeinitStaleFields);
+    RUN_TEST(testArrayPacketEmptyOperations);
+    RUN_TEST(testArrayPacketPushBackGetRoundTrip);
+    RUN_TEST(testArrayPacketMultiPushBackOrder);
+    RUN_TEST(testArrayPacketSetGetRoundTrip);
+    RUN_TEST(testArrayPacketPopBackSequence);
+    RUN_TEST(testArrayPacketCapacityReserve);
+    RUN_TEST(testArrayPacketMultipleReserveCycles);
+    RUN_TEST(testArrayPacketEmptyAndRefill);
+    RUN_TEST(testArrayPacketAdversarialIndexBounds);
+    RUN_TEST(testArrayPacketNonPayloadRoundTrip);
+    RUN_TEST(testArrayPacketInterleavedPushPop);
 
-    /* 4. Deinit safety */
-    RUN_TEST(testDeinitNullSafety);
-    RUN_TEST(testDeinitDoubleSafety);
-
-    /* 5. Lifecycle */
-    RUN_TEST(testInitDeinitInitReuse);
-
-    /* 6. Memory safety */
-    RUN_TEST(testUseAfterDeinit);
-
-    /* 7. Empty queue operations */
-    RUN_TEST(testEmptyQueueOperations);
-
-    /* 8. Push / Front round-trip */
-    RUN_TEST(testPushFrontRoundTrip);
-
-    /* 9. FIFO order */
-    RUN_TEST(testPushPopFifoOrder);
-
-    /* 10. Capacity boundary */
-    RUN_TEST(testPushToFullCapacity);
-
-    /* 11. Reserve from non-zero head */
-    RUN_TEST(testReserveFromNonZeroHead);
-
-    /* 12. Multiple Reserve cycles */
-    RUN_TEST(testMultipleReserveCycles);
-
-    /* 13. Empty and refill */
-    RUN_TEST(testEmptyAndRefill);
-
-    /* 14. Large capacity stress */
-    RUN_TEST(testLargeCapacityStress);
+    /* ArrayInt */
+    RUN_TEST(testArrayIntInitValid);
+    RUN_TEST(testArrayIntInitZeroDefault);
+    RUN_TEST(testArrayIntInitOverflow);
+    RUN_TEST(testArrayIntDeinitSafety);
+    RUN_TEST(testArrayIntEmptyOperations);
+    RUN_TEST(testArrayIntPushBackGetRoundTrip);
+    RUN_TEST(testArrayIntMultiPushBackOrder);
+    RUN_TEST(testArrayIntSetGetRoundTrip);
+    RUN_TEST(testArrayIntPopBackSequence);
+    RUN_TEST(testArrayIntCapacityReserve);
+    RUN_TEST(testArrayIntMultipleReserveCycles);
+    RUN_TEST(testArrayIntEmptyAndRefill);
+    RUN_TEST(testArrayIntAdversarialIndexBounds);
+    RUN_TEST(testArrayIntInterleavedPushPop);
+    RUN_TEST(testArrayIntPostDeinitSizeZero);
 
     return TEST_REPORT();
 }

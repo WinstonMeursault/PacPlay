@@ -62,3 +62,4 @@ AGENTS.md
 build/
 bin/
 db/
+src/common/tui/test/
