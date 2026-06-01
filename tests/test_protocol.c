@@ -176,17 +176,19 @@ static void testMessageTypeValues(void) {
     ASSERT_INT_EQ(MsgTOTPSetupResp, 8);
     ASSERT_INT_EQ(MsgTOTPVerifyReq, 9);
     ASSERT_INT_EQ(MsgTOTPVerifyResp, 10);
-    ASSERT_INT_EQ(MsgRoomListReq, 11);
-    ASSERT_INT_EQ(MsgRoomListResp, 12);
-    ASSERT_INT_EQ(MsgCreateRoom, 13);
-    ASSERT_INT_EQ(MsgCreateRoomResp, 14);
-    ASSERT_INT_EQ(MsgJoinRoom, 15);
-    ASSERT_INT_EQ(MsgJoinRoomResp, 16);
-    ASSERT_INT_EQ(MsgChat, 17);
-    ASSERT_INT_EQ(MsgLogout, 18);
-    ASSERT_INT_EQ(MsgHeartbeat, 19);
-    ASSERT_INT_EQ(MsgGameStart, 20);
-    ASSERT_INT_EQ(MsgGameStop, 21);
+    ASSERT_INT_EQ(MsgDBKeyReq, 11);
+    ASSERT_INT_EQ(MsgDBKeyResp, 12);
+    ASSERT_INT_EQ(MsgRoomListReq, 13);
+    ASSERT_INT_EQ(MsgRoomListResp, 14);
+    ASSERT_INT_EQ(MsgCreateRoom, 15);
+    ASSERT_INT_EQ(MsgCreateRoomResp, 16);
+    ASSERT_INT_EQ(MsgJoinRoom, 17);
+    ASSERT_INT_EQ(MsgJoinRoomResp, 18);
+    ASSERT_INT_EQ(MsgChat, 19);
+    ASSERT_INT_EQ(MsgLogout, 20);
+    ASSERT_INT_EQ(MsgHeartbeat, 21);
+    ASSERT_INT_EQ(MsgGameStart, 22);
+    ASSERT_INT_EQ(MsgGameStop, 23);
 }
 
 /** @brief NULL_SOCKETFD sentinel value. */
@@ -1757,9 +1759,9 @@ static void testTOTPSetupRespPayloadProtocolRoundtrip(void) {
     packetClear(&pkt2);
 }
 
-/** @brief MessageType enum has exactly 21 values. */
+/** @brief MessageType enum has exactly 23 values. */
 static void testMessageTypeCount(void) {
-    ASSERT_INT_EQ(MsgGameStop, 21);
+    ASSERT_INT_EQ(MsgGameStop, 23);
 }
 
 /* ═══════════════════════  main  ════════════════════════════════════════ */

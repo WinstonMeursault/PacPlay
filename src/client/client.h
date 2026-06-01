@@ -28,6 +28,8 @@
 #include "crypto.h"
 #include "protocol.h"
 
+struct ClientDB; /* forward — full definition in client/database.h */
+
 #include <stdint.h>
 
 /* ──────────────────────── return codes ─────────────────────────────────── */
@@ -37,12 +39,14 @@
 
 /* ──────────────────────── types ────────────────────────────────────────── */
 
-typedef struct {
+typedef struct Client {
     SocketFD fd;
     AESGCMKey aesKey;
     uint32_t uid;
     uint32_t currentRoomId;
     uint32_t seqID;
+    uint8_t cdbkey[CLIENT_DB_KEY_LEN]; /**< Per-user CDBKey received from server. */
+    struct ClientDB *db;               /**< Opaque encrypted client database. */
 } Client;
 
 /* ──────────────────────── public API ───────────────────────────────────── */

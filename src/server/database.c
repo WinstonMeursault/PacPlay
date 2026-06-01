@@ -37,12 +37,17 @@
 #include "log.h"
 
 #include <errno.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include <openssl/crypto.h>
+
+/** @brief SQLCipher key setter — not declared in standard sqlite3.h. */
+int sqlite3_key(sqlite3 *db, const void *pKey, int nKey);
 
 #ifdef _WIN32
 #include <direct.h>
@@ -66,7 +71,8 @@
     "username TEXT UNIQUE NOT NULL, "                                          \
     "nickname TEXT NOT NULL, "                                                 \
     "password TEXT NOT NULL, "                                                 \
-    "totp_secret BLOB"                                                         \
+    "totp_secret BLOB, "                                                       \
+    "cdbkey BLOB"                                                              \
     ");"
 
 /** @brief SQL to create the global message sequence table. */
@@ -80,8 +86,8 @@
 /** @brief INSERT a user record. Params: ?1=uid, ?2=username, ?3=nickname,
     ?4=password. uid is server-generated and validated as unique before insert. */
 #define SQL_INSERT_USER                                                        \
-    "INSERT INTO users (uid, username, nickname, password, totp_secret) "      \
-    "VALUES (?, ?, ?, ?, ?);"
+    "INSERT INTO users (uid, username, nickname, password, totp_secret, "      \
+    "cdbkey) VALUES (?, ?, ?, ?, ?, ?);"
 
 /** @brief DELETE a user by uid. Params: ?1=uid. */
 #define SQL_DELETE_USER "DELETE FROM users WHERE uid = ?;"
@@ -101,6 +107,9 @@
 
 /** @brief SELECT totp_secret by uid. Params: ?1=uid. Columns: 0=totp_secret. */
 #define SQL_SELECT_TOTP_BY_UID "SELECT totp_secret FROM users WHERE uid = ?;"
+
+/** @brief SELECT cdbkey by uid. Params: ?1=uid. Columns: 0=cdbkey. */
+#define SQL_SELECT_CDBKEY_BY_UID "SELECT cdbkey FROM users WHERE uid = ?;"
 
 /* ──────────────────────── ServerDB prepared SQL ─────────────────────────── */
 
@@ -585,6 +594,14 @@ static int prepareUserStmts(DB *database) {
         return DB_FAIL;
     }
 
+    rc = sqlite3_prepare_v2(database->handle, SQL_SELECT_CDBKEY_BY_UID, -1,
+                            &database->stmtGetCDBKey, NULL);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("prepareUserStmts: SELECT cdbkey prepare failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
     return DB_SUCC;
 }
 
@@ -686,7 +703,7 @@ static int prepareServerDBStmts(DB *database) {
 
 /* ──────────────────────── public API: lifecycle ───────────────────────── */
 
-DB *dbInit(DBType dbType) {
+DB *dbInit(DBType dbType, const uint8_t *encKey) {
     const char *dbPath = NULL;
 
     switch (dbType) {
@@ -728,6 +745,21 @@ DB *dbInit(DBType dbType) {
         sqlite3_close(database->handle);
         free(database);
         return NULL;
+    }
+
+    /* Apply encryption key for non-ServerDB databases — must be set before
+     * any PRAGMA or schema operation so that newly created databases are
+     * encrypted from the first byte written. */
+    if (encKey != NULL) {
+        rc = sqlite3_key(database->handle, encKey, (int)DB_ENC_KEY_LEN);
+        if (rc != SQLITE_OK) {
+            LOG_ERROR("dbInit: sqlite3_key('%s') failed: %s (rc=%d)", dbPath,
+                      sqlite3_errmsg(database->handle), rc);
+            sqlite3_close(database->handle);
+            free(database);
+            return NULL;
+        }
+        memcpy(database->dbEncKey, encKey, DB_ENC_KEY_LEN);
     }
 
     /* Enable WAL mode for better concurrent read performance */
@@ -804,6 +836,7 @@ DB *dbInit(DBType dbType) {
         finalizeStmt(&database->stmtUidCheck);
         finalizeStmt(&database->stmtSetTotpSecret);
         finalizeStmt(&database->stmtGetTOTPSecret);
+        finalizeStmt(&database->stmtGetCDBKey);
         finalizeStmt(&database->stmtSetKey);
         finalizeStmt(&database->stmtGetKey);
         finalizeStmt(&database->stmtSeq);
@@ -830,6 +863,7 @@ void dbClose(DB *database) {
     finalizeStmt(&database->stmtUidCheck);
     finalizeStmt(&database->stmtSetTotpSecret);
     finalizeStmt(&database->stmtGetTOTPSecret);
+    finalizeStmt(&database->stmtGetCDBKey);
 
     /* Finalize ServerDB cached statements */
     finalizeStmt(&database->stmtSetKey);
@@ -847,11 +881,14 @@ void dbClose(DB *database) {
     }
 
     OPENSSL_cleanse(database->dekKey, sizeof(database->dekKey));
+    OPENSSL_cleanse(database->dbEncKey, sizeof(database->dbEncKey));
     free(database);
 }
 
 /* ──────────────────────── public API: user operations ─────────────────── */
 
+static uint8_t *encryptBlob(const uint8_t *data, size_t dataLen,
+                            const uint8_t *dekKey, size_t *outLen);
 static uint8_t *encryptTOTP(const char *secret, const uint8_t *dekKey,
                             size_t *outLen);
 static char *decryptTOTP(const uint8_t *blob, size_t blobLen,
@@ -927,6 +964,13 @@ int createUser(DB *database, User *user) {
         return DB_FAIL;
     }
 
+    /* Generate a 256-bit per-user CDBKey (Client Database Key). */
+    uint8_t cdbKey[DB_ENC_KEY_LEN];
+    if (cryptoRandomBytes(cdbKey, DB_ENC_KEY_LEN) != CRYPTO_SUCC) {
+        LOG_ERROR("createUser: CDBKey generation failed");
+        return DB_FAIL;
+    }
+
     /* Hash the plaintext password for secure storage */
     char *hashed = hashPassword(user->password);
     if (hashed == NULL) {
@@ -974,13 +1018,14 @@ int createUser(DB *database, User *user) {
         return DB_FAIL;
     }
 
-    enum { TotpBindIndex = 5 };
+    enum { TotpBindIndex = 5, CdbkeyBindIndex = 6 };
     if (user->totpSecret != NULL) {
         size_t encLen = 0;
         uint8_t *enc = encryptTOTP(user->totpSecret, database->dekKey, &encLen);
         if (enc == NULL) {
             OPENSSL_cleanse(hashed, strlen(hashed));
             free(hashed);
+            OPENSSL_cleanse(cdbKey, sizeof(cdbKey));
             return DB_FAIL;
         }
         rc = sqlite3_bind_blob(stmt, TotpBindIndex, enc, (int)encLen, free);
@@ -989,6 +1034,26 @@ int createUser(DB *database, User *user) {
     }
     if (rc != SQLITE_OK) {
         LOG_ERROR("createUser: bind totp_secret failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        OPENSSL_cleanse(hashed, strlen(hashed));
+        free(hashed);
+        OPENSSL_cleanse(cdbKey, sizeof(cdbKey));
+        return DB_FAIL;
+    }
+
+    size_t cdbkeyEncLen = 0;
+    uint8_t *cdbkeyEnc = encryptBlob(cdbKey, DB_ENC_KEY_LEN, database->dekKey,
+                                     &cdbkeyEncLen);
+    OPENSSL_cleanse(cdbKey, sizeof(cdbKey));
+    if (cdbkeyEnc == NULL) {
+        OPENSSL_cleanse(hashed, strlen(hashed));
+        free(hashed);
+        return DB_FAIL;
+    }
+    rc = sqlite3_bind_blob(stmt, CdbkeyBindIndex, cdbkeyEnc, (int)cdbkeyEncLen,
+                           free);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("createUser: bind cdbkey failed: %s (rc=%d)",
                   sqlite3_errmsg(database->handle), rc);
         OPENSSL_cleanse(hashed, strlen(hashed));
         free(hashed);
@@ -1128,55 +1193,55 @@ int verifyUser(DB *database, User *user) {
     return DB_SUCC;
 }
 
-/* ──────────── TOTP secret AES-256-GCM envelope helpers ─────────────────── */
+/* ──────────── DEK AES-256-GCM envelope helpers ──────────────────────────── */
 
 /**
- * @brief Encrypt a TOTP secret with the DEK via AES-256-GCM.
+ * @brief Encrypt arbitrary data with the DEK via AES-256-GCM.
  *
  * Returns a heap-allocated BLOB in the format
  * @c nonce(12) @c || @c ciphertext(n) @c || @c tag(16).
  * The caller must @c free() the returned pointer.
  *
- * @param secret   Null-terminated plaintext secret.
+ * @param data     Pointer to plaintext data.
+ * @param dataLen  Length of @p data in bytes.
  * @param dekKey   Pointer to 32-byte DEK.
  * @param outLen   Receives the total encrypted blob length.
  * @return Heap-allocated encrypted blob, or NULL on failure.
  */
-static uint8_t *encryptTOTP(const char *secret, const uint8_t *dekKey,
-                            size_t *outLen) {
-    size_t ptLen = strlen(secret);
+static uint8_t *encryptBlob(const uint8_t *data, size_t dataLen,
+                            const uint8_t *dekKey, size_t *outLen) {
     AESGCMKey key;
     memcpy(key.key, dekKey, AES_GCM_KEY_LEN);
     if (cryptoRandomBytes(key.nonce, AES_GCM_NONCE_LEN) != CRYPTO_SUCC) {
-        LOG_ERROR("encryptTOTP: nonce generation failed");
+        LOG_ERROR("encryptBlob: nonce generation failed");
         return NULL;
     }
 
-    AESGCMBuffer pt = {.data = (uint8_t *)(uintptr_t)secret,
-                        .len = ptLen,
-                        .capacity = ptLen};
+    AESGCMBuffer pt = {.data = (uint8_t *)(uintptr_t)data,
+                        .len = dataLen,
+                        .capacity = dataLen};
     AESGCMCipher ct;
-    if (aesGCMBufferInit(&ct.buffer, ptLen) != CRYPTO_SUCC) {
+    if (aesGCMBufferInit(&ct.buffer, dataLen) != CRYPTO_SUCC) {
         return NULL;
     }
 
     if (encryptAESGCM(&pt, NULL, &key, &ct) != CRYPTO_SUCC) {
-        LOG_ERROR("encryptTOTP: encryption failed");
+        LOG_ERROR("encryptBlob: encryption failed");
         aesGCMBufferDeinit(&ct.buffer);
         return NULL;
     }
 
-    size_t total = AES_GCM_NONCE_LEN + ptLen + AES_GCM_TAG_LEN;
+    size_t total = AES_GCM_NONCE_LEN + dataLen + AES_GCM_TAG_LEN;
     uint8_t *blob = malloc(total);
     if (blob == NULL) {
-        LOG_ERROR("encryptTOTP: malloc failed (errno=%d)", errno);
+        LOG_ERROR("encryptBlob: malloc failed (errno=%d)", errno);
         aesGCMBufferDeinit(&ct.buffer);
         return NULL;
     }
 
     memcpy(blob, key.nonce, AES_GCM_NONCE_LEN);
-    memcpy(blob + AES_GCM_NONCE_LEN, ct.buffer.data, ptLen);
-    memcpy(blob + AES_GCM_NONCE_LEN + ptLen, ct.tag, AES_GCM_TAG_LEN);
+    memcpy(blob + AES_GCM_NONCE_LEN, ct.buffer.data, dataLen);
+    memcpy(blob + AES_GCM_NONCE_LEN + dataLen, ct.tag, AES_GCM_TAG_LEN);
     *outLen = total;
 
     aesGCMBufferDeinit(&ct.buffer);
@@ -1184,21 +1249,22 @@ static uint8_t *encryptTOTP(const char *secret, const uint8_t *dekKey,
 }
 
 /**
- * @brief Decrypt a TOTP secret envelope with the DEK.
+ * @brief Decrypt a DEK-encrypted envelope via AES-256-GCM.
  *
- * Parses the @c nonce @c || @c ciphertext @c || @c tag BLOB, decrypts
- * via AES-256-GCM, and returns a null-terminated plaintext string.
- * The caller must @c free() the returned pointer.
+ * Parses the @c nonce @c || @c ciphertext @c || @c tag BLOB, decrypts,
+ * and returns the heap-allocated plaintext.  The caller must @c free()
+ * the returned pointer.
  *
  * @param blob      Encrypted BLOB (nonce + CT + tag).
  * @param blobLen   Total length of @p blob.
  * @param dekKey    Pointer to 32-byte DEK.
- * @return Heap-allocated plaintext TOTP secret, or NULL on failure.
+ * @param outLen    Receives the plaintext length in bytes.
+ * @return Heap-allocated plaintext, or NULL on failure.
  */
-static char *decryptTOTP(const uint8_t *blob, size_t blobLen,
-                         const uint8_t *dekKey) {
+static uint8_t *decryptBlob(const uint8_t *blob, size_t blobLen,
+                            const uint8_t *dekKey, size_t *outLen) {
     if (blobLen < AES_GCM_NONCE_LEN + AES_GCM_TAG_LEN) {
-        LOG_ERROR("decryptTOTP: blob too short (%zu bytes)", blobLen);
+        LOG_ERROR("decryptBlob: blob too short (%zu bytes)", blobLen);
         return NULL;
     }
 
@@ -1222,21 +1288,66 @@ static char *decryptTOTP(const uint8_t *blob, size_t blobLen,
     if (ret != CRYPTO_SUCC) {
         aesGCMBufferDeinit(&pt);
         if (ret == CRYPTO_AUTH_FAIL) {
-            LOG_ERROR("decryptTOTP: authentication failed — wrong DEK?");
+            LOG_ERROR("decryptBlob: authentication failed — wrong DEK?");
         }
         return NULL;
     }
 
-    char *result = malloc(pt.len + 1);
+    uint8_t *result = malloc(pt.len);
     if (result == NULL) {
-        LOG_ERROR("decryptTOTP: malloc failed (errno=%d)", errno);
+        LOG_ERROR("decryptBlob: malloc failed (errno=%d)", errno);
         aesGCMBufferDeinit(&pt);
         return NULL;
     }
     memcpy(result, pt.data, pt.len);
-    result[pt.len] = '\0';
+    *outLen = pt.len;
     aesGCMBufferDeinit(&pt);
     return result;
+}
+
+/* ───────────── TOTP / CDBKey thin wrappers ──────────────────────────────── */
+
+static uint8_t *encryptTOTP(const char *secret, const uint8_t *dekKey,
+                            size_t *outLen) {
+    return encryptBlob((const uint8_t *)secret, strlen(secret), dekKey, outLen);
+}
+
+static char *decryptTOTP(const uint8_t *blob, size_t blobLen,
+                         const uint8_t *dekKey) {
+    size_t ptLen = 0;
+    uint8_t *pt = decryptBlob(blob, blobLen, dekKey, &ptLen);
+    if (pt == NULL) {
+        return NULL;
+    }
+    char *result = malloc(ptLen + 1);
+    if (result == NULL) {
+        LOG_ERROR("decryptTOTP: malloc failed (errno=%d)", errno);
+        free(pt);
+        return NULL;
+    }
+    memcpy(result, pt, ptLen);
+    result[ptLen] = '\0';
+    free(pt);
+    return result;
+}
+
+static int decryptCDBKey(const uint8_t *blob, size_t blobLen,
+                         const uint8_t *dekKey,
+                         uint8_t outKey[DB_ENC_KEY_LEN]) {
+    size_t ptLen = 0;
+    uint8_t *pt = decryptBlob(blob, blobLen, dekKey, &ptLen);
+    if (pt == NULL) {
+        return DB_FAIL;
+    }
+    if (ptLen != DB_ENC_KEY_LEN) {
+        LOG_ERROR("decryptCDBKey: wrong plaintext length (%zu, expected %d)",
+                  ptLen, DB_ENC_KEY_LEN);
+        free(pt);
+        return DB_FAIL;
+    }
+    memcpy(outKey, pt, DB_ENC_KEY_LEN);
+    free(pt);
+    return DB_SUCC;
 }
 
 /* ──────────────────────── public API: set/TOTP operations ─────────────── */
@@ -1249,6 +1360,17 @@ void dbSetDekKey(DB *database, const uint8_t *dekKey) {
         memcpy(database->dekKey, dekKey, AES_GCM_KEY_LEN);
     } else {
         memset(database->dekKey, 0, sizeof(database->dekKey));
+    }
+}
+
+void dbSetDbEncKey(DB *database, const uint8_t *key) {
+    if (database == NULL) {
+        return;
+    }
+    if (key != NULL) {
+        memcpy(database->dbEncKey, key, DB_ENC_KEY_LEN);
+    } else {
+        memset(database->dbEncKey, 0, sizeof(database->dbEncKey));
     }
 }
 
@@ -1287,6 +1409,50 @@ char *getTOTPSecret(DB *database, User *user) {
 
     return decryptTOTP((const uint8_t *)blobData, (size_t)blobLen,
                        database->dekKey);
+}
+
+int getCDBKey(DB *database, uint32_t uid, uint8_t outKey[DB_ENC_KEY_LEN]) {
+    if (database == NULL) {
+        LOG_ERROR("getCDBKey: NULL database");
+        return DB_FAIL;
+    }
+    if (database->type != UserDB) {
+        LOG_ERROR("getCDBKey: wrong database type %d (expected UserDB)",
+                  (int)database->type);
+        return DB_FAIL;
+    }
+
+    sqlite3_stmt *stmt = database->stmtGetCDBKey;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    int rc = sqlite3_bind_int64(stmt, 1, (sqlite3_int64)uid);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("getCDBKey: bind uid failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_step(stmt);
+    if (rc == SQLITE_DONE) {
+        LOG_ERROR("getCDBKey: uid %u not found or has no cdbkey", uid);
+        return DB_FAIL;
+    }
+    if (rc != SQLITE_ROW) {
+        LOG_ERROR("getCDBKey: step failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    const void *blobData = sqlite3_column_blob(stmt, 0);
+    int blobLen = sqlite3_column_bytes(stmt, 0);
+    if (blobData == NULL || blobLen == 0) {
+        LOG_ERROR("getCDBKey: uid %u has NULL or empty cdbkey", uid);
+        return DB_FAIL;
+    }
+
+    return decryptCDBKey((const uint8_t *)blobData, (size_t)blobLen,
+                         database->dekKey, outKey);
 }
 
 int setTOTPSecret(DB *database, User *user, const char *secret) {

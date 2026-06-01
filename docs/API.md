@@ -246,6 +246,7 @@ EVP_PKEY_free(peerKey);
 | `NULL_SOCKETFD` | `-1` | 无效套接字描述符标识                  |
 | `PACKET_MAGIC`            | `0x5050504D`      | 包魔术字，ASCII `PPPM`                              |
 | `TOTP_SETUP_SECRET_LEN`    | `33`              | TOTP 设置响应中 Base32 密钥的固定长度（32 字符 + NUL） |
+| `CLIENT_DB_KEY_LEN` | `32` | 每用户客户端数据库加密密钥长度（256 位） |
 
 #### 1.2.2 类型定义
 
@@ -271,6 +272,7 @@ typedef enum {
     MsgRegisterReq, MsgRegisterResp,              // Phase 2: 注册
     MsgTOTPSetupReq, MsgTOTPSetupResp,            // Phase 2: TOTP 设置
     MsgTOTPVerifyReq, MsgTOTPVerifyResp,          // Phase 2: TOTP 二次验证
+    MsgDBKeyReq, MsgDBKeyResp,                    // Phase 2: 数据库密钥交换
     MsgRoomListReq, MsgRoomListResp,              // Phase 3: 房间管理
     MsgCreateRoom, MsgCreateRoomResp,
     MsgJoinRoom, MsgJoinRoomResp,
@@ -386,6 +388,18 @@ typedef struct {
 ```
 
 客户端在收到 `MsgTOTPVerifyReq` 挑战后，要求用户输入当前 6 位 TOTP 验证码，填入此结构体发送给服务端验证。固定大小 4 字节。
+
+**DBKeyRespPayload**（数据库密钥响应， `MsgDBKeyResp` 专用）
+
+```c
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t cdbkey[CLIENT_DB_KEY_LEN];   // 256 位原始 CDBKey 密钥材料
+} DBKeyRespPayload;
+#pragma pack(pop)
+```
+
+服务端在收到 `MsgDBKeyReq` 后，从 UserDB 的 `cdbkey` 列读取经 DEK 信封加密的每用户 CDBKey，解密后通过此结构体返回给客户端。固定大小 `CLIENT_DB_KEY_LEN` （32 字节）。
 
 **ChatPacketPayload**（客户端→服务端聊天消息）
 
@@ -519,6 +533,10 @@ sequenceDiagram
         C->>S: MsgTOTPVerifyResp [TOTPVerifyPayload: code]
         S->>C: MsgLoginResp [LoginResponsePayload: uid + username + nickname + totpEnabled=1]
     end
+
+    Note over C,S: DB Key Request (AES-GCM, immediately after login)
+    C->>S: MsgDBKeyReq (no payload)
+    S->>C: MsgDBKeyResp [DBKeyRespPayload: 32B CDBKey]
 
     Note over C,S: Phase 3 — Room Management (AES-GCM)
     C->>S: MsgRoomListReq
@@ -1052,6 +1070,7 @@ size_t readPasswordMasked(char *buf, size_t bufsize);
 | `MAX_CLIENTS_PER_ROOM` | `10` | 单个房间最大客户端数                                         |
 | `SERVER_INITIAL_CAPACITY` | `16` | 动态 session / room 数组初始容量                             |
 | `SERVER_SELECT_TIMEOUT_US` | `16000` | `select()` 超时时间（微秒，约 60 Hz）                      |
+| `DB_ENC_KEY_LEN`          | `32`     | 每数据库 SQLCipher 加密密钥长度（256 位）                   |
 | `SERVER_SUCC` | `0` | 操作成功                                                     |
 | `SERVER_FAIL` | `-1` | 操作失败                                                     |
 
@@ -1141,8 +1160,12 @@ typedef struct {
     struct DB *userDB;
     struct DB *chatDB;
     struct DB *gameDB;
-    struct DB *serverDB;        // 服务器密钥-值存储
-    uint8_t dekKey[AES_GCM_KEY_LEN];  // 解密后的 DEK（信封加密）
+    struct DB *serverDB;        // 服务器密钥-值存储（明文，无 SQLCipher 加密）
+    bool freshKeysGenerated;    // 首次运行时生成密钥为 true（memset 零初始化为 false）
+    uint8_t dekKey[AES_GCM_KEY_LEN];  // 解密后的 DEK（TOTP 信封加密用）
+    uint8_t userDbEncKey[DB_ENC_KEY_LEN];   // 解密后的 UserDBKey（user.db SQLCipher 加密密钥）
+    uint8_t chatDbEncKey[DB_ENC_KEY_LEN];   // 解密后的 ChatHistoryDBKey（chatHistory.db SQLCipher 加密密钥）
+    uint8_t gameDbEncKey[DB_ENC_KEY_LEN];   // 解密后的 GameDBKey（game.db SQLCipher 加密密钥）
 } Server;
 ```
 
@@ -1150,10 +1173,10 @@ typedef struct {
 
 | 函数                                         | 说明                                                                           |
 | -------------------------------------------- | ------------------------------------------------------------------------------ |
-| `int serverInit(Server *s, uint16_t port)` | 创建监听套接字，打开 UserDB / ChatHistoryDB / GameDB / ServerDB，调用 `serverInitKeys()` 初始化密钥，设置 DEK。须传入零初始化的 `Server` |
-| `int serverInitKeys(Server *s)` | 信封加密密钥初始化：首次启动生成 MK + DEK，加密 DEK 后存 ServerDB，显示 MK 给管理员；后续启动读加密 DEK，提示输入 MK 解密后载入内存 |
+| `int serverInit(Server *s, uint16_t port)` | 创建监听套接字。先打开 ServerDB（明文），调用 `serverInitKeys()` 初始化/恢复全部密钥，再依次用各自的 dbEncKey 打开 UserDB / ChatHistoryDB / GameDB（SQLCipher 加密），最后设置 DEK。须传入零初始化的 `Server` 。首次运行时自动删除旧的明文数据库文件以防 SQLCipher key mismatch |
+| `int serverInitKeys(Server *s)` | 信封加密密钥初始化。首次启动：`cryptoRandomBytes()` 生成 MK + DEK + UserDBKey + ChatHistoryDBKey + GameDBKey（各 32B），用 MK 经 `encryptAESGCM()` 分别加密为 60B envelop 后调用 `setServerKey()` 存入 ServerDB，设置 `freshKeysGenerated = true` 。随后打印 MK 十六进制显示给管理员（仅此一次）。后续启动：提示输入 MK，`getServerKey()` 读取全部四个 envelop → 逐一校验完整性（任一缺失则 `LOG_ERROR("密钥丢失: <KeyName>")` 并返回 `SERVER_FAIL`）→ `decryptAESGCM()` 解密全部四个密钥载入 `Server` 结构体，设置 `freshKeysGenerated = false` |
 | `void serverRun(Server *s)` | 进入 `select()` 事件循环（阻塞直至进程终止）。16ms 超时为后续 game tick 预留 |
-| `void serverCleanup(Server *s)` | 断开所有客户端、释放 session/room、关闭数据库、安全擦除 DEK |
+| `void serverCleanup(Server *s)` | 断开所有客户端、释放 session/room、关闭数据库、安全擦除 `dekKey` / `userDbEncKey` / `chatDbEncKey` / `gameDbEncKey` |
 
 #### 2.1.5 Handler 处理逻辑
 
@@ -1169,10 +1192,12 @@ typedef struct {
 | Room            | `MsgCreateRoom`      | 写入 GameDB → `MsgCreateRoomResp` (0/1)                                                                                                           |
 | Room            | `MsgJoinRoom`        | 检查 GameDB 存在性 → 加入 ActiveRoom → `MsgJoinRoomResp` (0/1) → 状态切至 `SessionChat`                                                           |
 | Room            | `MsgTOTPSetupReq`    | 生成 20B 随机密钥 → Base32 编码 → DEK 加密存 UserDB → `MsgTOTPSetupResp` 返回 Base32 密钥给客户端。如已设置 TOTP 则拒绝                            |
+| Room            | `MsgDBKeyReq`        | 调用 `getCDBKey()` 从 UserDB 读取并解密每用户 CDBKey → 通过 `MsgDBKeyResp` （ `DBKeyRespPayload` ）返回 32B 原始密钥材料                           |
 | Room            | `MsgLogout`          | 断开连接                                                                                                                                              |
 | Chat            | `MsgChat`            | 存入 ChatHistoryDB → 广播 `ChatBroadcastPayload` 给同房间其他成员                                                                                  |
 | Chat            | `MsgHeartbeat`       | 回显 `MsgHeartbeat`                                                                                                                                 |
 | Chat            | `MsgTOTPSetupReq`    | 同 Room 阶段 TOTP 设置                                                                                                                               |
+| Chat            | `MsgDBKeyReq`        | 同 Room 阶段                                                                                                                                          |
 | Chat            | `MsgLogout`          | 断开连接                                                                                                                                              |
 
 #### 2.1.6 协议违规
@@ -1187,7 +1212,7 @@ typedef struct {
 
 **实现**： `src/server/database.c`
 
-提供基于 SQLite3 的持久化数据层，涵盖用户管理（注册、删除、验证、TOTP 密钥加密存储）、聊天记录存储/查询、游戏房间持久化及服务器密钥-值存储。数据库采用四个独立文件： `db/user.db` （用户库）、 `db/chatHistory.db` （聊天记录库）、 `db/game.db` （游戏房间库）和 `db/server.db` （服务器密钥库）。
+提供基于 SQLCipher（加密 SQLite3，通过 `sqlite3_key()` 设置页级 AES-256-CBC 加密）的持久化数据层，涵盖用户管理（注册、删除、验证、TOTP 密钥加密存储）、聊天记录存储/查询、游戏房间持久化及服务器密钥-值存储。数据库采用四个独立文件： `db/user.db` （用户库，SQLCipher 加密）、 `db/chatHistory.db` （聊天记录库，SQLCipher 加密）、 `db/game.db` （游戏房间库，SQLCipher 加密）和 `db/server.db` （服务器密钥库，明文存储加密 envelop）。
 
 #### 2.2.1 常量与宏
 
@@ -1195,6 +1220,7 @@ typedef struct {
 | ------------------------ | ----------------------- | ----------------------- |
 | `DB_SUCC` | `0` | 操作成功                |
 | `DB_FAIL` | `-1` | 操作失败                |
+| `DB_ENC_KEY_LEN`         | `32`                   | 每数据库 SQLCipher 加密密钥长度（256 位） |
 | `USER_DB_PATH` | `"db/user.db"` | 用户数据库文件路径      |
 | `CHAT_HISTORY_DB_PATH` | `"db/chatHistory.db"` | 聊天记录数据库文件路径  |
 | `GAME_DB_PATH`            | `"db/game.db"`         | 游戏房间数据库文件路径  |
@@ -1246,11 +1272,13 @@ typedef struct DB {
     sqlite3_stmt *stmtUidCheck;        // SELECT 1 FROM users WHERE uid=? (UserDB)
     sqlite3_stmt *stmtSetTotpSecret;   // UPDATE totp_secret (UserDB)
     sqlite3_stmt *stmtGetTotpSecret;   // SELECT totp_secret (UserDB)
+    sqlite3_stmt *stmtGetCDBKey;       // SELECT cdbkey WHERE uid=? (UserDB)
     sqlite3_stmt *stmtSeq;             // Global msg sequence INSERT (ChatHistoryDB)
     RoomStmtCache *roomCache;          // Per-room statement cache (ChatHistoryDB)
     sqlite3_stmt *stmtSetKey;          // INSERT OR REPLACE server_keys (ServerDB)
     sqlite3_stmt *stmtGetKey;          // SELECT key_value FROM server_keys (ServerDB)
     uint8_t dekKey[AES_GCM_KEY_LEN];   // DEK for TOTP secret envelope encryption
+    uint8_t dbEncKey[DB_ENC_KEY_LEN];  // 每数据库 SQLCipher 加密密钥（dbClose 时安全擦除）
 } DB;
 ```
 
@@ -1264,11 +1292,12 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT UNIQUE NOT NULL,
     nickname TEXT NOT NULL,
     password TEXT NOT NULL,       -- 格式: "<salt_hex>:<hash_hex>"
-    totp_secret BLOB              -- AES-256-GCM 加密的 TOTP 密钥，可空
+    totp_secret BLOB,             -- AES-256-GCM 加密的 TOTP 密钥，可空
+    cdbkey BLOB                   -- AES-256-GCM 加密的客户端数据库密钥，可空
 );
 ```
 
-`password` 字段存储 `hashPassword()` 的输出（SHA-256 + 128-bit 随机 salt），而非明文。 `totp_secret` 字段存储经 DEK 信封加密（AES-256-GCM）后的 TOTP 共享密钥 BLOB，格式为 `nonce(12B) || ciphertext || tag(16B)` 。未经加密的明文密钥永不在落盘。DB 句柄持有 DEK，通过 `dbSetDekKey()` 设置，在 `dbClose()` 时安全擦除。
+`password` 字段存储 `hashPassword()` 的输出（SHA-256 + 128-bit 随机 salt），而非明文。 `totp_secret` 字段存储经 DEK 信封加密（AES-256-GCM）后的 TOTP 共享密钥 BLOB，格式为 `nonce(12B) || ciphertext || tag(16B)` 。未经加密的明文密钥永不在落盘。 `cdbkey` 字段存储同样经 DEK 信封加密的每用户 256-bit 客户端数据库密钥（Client Database Key, CDBKey），由 `createUser()` 自动生成，客户端通过 `MsgDBKeyReq` / `MsgDBKeyResp` 获取后用于加密本地 `client.db` 。DB 句柄持有 DEK，通过 `dbSetDekKey()` 设置，在 `dbClose()` 时安全擦除。
 
 **ChatHistoryDB ( `db/chatHistory.db` )**
 
@@ -1309,9 +1338,10 @@ CREATE TABLE IF NOT EXISTS rooms (
 
 | 函数                           | 说明                                                                                                                        |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `DB *dbInit(DBType dbType)` | 打开（或创建）指定类型数据库。自动创建 `db/` 目录，启用 WAL journal 模式及外键约束。失败返回 NULL，所有已分配资源正确释放 |
-| `void dbClose(DB *database)` | 关闭数据库连接、释放所有关联资源、安全擦除 DEK。 `dbClose(NULL)` 为安全的 no-op                                          |
+| `DB *dbInit(DBType dbType, const uint8_t *encKey)` | 打开（或创建）指定类型数据库。自动创建 `db/` 目录，启用 WAL journal 模式及外键约束。非 ServerDB 时若 `encKey != NULL` 则在 `sqlite3_open()` 后立即调用 `sqlite3_key(handle, encKey, DB_ENC_KEY_LEN)` 设置 SQLCipher 页级加密密钥，随后所有 PRAGMA 及 schema 写入均被加密；`encKey == NULL` 时跳过加密（ServerDB 及测试环境）。密钥副本保存在 `database->dbEncKey` 。失败返回 NULL，所有已分配资源正确释放 |
+| `void dbClose(DB *database)` | 关闭数据库连接、finalize 所有缓存 prepared statement、释放哈希表等关联资源、安全擦除 `dekKey` 及 `dbEncKey` 。 `dbClose(NULL)` 为安全的 no-op      |
 | `void dbSetDekKey(DB *database, const uint8_t *dekKey)` | 将 32 字节 DEK 注入 UserDB 句柄，用于 TOTP 密钥的信封加密/解密。传入 NULL 清零 DEK。 `dbClose()` 自动擦除 |
+| `void dbSetDbEncKey(DB *database, const uint8_t *key)` | 将 `DB_ENC_KEY_LEN` 字节的数据库加密密钥注入 DB 句柄。传入 NULL 清零 `dbEncKey` 。主要在测试或 re-key 场景使用（正常启动由 `dbInit(encKey)` 自动设置）。 `dbClose()` 自动擦除 |
 
 #### 2.2.5 用户操作
 
@@ -1326,12 +1356,13 @@ CREATE TABLE IF NOT EXISTS rooms (
    - 通过缓存的 `stmtUidCheck` 查询 `SELECT 1 FROM users WHERE uid = ?` 进行唯一性检查。
    - 若该 UID 不存在，赋值给 `user->uid` 并跳出循环。
    - 若 10 次尝试均失败，返回 `DB_FAIL` 。
-3. 调用 `hashPassword()` 生成 `"salt_hex:hash_hex"` 格式的哈希字符串。
-4. 若 `user->totpSecret` 非 NULL，通过 DEK 经 AES-256-GCM 加密为 BLOB 后存入 `totp_secret` 列；否则存入 NULL。
-5. 通过缓存的 `stmtInsert` 执行 INSERT。
-6. 用 `OPENSSL_cleanse` 安全擦除哈希字符串内存后释放。
+3. 调用 `cryptoRandomBytes()` 生成 256-bit 随机 CDBKey，通过 DEK 经 AES-256-GCM 加密为 BLOB 后绑定到 `cdbkey` 列，随后 `OPENSSL_cleanse` 擦除明文 CDBKey。
+4. 调用 `hashPassword()` 生成 `"salt_hex:hash_hex"` 格式的哈希字符串。
+5. 若 `user->totpSecret` 非 NULL，通过 DEK 经 AES-256-GCM 加密为 BLOB 后存入 `totp_secret` 列；否则存入 NULL。
+6. 通过缓存的 `stmtInsert` 执行 INSERT。
+7. 用 `OPENSSL_cleanse` 安全擦除哈希字符串内存后释放。
 
-返回 `DB_SUCC` （成功）或 `DB_FAIL` （参数非法、UID 生成失败、用户名已存在、密码哈希失败、加密失败、SQLite 错误）。
+返回 `DB_SUCC` （成功）或 `DB_FAIL` （参数非法、UID 生成失败、用户名已存在、密码哈希失败、加密失败、CDBKey 生成失败、SQLite 错误）。
 
 **`int deleteUser(DB *database, User *user)`**
 
@@ -1355,6 +1386,10 @@ CREATE TABLE IF NOT EXISTS rooms (
 | `int setTOTPSecret(DB *database, User *user, const char *secret)` | 将 Base32 编码的 TOTP 密钥经 DEK 信封加密（AES-256-GCM）后存入 `totp_secret` 列。 `secret` 为 NULL 或空字符串时清除密钥。固定大小： `12B nonce + strlen(secret) ciphertext + 16B tag` |
 | `char *getTOTPSecret(DB *database, User *user)` | 按 uid 查询 `totp_secret` 列，通过 DEK 解密后返回 Base32 明文字符串。无密钥时返回 NULL。调用者须 `free` 返回值 |
 
+**`int getCDBKey(DB *database, uint32_t uid, uint8_t outKey[DB_ENC_KEY_LEN])`**
+
+按 uid 从 UserDB 的 `cdbkey` BLOB 列读取经 DEK 信封加密的 CDBKey，通过 AES-256-GCM 解密后写入 `outKey` 。解密后校验明文长度必须等于 `DB_ENC_KEY_LEN` （32 字节），否则返回 `DB_FAIL` 。用于 `handleDBKeyReq` 处理 `MsgDBKeyReq` 请求，将解密后的密钥通过 `MsgDBKeyResp` 返回给客户端。调用者须在不再使用时用 `OPENSSL_cleanse` 擦除 `outKey` 。返回 `DB_SUCC` （成功）或 `DB_FAIL` （数据库为 NULL、类型错误、用户不存在、 `cdbkey` 为空、DEK 未设置、解密认证失败、长度异常）。
+
 #### 2.2.5b ServerDB — 服务器密钥-值存储
 
 **文件**： `db/server.db`
@@ -1373,6 +1408,93 @@ CREATE TABLE IF NOT EXISTS server_keys (
 | ---- | ---- |
 | `int setServerKey(DB *database, const char *keyName, const uint8_t *value, size_t valueLen)` | INSERT OR REPLACE 键值对。 `valueLen` 可为 0（空 BLOB）。 `created_at` 自动设为当前时间 |
 | `int getServerKey(DB *database, const char *keyName, uint8_t **outValue, size_t *outLen)` | 按 key_name 查询。键不存在时返回 `DB_SUCC` 且 `*outValue = NULL` 。调用者须 `free(*outValue)` |
+
+ServerDB 当前存储以下信封加密密钥（均经 MK 经 AES-256-GCM 加密为 envelop，格式为 `nonce(12B) || ciphertext(32B) || tag(16B) = 60B`）：
+
+| Key Name              | 明文密钥           | 用途                                                   |
+|-----------------------|--------------------|--------------------------------------------------------|
+| `"DEK"`               | DEK                | TOTP 密钥信封加密/解密                                  |
+| `"UserDBKey"`         | UserDBKey          | `db/user.db` SQLCipher 页级加密密钥                     |
+| `"ChatHistoryDBKey"`  | ChatHistoryDBKey   | `db/chatHistory.db` SQLCipher 页级加密密钥              |
+| `"GameDBKey"`         | GameDBKey           | `db/game.db` SQLCipher 页级加密密钥                     |
+
+读写以上键值封装的内部辅助函数 `encryptAndStoreKey()` 与 `decryptAndLoadKey()` 定义于 `src/server/server.c` ，均为 `static` 函数不对外暴露：
+
+```c
+/* src/server/server.c — 密钥封装辅助函数 */
+
+static int encryptAndStoreKey(const uint8_t *mkKey, const uint8_t *keyData,
+                              const char *keyName, DB *serverDB) {
+    enum {
+        EncEnvelopeLen = AES_GCM_NONCE_LEN + AES_GCM_KEY_LEN + AES_GCM_TAG_LEN
+    };
+
+    AESGCMKey encKey;
+    memcpy(encKey.key, mkKey, AES_GCM_KEY_LEN);
+    if (cryptoRandomBytes(encKey.nonce, AES_GCM_NONCE_LEN) != CRYPTO_SUCC)
+        return SERVER_FAIL;
+
+    AESGCMBuffer pt;
+    pt.data = (uint8_t *)keyData;
+    pt.len = AES_GCM_KEY_LEN;
+    pt.capacity = AES_GCM_KEY_LEN;
+
+    AESGCMCipher ct;
+    if (aesGCMBufferInit(&ct.buffer, AES_GCM_KEY_LEN) != CRYPTO_SUCC)
+        return SERVER_FAIL;
+    if (encryptAESGCM(&pt, NULL, &encKey, &ct) != CRYPTO_SUCC) {
+        aesGCMBufferDeinit(&ct.buffer);
+        return SERVER_FAIL;
+    }
+
+    uint8_t envelope[EncEnvelopeLen];
+    memcpy(envelope, encKey.nonce, AES_GCM_NONCE_LEN);
+    memcpy(envelope + AES_GCM_NONCE_LEN, ct.buffer.data, AES_GCM_KEY_LEN);
+    memcpy(envelope + AES_GCM_NONCE_LEN + AES_GCM_KEY_LEN, ct.tag,
+           AES_GCM_TAG_LEN);
+    aesGCMBufferDeinit(&ct.buffer);
+
+    if (setServerKey(serverDB, keyName, envelope, sizeof(envelope)) != DB_SUCC)
+        return SERVER_FAIL;
+    return SERVER_SUCC;
+}
+
+static int decryptAndLoadKey(const uint8_t *mkKey, const uint8_t *blob,
+                             size_t blobLen, const char *keyName,
+                             uint8_t *outKey) {
+    enum {
+        EncEnvelopeLen = AES_GCM_NONCE_LEN + AES_GCM_KEY_LEN + AES_GCM_TAG_LEN
+    };
+
+    if (blobLen != EncEnvelopeLen)
+        return SERVER_FAIL;
+
+    AESGCMKey decKey;
+    memcpy(decKey.key, mkKey, AES_GCM_KEY_LEN);
+    memcpy(decKey.nonce, blob, AES_GCM_NONCE_LEN);
+
+    AESGCMCipher ct;
+    ct.buffer.data = (uint8_t *)blob + AES_GCM_NONCE_LEN;
+    ct.buffer.len = AES_GCM_KEY_LEN;
+    ct.buffer.capacity = AES_GCM_KEY_LEN;
+    memcpy(ct.tag, blob + AES_GCM_NONCE_LEN + AES_GCM_KEY_LEN,
+           AES_GCM_TAG_LEN);
+
+    AESGCMBuffer pt;
+    if (aesGCMBufferInit(&pt, AES_GCM_KEY_LEN) != CRYPTO_SUCC)
+        return SERVER_FAIL;
+
+    int decRet = decryptAESGCM(&ct, NULL, &decKey, &pt);
+    if (decRet != CRYPTO_SUCC) {
+        aesGCMBufferDeinit(&pt);
+        return SERVER_FAIL;
+    }
+
+    memcpy(outKey, pt.data, AES_GCM_KEY_LEN);
+    aesGCMBufferDeinit(&pt);
+    return SERVER_SUCC;
+}
+```
 
 #### 2.2.6 聊天记录操作
 
@@ -1400,6 +1522,186 @@ CREATE TABLE IF NOT EXISTS server_keys (
 
 * **UserDB**：5 条固定 stmt（INSERT、DELETE、SELECT、UID check、Room exists）在 `dbInit` 时编译，通过 `sqlite3_reset` + `sqlite3_clear_bindings` 重复使用。
 * **ChatHistoryDB**：由于表名包含动态 roomId，采用按需缓存策略 — 首次访问某 room 时创建表和索引、编译 4 条 stmt 并存入哈希表（冲突以链表解决），`dbClose` 时遍历哈希表统一 finalize。
+
+#### 2.2.9 数据库加密（SQLCipher）与密钥体系
+
+PacPlay 服务端所有业务数据库（UserDB / ChatHistoryDB / GameDB）通过 SQLCipher 的 AES-256-CBC 页级加密进行全盘保护。ServerDB 自身不加密（存储的均为经 MK 信封加密的密钥，不具备可读性），但其文件保护依赖宿主机文件系统权限。密钥体系分三层：
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ Layer 1: MK (Master Key) — 256-bit 随机                   │
+│ 仅存于管理员记忆/离线记录中，永不在磁盘持久化               │
+│ 在首次启动时以十六进制一次性显示给管理员，随后从内存擦除    │
+└──────────┬───────────────────────────────────────────────┘
+           │ AES-256-GCM 信封加密
+           ▼
+┌──────────────────────────────────────────────────────────┐
+│ Layer 2: Envelops 存储于 server.db (ServerDB 明文)        │
+│ ┌───────────────┬──────────────────────────────────────┐ │
+│ │ "DEK"         │ nonce(12) ‖ AES-256-GCM(DEK) ‖ tag  │ │
+│ │ "UserDBKey"   │ nonce(12) ‖ AES-256-GCM(UK)  ‖ tag  │ │
+│ │ "ChatHistory… │ nonce(12) ‖ AES-256-GCM(CK)  ‖ tag  │ │
+│ │ "GameDBKey"   │ nonce(12) ‖ AES-256-GCM(GK)  ‖ tag  │ │
+│ └───────────────┴──────────────────────────────────────┘ │
+└──────────┬───────────────────────────────────────────────┘
+           │ 管理员输入 MK hex → decryptAESGCM 解密
+           ▼
+┌──────────────────────────────────────────────────────────┐
+│ Layer 3: 明文密钥驻留内存（Server.dekKey / *dbEncKey 等）│
+│ ┌───────────┬───────────────┬──────────────────────────┐ │
+│ │ DEK (32B) │ TOTP 信封加密 │ set into userDB.dekKey   │ │
+│ │ UserDBKey │ user.db 保护  │ set into userDB.dbEncKey │ │
+│ │ ChatDBKey │ chat.db 保护  │ set into chatDB.dbEncKey │ │
+│ │ GameDBKey │ game.db 保护  │ set into gameDB.dbEncKey │ │
+│ └───────────┴───────────────┴──────────────────────────┘ │
+└──────────────────────────────────────────────────────────┘
+```
+
+**启动流程详解**
+
+首次启动（`server.db` 中不存在 `"DEK"` 键）执行以下步骤（ `src/server/server.c` → `serverInitKeys()` 首次运行路径）：
+
+```c
+/* src/server/server.c — serverInitKeys() first-run path (核心逻辑片段) */
+
+// 1. 生成五个 256-bit 随机密钥
+uint8_t mkKey[AES256KeyLen];
+uint8_t dekKey[AES256KeyLen];
+uint8_t userDbKey[DB_ENC_KEY_LEN];
+uint8_t chatDbKey[DB_ENC_KEY_LEN];
+uint8_t gameDbKey[DB_ENC_KEY_LEN];
+
+cryptoRandomBytes(mkKey, AES256KeyLen);       // MK — 永不存库
+cryptoRandomBytes(dekKey, AES256KeyLen);       // DEK — 加密后存库
+cryptoRandomBytes(userDbKey, DB_ENC_KEY_LEN);  // UserDBKey — 加密后存库
+cryptoRandomBytes(chatDbKey, DB_ENC_KEY_LEN);  // ChatHistoryDBKey — 加密后存库
+cryptoRandomBytes(gameDbKey, DB_ENC_KEY_LEN);  // GameDBKey — 加密后存库
+
+// 2. 用 MK 分别信封加密四个密钥 → 各自 60B envelop → 写入 server.db
+encryptAndStoreKey(mkKey, dekKey,    "DEK",                 s->serverDB);
+encryptAndStoreKey(mkKey, userDbKey, "UserDBKey",           s->serverDB);
+encryptAndStoreKey(mkKey, chatDbKey, "ChatHistoryDBKey",    s->serverDB);
+encryptAndStoreKey(mkKey, gameDbKey, "GameDBKey",           s->serverDB);
+
+// 3. 明文密钥载入 Server 结构体（后续 memcpy s->userDbEncKey 等）
+memcpy(s->dekKey, dekKey, AES256KeyLen);
+s->freshKeysGenerated = true;
+
+// 4. 一次性显示 MK 给管理员 → getchar() 确认 → OPENSSL_cleanse 擦除 MK
+printf("Master Key (SAVE THIS — shown only once):\n  ");
+for (int i = 0; i < AES256KeyLen; i++) printf("%02x", mkKey[i]);
+printf("\nPress Enter after you have saved the key...");
+(void)getchar();
+OPENSSL_cleanse(mkKey, sizeof(mkKey));
+```
+
+随后 `serverInit()` 依次调用 `dbInit(UserDB, server->userDbEncKey)` 、 `dbInit(ChatHistoryDB, ...)` 、 `dbInit(GameDB, ...)` ，各 `dbInit` 内在 `sqlite3_open()` 后立即 `sqlite3_key()` 设置 SQLCipher 加密密钥，再执行 PRAGMA 和建 schema —— 自文件的第一字节起即被加密。
+
+首次运行时 `serverInit()` 还会调用 `remove()` 删除旧的明文 `.db` 文件（从旧版无 SQLCipher 升级时残留），确保不出现"用 SQLCipher 密钥打开明文数据库"的错误。
+
+后续启动（`server.db` 中已存在 `"DEK"` 键）执行以下步骤（ `src/server/server.c` → `serverInitKeys()` 已有数据库路径）：
+
+```c
+/* src/server/server.c — serverInitKeys() existing-DB path (核心逻辑片段) */
+
+// 1. 从 server.db 读取全部四个 envelop，一并校验完整性
+uint8_t *dekEnc = NULL, *userDbEnc = NULL, *chatDbEnc = NULL, *gameDbEnc = NULL;
+getServerKey(s->serverDB, "DEK",                 &dekEnc,    &dekLen);
+getServerKey(s->serverDB, "UserDBKey",           &userDbEnc, &userDbLen);
+getServerKey(s->serverDB, "ChatHistoryDBKey",    &chatDbEnc, &chatDbLen);
+getServerKey(s->serverDB, "GameDBKey",           &gameDbEnc, &gameDbLen);
+
+if (userDbEnc == NULL) { LOG_ERROR("密钥丢失: UserDBKey");      return SERVER_FAIL; }
+if (chatDbEnc == NULL) { LOG_ERROR("密钥丢失: ChatHistoryDBKey"); return SERVER_FAIL; }
+if (gameDbEnc == NULL) { LOG_ERROR("密钥丢失: GameDBKey");      return SERVER_FAIL; }
+
+// 2. 提示管理员输入 MK（64 字符十六进制），通过 hexToNibble() 转为 32B 二进制
+printf("Enter Master Key: ");
+readPasswordMasked(hexBuf, sizeof(hexBuf));
+for (size_t i = 0; i < AES256KeyLen; i++)
+    mkKey[i] = (uint8_t)((hexToNibble(hexBuf[i*2]) << 4) | hexToNibble(hexBuf[i*2+1]));
+
+// 3. 逐一解密四个 envelop，校验长度(60B)及 AES-GCM 认证标签
+decryptAndLoadKey(mkKey, dekEnc,    dekLen,    "DEK",                 s->dekKey);
+decryptAndLoadKey(mkKey, userDbEnc, userDbLen, "UserDBKey",           s->userDbEncKey);
+decryptAndLoadKey(mkKey, chatDbEnc, chatDbLen, "ChatHistoryDBKey",    s->chatDbEncKey);
+decryptAndLoadKey(mkKey, gameDbEnc, gameDbLen, "GameDBKey",           s->gameDbEncKey);
+
+OPENSSL_cleanse(mkKey, sizeof(mkKey));
+s->freshKeysGenerated = false;
+```
+
+**`dbInit` 内的 SQLCipher 密钥设置**
+
+```c
+/* src/server/database.c — dbInit() 中 SQLCipher 密钥设置 */
+
+/* Apply encryption key for non-ServerDB databases — must be set before
+ * any PRAGMA or schema operation so that newly created databases are
+ * encrypted from the first byte written. */
+if (encKey != NULL) {
+    rc = sqlite3_key(database->handle, encKey, (int)DB_ENC_KEY_LEN);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("dbInit: sqlite3_key('%s') failed: %s (rc=%d)",
+                  dbPath, sqlite3_errmsg(database->handle), rc);
+        sqlite3_close(database->handle);
+        free(database);
+        return NULL;
+    }
+    memcpy(database->dbEncKey, encKey, DB_ENC_KEY_LEN);
+}
+```
+
+**`dbSetDbEncKey` — 手动设置数据库加密密钥**
+
+```c
+/* src/server/database.c */
+
+void dbSetDbEncKey(DB *database, const uint8_t *key) {
+    if (database == NULL)
+        return;
+    if (key != NULL)
+        memcpy(database->dbEncKey, key, DB_ENC_KEY_LEN);
+    else
+        memset(database->dbEncKey, 0, sizeof(database->dbEncKey));
+}
+```
+
+**`serverInit` — 启动编排**
+
+```c
+/* src/server/server.c — serverInit() 数据库与密钥初始化顺序 */
+
+// 1. 先打开 ServerDB（明文，无加密）
+DB *serverDB = dbInit(ServerDB, NULL);
+server->serverDB = serverDB;
+
+// 2. 加载或生成所有加密密钥
+serverInitKeys(server);
+
+// 3. 首次运行时删除可能残留的明文数据库文件
+if (server->freshKeysGenerated) {
+    remove(USER_DB_PATH);
+    remove(CHAT_HISTORY_DB_PATH);
+    remove(GAME_DB_PATH);
+}
+
+// 4. 用各自的密钥打开加密数据库（内部 sqlite3_key + 建 schema）
+DB *userDB = dbInit(UserDB,        server->userDbEncKey);
+DB *chatDB = dbInit(ChatHistoryDB, server->chatDbEncKey);
+DB *gameDB = dbInit(GameDB,        server->gameDbEncKey);
+
+// 5. 设置 DEK（用于 TOTP 信封加密）
+dbSetDekKey(server->userDB, server->dekKey);
+```
+
+**密钥生命周期安全保障**
+
+- **MK 永不落盘**：只在首次启动时显示给管理员，随后立即 `OPENSSL_cleanse()` 擦除。已有启动仅从终端读取，解密后立刻擦除。
+- **DEK 与三个 dbEncKey 双份擦除**： `serverCleanup()` 擦除 `Server` 结构体中的副本； `dbClose()` 擦除各 `DB` 句柄中的副本。擦除使用 `OPENSSL_cleanse()` （常量时间，禁止编译器优化移除）。
+- **`freshKeysGenerated` 标志**：通过 `memset(&server, 0, sizeof(server))` 零初始化为 `false` ；首次运行时设为 `true` ，驱动旧文件删除逻辑。已有运行时设为 `false` ，保留加密数据库文件。
+- **测试环境豁免**： `tests/` 中所有 `dbInit(XXX, NULL)` 均跳过加密，数据库以明文 SQLite 运行（不调用 `sqlite3_key()` ）。测试结束后 `removeDBFiles()` 清除临时文件。
+- **`readPasswordMasked` 终端安全**：当 stdin 为终端时禁用 echo 并显示 `*` 掩码；非终端时退化为 `fgets()` （适配自动化测试）。缓冲区经 `OPENSSL_cleanse` 擦除。
 
 ---
 
@@ -1470,6 +1772,8 @@ typedef struct {
     uint32_t uid;           // 由服务器在登录成功时分配
     uint32_t currentRoomId;
     uint32_t seqID;         // 单调递增序列号
+    uint8_t cdbkey[CLIENT_DB_KEY_LEN]; /**< 服务器下发，DB 初始化后立即擦除 */
+    struct ClientDB *db;               /**< 不透明加密客户端数据库句柄 */
 } Client;
 ```
 
@@ -1478,7 +1782,7 @@ typedef struct {
 | 函数                                                              | 说明                                                                                                                                                                                                                                                  |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `int clientConnect(Client *c, const char *addr, uint16_t port)` | 建立 TCP 连接并执行 ECDH+HKDF 密钥交换。成功时 `c->aesKey` 已就绪                                                                                                                                                                                   |
-| `int clientLogin(Client *c)` | 从 stdin 交互式读入 username 和 password（密码掩码显示），发送 `MsgLoginReq` （ `LoginRequestPayload` ），接收 `MsgLoginResp` （ `LoginResponsePayload` ），通过 `resp->uid != 0` 判定成功。成功时 `c->uid` 被设置，显示欢迎信息（含 nickname） |
+| `int clientLogin(Client *c)` | 从 stdin 交互式读入 username 和 password（密码掩码显示），发送 `MsgLoginReq` （ `LoginRequestPayload` ），接收 `MsgLoginResp` （ `LoginResponsePayload` ），通过 `resp->uid != 0` 判定成功。成功时 `c->uid` 被设置，随后自动发送 `MsgDBKeyReq` （空载荷）请求每用户 CDBKey，接收 `MsgDBKeyResp` （ `DBKeyRespPayload` ）后将密钥 `memcpy` 至 `c->cdbkey` ，立即调用 `clientInitDB(c)` 初始化加密本地数据库，最后 `OPENSSL_cleanse` 擦除 `c->cdbkey` 中的明文密钥副本。显示欢迎信息（含 nickname） |
 | `int clientRegister(Client *c)` | 从 stdin 交互式读入 username、nickname 和 password，发送 `MsgRegisterReq` （ `RegisterRequestPayload` ）。UID 由服务器自动分配，注册成功后可另行登录获取                                                                                             |
 | `int clientRoomMenu(Client *c)` | 拉取房间列表，提供交互式 `[c]reate room` 、 `[j]oin room` 、 `[r]efresh` 、 `[q]uit` 菜单                                                                                                                                                           |
 | `int clientChatLoop(Client *c)` | 进入房间聊天循环：使用 `select(stdin, socket)` 同时监听键盘输入和网络消息。stdin 输入以 `MsgChat` 发送；收到的 `ChatBroadcastPayload` 格式化显示。支持 `/exit` （登出）和 `/help` 命令                                                       |
@@ -1548,3 +1852,101 @@ sequenceDiagram
 7. 清零所有敏感缓冲，释放临时 EVP_PKEY 对象。
 
 成功时 `outKey->nonce` 已清零，调用者须在每次加密前通过 `cryptoRandomBytes()` 生成新的随机 nonce。
+
+---
+
+### 3.3 Client Database 客户端数据库模块
+
+**接口**： `src/client/database.h`
+
+**实现**： `src/client/database.c`
+
+提供基于 SQLCipher 的加密本地游戏库，密钥为登录后从服务端获取的每用户 CDBKey（256-bit）。所有操作通过缓存的 prepared statement 执行，杜绝 SQL 注入。数据库文件 `db/client.db` 自第一字节起即被页级 AES-256-CBC 加密，无密钥不可读。
+
+#### 3.3.1 常量与宏
+
+| 宏                       | 值                | 说明                                  |
+| ------------------------ | ----------------- | ------------------------------------- |
+| `CLIENT_DB_PATH` | `"./db/client.db"` | 客户端数据库文件路径                  |
+| `CLIENT_DB_DIR` | `"./db"` | 数据库文件所在目录                    |
+| `CLIENT_DB_SUCC` | `0` | 操作成功                              |
+| `CLIENT_DB_FAIL` | `-1` | 操作失败                              |
+
+#### 3.3.2 类型定义
+
+**GameRecord**
+
+```c
+typedef struct {
+    uint32_t gameId;
+    char *gameName;   /**< Human-readable game name, caller-freed. */
+    char *gamePath;   /**< Filesystem path to the game, caller-freed. */
+    uint64_t playTime; /**< Accumulated play time in seconds. */
+} GameRecord;
+```
+
+表示 `gameList` 表的一条记录。 `gameName` 与 `gamePath` 为堆分配拷贝，调用者须 `free()` 。
+
+**ClientDB**
+
+```c
+typedef struct ClientDB {
+    sqlite3 *handle;
+    sqlite3_stmt *stmtInsert;
+    sqlite3_stmt *stmtSelectAll;
+    sqlite3_stmt *stmtSelectById;
+    sqlite3_stmt *stmtDelete;
+    sqlite3_stmt *stmtUpdatePlayTime;
+    uint8_t dbEncKey[CLIENT_DB_KEY_LEN]; /**< SQLCipher page-level key. */
+} ClientDB;
+```
+
+不透明客户端数据库句柄。包装 SQLCipher 连接及 5 条缓存的 prepared statement。 `dbEncKey` 在 `clientCloseDB()` 时安全擦除。
+
+#### 3.3.3 数据库 Schema
+
+**ClientDB ( `db/client.db` )**
+
+```sql
+CREATE TABLE IF NOT EXISTS gameList (
+    gameId INTEGER PRIMARY KEY,
+    gameName TEXT NOT NULL,
+    gamePath TEXT NOT NULL,
+    playTime INTEGER NOT NULL DEFAULT 0
+);
+```
+
+`playTime` 新建记录时默认为 0（秒），通过 `updatePlayTime()` 累加更新。
+
+#### 3.3.4 预处理语句
+
+| 语句               | SQL                                                      | 绑定参数                    |
+| ------------------ | -------------------------------------------------------- | --------------------------- |
+| `stmtInsert` | `INSERT INTO gameList ... VALUES (?, ?, ?, 0)` | ?1=gameId, ?2=gameName, ?3=gamePath |
+| `stmtSelectAll` | `SELECT ... FROM gameList ORDER BY gameName ASC` | 无                          |
+| `stmtSelectById` | `SELECT ... FROM gameList WHERE gameId = ?` | ?1=gameId                   |
+| `stmtDelete` | `DELETE FROM gameList WHERE gameId = ?` | ?1=gameId                   |
+| `stmtUpdatePlayTime` | `UPDATE gameList SET playTime = ? WHERE gameId = ?` | ?1=playTime, ?2=gameId      |
+
+#### 3.3.5 生命周期
+
+| 函数                                                   | 说明                                                                                                                        |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `int clientInitDB(Client *client)` | 打开（或创建）加密客户端数据库。流程：确保 `db/` 目录存在 → `sqlite3_open` → `sqlite3_key(client->cdbkey, CLIENT_DB_KEY_LEN)` → WAL + foreign_keys pragma → `CREATE TABLE gameList` → 编译 5 条 prepared statement。密钥从 `client->cdbkey` 拷贝至 `ClientDB.dbEncKey` （仅一处副本）。失败时释放所有已分配资源并清零密钥。返回 `CLIENT_DB_SUCC` / `CLIENT_DB_FAIL` |
+| `void clientCloseDB(Client *client)` | 关闭数据库连接、finalize 全部 5 条 prepared statement、 `sqlite3_close` 、安全擦除 `dbEncKey` 并设置 `client->db = NULL` 。 `client->db == NULL` 时安全 no-op |
+
+#### 3.3.6 gameList CRUD 操作
+
+| 函数                                                                                                                                                             | 说明                                                                                                                                                                   |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `int addGame(Client *client, uint32_t gameId, const char *gameName, const char *gamePath)` | 插入游戏记录。 `playTime` 新建时自动为 0。 `gameId` 重复（PRIMARY KEY 冲突）返回 `CLIENT_DB_FAIL` 。通过 `?1..?3` 绑定参数防注入 |
+| `int listGames(Client *client, GameRecord ***outRecords, size_t *count)` | 列出所有游戏，按 `gameName ASC` 排序。成功时 `*outRecords` 为堆分配 `GameRecord *` 数组，每条记录的 `gameName` / `gamePath` 亦为堆分配（ `strdup` ）。空库返回 `CLIENT_DB_SUCC` 且 `*count=0` `*outRecords=NULL` 。调用者须先 `free` 每条记录的 `gameName` / `gamePath` / 记录本身，再 `free` 数组。先校验 `outRecords != NULL && count != NULL` 再写入输出，防止空指针解引用 |
+| `int deleteGame(Client *client, uint32_t gameId)` | 按 gameId 删除。严格模式： `gameId` 不存在时返回 `CLIENT_DB_FAIL` 。通过 `sqlite3_changes()` 检测受影响行数 |
+| `int updatePlayTime(Client *client, uint32_t gameId, uint64_t playTime)` | 更新累计游玩时间（秒）。通过 `?1=playTime, ?2=gameId` 绑定参数。 `gameId` 不存在时返回 `CLIENT_DB_FAIL` |
+
+#### 3.3.7 加密与密钥安全
+
+- **密钥来源**：CDBKey 由服务端在用户注册时（ `createUser()` ）通过 `cryptoRandomBytes()` 生成 256-bit 随机数，经 DEK 信封加密（AES-256-GCM，格式 `nonce(12) || ciphertext(32) || tag(16)`）后存入 UserDB 的 `cdbkey` 列
+- **密钥传输**：客户端登录后通过 `MsgDBKeyReq` / `MsgDBKeyResp` 获取解密后的 32 字节原始 CDBKey，全程受会话 AES-256-GCM 密钥保护
+- **内存安全**： `clientInitDB` 将 CDBKey 拷贝至 `ClientDB.dbEncKey` 后， `clientLogin` 立即 `OPENSSL_cleanse(c->cdbkey)` 擦除 Client 结构体中的明文副本。整个 session 期间密钥仅存于 `ClientDB.dbEncKey` ，由 `clientCloseDB()` 在断开时同样以 `OPENSSL_cleanse` 擦除
+- **`dbClose` 内安全擦除**： `dbClose` 擦除 `Server` 结构体中的副本；各 `DB` 句柄中的副本擦除。擦除均使用 `OPENSSL_cleanse` （常量时间，禁止编译器优化移除）

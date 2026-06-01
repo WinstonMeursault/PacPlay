@@ -24,6 +24,7 @@
 
 #include "client.h"
 #include "client/communication.h"
+#include "client/database.h"
 #include "log.h"
 #include "utils.h"
 
@@ -193,6 +194,44 @@ int clientLogin(Client *client) {
         printf("Security tip: enable TOTP with [t]otp setup for "
                "stronger account protection.\n");
     }
+
+    /* Request per-user CDBKey from server. */
+    if (sendEncryptedPacket(client, MsgDBKeyReq, NULL, 0) != CLIENT_SUCC) {
+        LOG_ERROR("clientLogin: send MsgDBKeyReq failed");
+        packetClear(&respPkt);
+        return CLIENT_FAIL;
+    }
+
+    Packet dbKeyPkt;
+    memset(&dbKeyPkt, 0, sizeof(dbKeyPkt));
+    if (recvEncryptedPacket(client, &dbKeyPkt) != CLIENT_SUCC) {
+        LOG_ERROR("clientLogin: recv MsgDBKeyResp failed");
+        packetClear(&respPkt);
+        return CLIENT_FAIL;
+    }
+    if (dbKeyPkt.header.messageType != MsgDBKeyResp ||
+        dbKeyPkt.header.payloadLength != CLIENT_DB_KEY_LEN) {
+        LOG_ERROR("clientLogin: invalid MsgDBKeyResp (mt=%d, len=%u)",
+                  (int)dbKeyPkt.header.messageType,
+                  dbKeyPkt.header.payloadLength);
+        packetClear(&dbKeyPkt);
+        packetClear(&respPkt);
+        return CLIENT_FAIL;
+    }
+    memcpy(client->cdbkey, dbKeyPkt.payload, CLIENT_DB_KEY_LEN);
+    packetClear(&dbKeyPkt);
+
+    /* Initialise the encrypted local database with the CDBKey. */
+    if (clientInitDB(client) != CLIENT_DB_SUCC) {
+        LOG_ERROR("clientLogin: clientInitDB failed");
+        OPENSSL_cleanse(client->cdbkey, sizeof(client->cdbkey));
+        packetClear(&respPkt);
+        return CLIENT_FAIL;
+    }
+
+    /* CDBKey transferred to ClientDB — wipe plaintext copy. */
+    OPENSSL_cleanse(client->cdbkey, sizeof(client->cdbkey));
+
     packetClear(&respPkt);
     return CLIENT_SUCC;
 }
@@ -558,7 +597,9 @@ int clientChatLoop(Client *client) {
 
 void clientDisconnect(Client *client) {
     if (client->fd != NULL_SOCKETFD) {
+        clientCloseDB(client);
         OPENSSL_cleanse(&client->aesKey, sizeof(client->aesKey));
+        OPENSSL_cleanse(client->cdbkey, sizeof(client->cdbkey));
         socketClose(&client->fd);
     }
     LOG_INFO("Client disconnected");

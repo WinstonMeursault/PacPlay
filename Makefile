@@ -6,7 +6,7 @@ MAKEFLAGS += -j $(shell nproc)
 ## Compiler and compilation flags
 CC := clang
 CFLAGS := -Wall -Wextra -Werror -g -Wno-unused-command-line-argument
-LDLIBS := -lssl -lcrypto -lsqlite3
+LDLIBS := -lssl -lcrypto -lsqlcipher
 ## Compiler flags for auto-generating dependency files (modern approach, replaces the old sed method)
 DEPFLAGS = -MMD -MP -MF $(@:%.o=%.d)
 
@@ -22,8 +22,8 @@ INC_FLAGS := $(addprefix -I, $(INC_DIR))
 TEST_DIR := tests
 
 # Targets
-SERVER_BIN := $(BIN_DIR)/server
-CLIENT_BIN := $(BIN_DIR)/client
+SERVER_BIN := $(BIN_DIR)/server/server
+CLIENT_BIN := $(BIN_DIR)/client/client
 
 # Source File Discovery
 
@@ -81,12 +81,17 @@ server: $(SERVER_BIN)
 client: $(CLIENT_BIN)
 
 # Link server executable
-$(SERVER_BIN): $(SERVER_ALL_OBJ) | $(BIN_DIR)
+$(BIN_DIR)/server $(BIN_DIR)/client: | $(BIN_DIR)
+	@echo -e '$(C_GREEN)Creating directory: $@/$(C_RESET)'
+	@mkdir -p $@
+
+# Link server executable
+$(SERVER_BIN): $(SERVER_ALL_OBJ) | $(BIN_DIR)/server
 	@echo -e '$(C_GREEN)Linking server: $@$(C_RESET)'
 	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
 # Link client executable
-$(CLIENT_BIN): $(CLIENT_ALL_OBJ) | $(BIN_DIR)
+$(CLIENT_BIN): $(CLIENT_ALL_OBJ) | $(BIN_DIR)/client
 	@echo -e '$(C_GREEN)Linking client: $@$(C_RESET)'
 	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
 
@@ -141,16 +146,22 @@ $(BIN_DIR):
 test: $(TEST_BIN)
 	@total=$(words $(TEST_BIN)); \
 	echo -e '$(C_GREEN)Running tests...$(C_RESET)'; \
-	failCount=0; \
+	failCount=0; totalPass=0; totalFail=0; \
 	for t in $(TEST_BIN); do \
-		if ! ./$$t; then failCount=$$((failCount + 1)); fi; \
+		log=$$((cd $$(dirname $$t) && ./$$(basename $$t) 2>&1) || true); ret=$$?; \
+		echo "$$log"; \
+		testPass=$$(echo "$$log" | grep -oE '^[0-9]+ passed' | tail -1 | grep -oE '[0-9]+'); \
+		testFail=$$(echo "$$log" | grep -oE '[0-9]+ failed' | tail -1 | grep -oE '[0-9]+'); \
+		totalPass=$$((totalPass + $${testPass:-0})); \
+		totalFail=$$((totalFail + $${testFail:-0})); \
+		if [ $$ret -ne 0 ]; then failCount=$$((failCount + 1)); fi; \
 	done; \
-	passCount=$$((total - failCount)); \
+	sPass=$$((total - failCount)); allPts=$$((totalPass + totalFail)); \
 	if [ $$failCount -ne 0 ]; then \
-		echo -e '$(C_RED)'"$$passCount"'/'"$$total"' test suite(s) passed. '"$$failCount"' failed.$(C_RESET)'; \
+		echo -e '$(C_RED)'"$$sPass"'/'"$$total"' suites passed ('"$$totalPass"'/'"$$allPts"' points), '"$$failCount"' failed.$(C_RESET)'; \
 		exit 1; \
 	fi; \
-	echo -e '$(C_GREEN)All '"$$passCount"'/'"$$total"' test suites passed.$(C_RESET)'
+	echo -e '$(C_GREEN)All '"$$sPass"'/'"$$total"' test suites passed ('"$$totalPass"'/'"$$allPts"' points).$(C_RESET)'
 
 # Compile test source files
 $(BUILD_DIR)/tests/%.o: $(TEST_DIR)/%.c
@@ -175,11 +186,11 @@ run: run-server
 
 run-server: $(SERVER_BIN)
 	@echo -e '$(C_GREEN)Running server...$(C_RESET)'
-	@./$(SERVER_BIN)
+	@cd $(dir $(SERVER_BIN)) && ./$(notdir $(SERVER_BIN))
 
 run-client: $(CLIENT_BIN)
 	@echo -e '$(C_GREEN)Running client...$(C_RESET)'
-	@./$(CLIENT_BIN)
+	@cd $(dir $(CLIENT_BIN)) && ./$(notdir $(CLIENT_BIN))
 
 analyze: json
 	@echo -e '$(C_BLUE)Analyzing code..$(C_RESET)'

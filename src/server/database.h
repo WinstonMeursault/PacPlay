@@ -39,19 +39,19 @@
 /* ──────────────────────── constants ────────────────────────────────────── */
 
 /** @brief File path for the user database. */
-#define USER_DB_PATH "db/user.db"
+#define USER_DB_PATH "./db/user.db"
 
 /** @brief File path for the chat history database. */
-#define CHAT_HISTORY_DB_PATH "db/chatHistory.db"
+#define CHAT_HISTORY_DB_PATH "./db/chatHistory.db"
 
 /** @brief File path for the game database. */
-#define GAME_DB_PATH "db/game.db"
+#define GAME_DB_PATH "./db/game.db"
 
 /** @brief File path for the server key-value database. */
-#define SERVER_DB_PATH "db/server.db"
+#define SERVER_DB_PATH "./db/server.db"
 
 /** @brief Directory containing all database files. */
-#define DB_DIRECTORY "db"
+#define DB_DIRECTORY "./db"
 
 /* ──────────────────────── return codes ─────────────────────────────────── */
 
@@ -114,6 +114,7 @@ typedef struct DB {
     sqlite3_stmt *stmtUidCheck; /**< Cached SELECT 1 FROM users WHERE uid=? (UserDB). */
     sqlite3_stmt *stmtSetTotpSecret; /**< Cached UPDATE totp_secret (UserDB). */
     sqlite3_stmt *stmtGetTOTPSecret; /**< Cached SELECT totp_secret (UserDB). */
+    sqlite3_stmt *stmtGetCDBKey;   /**< Cached SELECT cdbkey WHERE uid=? (UserDB). */
     /* ChatHistoryDB cached statements */
     sqlite3_stmt *stmtSeq; /**< Global msg sequence INSERT (ChatHistoryDB). */
     RoomStmtCache *roomCache; /**< Per-room statement cache (ChatHistoryDB). */
@@ -122,6 +123,7 @@ typedef struct DB {
     sqlite3_stmt *stmtGetKey; /**< Cached SELECT key_value (ServerDB). */
     /* Key material held in memory for the lifetime of the handle */
     uint8_t dekKey[AES_GCM_KEY_LEN]; /**< DEK for TOTP secret envelope encryption. */
+    uint8_t dbEncKey[DB_ENC_KEY_LEN]; /**< Per-database encryption key. */
 } DB;
 
 /* ──────────────────────── lifecycle ────────────────────────────────────── */
@@ -136,7 +138,7 @@ typedef struct DB {
  * Schema for UserDB:
  *   - users(uid INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL,
  *           nickname TEXT NOT NULL, password TEXT NOT NULL,
- *           totp_secret TEXT)
+ *           totp_secret BLOB, cdbkey BLOB)
  *
  * Schema for ChatHistoryDB:
  *   - msg_sequence(id INTEGER PRIMARY KEY AUTOINCREMENT)
@@ -148,7 +150,7 @@ typedef struct DB {
  * @param dbType  The database to open (@c UserDB or @c ChatHistoryDB).
  * @return A database handle on success, or @c NULL on failure.
  */
-DB *dbInit(DBType dbType);
+DB *dbInit(DBType dbType, const uint8_t *encKey);
 
 /**
  * @brief Close a database handle and release all associated resources.
@@ -174,6 +176,18 @@ void dbClose(DB *database);
  * @param dekKey    Pointer to 32-byte AES-256 DEK, or NULL to clear.
  */
 void dbSetDekKey(DB *database, const uint8_t *dekKey);
+
+/**
+ * @brief Set the per-database encryption key on a DB handle.
+ *
+ * Copies @p key (must be @c DB_ENC_KEY_LEN bytes, or NULL to clear)
+ * into the handle.  The key is securely wiped when @c dbClose() is
+ * called.
+ *
+ * @param database  An open DB handle.
+ * @param key       Pointer to @c DB_ENC_KEY_LEN key bytes, or NULL to clear.
+ */
+void dbSetDbEncKey(DB *database, const uint8_t *key);
 
 /* ──────────────────────── user operations ──────────────────────────────── */
 
@@ -247,6 +261,21 @@ char *getTOTPSecret(DB *database, User *user);
  *         or on error.
  */
 int setTOTPSecret(DB *database, User *user, const char *secret);
+
+/**
+ * @brief Retrieve and decrypt the per-user CDBKey (Client Database Key).
+ *
+ * Reads the encrypted envelope from the database for the given @p uid,
+ * decrypts it with the DEK stored in @p database, and writes the 32-byte
+ * CDBKey into @p outKey.
+ *
+ * @param database  An open UserDB handle with DEK set via dbSetDekKey().
+ * @param uid       The user whose CDBKey is requested.
+ * @param outKey    Output buffer of DB_ENC_KEY_LEN bytes.  Must not be NULL.
+ * @return DB_SUCC on success, DB_FAIL if the user does not exist, has no
+ *         CDBKey, or on decryption error.
+ */
+int getCDBKey(DB *database, uint32_t uid, uint8_t outKey[DB_ENC_KEY_LEN]);
 
 /* ──────────────────────── server key operations ────────────────────────── */
 

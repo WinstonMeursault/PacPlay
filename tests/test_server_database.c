@@ -67,18 +67,18 @@ enum { LargeNonexistentMsgId = 99999999 };
  * @brief Remove stale test database files so each test group starts clean.
  */
 static void removeDBFiles(void) {
-    remove("db/user.db");
-    remove("db/user.db-wal");
-    remove("db/user.db-shm");
-    remove("db/chatHistory.db");
-    remove("db/chatHistory.db-wal");
-    remove("db/chatHistory.db-shm");
-    remove("db/game.db");
-    remove("db/game.db-wal");
-    remove("db/game.db-shm");
-    remove("db/server.db");
-    remove("db/server.db-wal");
-    remove("db/server.db-shm");
+    remove("./db/user.db");
+    remove("./db/user.db-wal");
+    remove("./db/user.db-shm");
+    remove("./db/chatHistory.db");
+    remove("./db/chatHistory.db-wal");
+    remove("./db/chatHistory.db-shm");
+    remove("./db/game.db");
+    remove("./db/game.db-wal");
+    remove("./db/game.db-shm");
+    remove("./db/server.db");
+    remove("./db/server.db-wal");
+    remove("./db/server.db-shm");
 }
 
 /** @brief All-zeros DEK for testing TOTP secret encryption. */
@@ -87,13 +87,13 @@ static const uint8_t testDek[AES_GCM_KEY_LEN];
 /**
  * @brief Open a UserDB with the test DEK pre-set.
  *
- * Wraps @c dbInit(UserDB) and @c dbSetDekKey so that every test database
+ * Wraps @c dbInit(UserDB, NULL) and @c dbSetDekKey so that every test database
  * can encrypt / decrypt TOTP secrets without manual DEK plumbing.
  *
  * @return An open UserDB handle, or NULL on failure.
  */
 static DB *testUserDB(void) {
-    DB *db = dbInit(UserDB);
+    DB *db = dbInit(UserDB, NULL);
     if (db != NULL) {
         dbSetDekKey(db, testDek);
     }
@@ -115,7 +115,7 @@ static void freeChatArray(Chat *arr, size_t count) {
 /** @brief dbInit with invalid DBType returns NULL. */
 static void testDbInitInvalidType(void) {
     enum { BadType = 999 };
-    DB *db = dbInit((DBType)BadType);
+    DB *db = dbInit((DBType)BadType, NULL);
     ASSERT_TRUE(db == NULL);
 }
 
@@ -131,7 +131,7 @@ static void testDbInitUserDB(void) {
 /** @brief dbInit for ChatHistoryDB returns non-NULL. */
 static void testDbInitChatHistoryDB(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(db->type, ChatHistoryDB);
     dbClose(db);
@@ -147,13 +147,13 @@ static void testDbCloseNull(void) {
 static void testDbInitCreatesDir(void) {
     /* Cleanly remove the directory to verify dbInit recreates it */
     removeDBFiles();
-    rmdir("db");
+    rmdir("./db");
     DB *db = testUserDB();
     ASSERT_TRUE(db != NULL);
     dbClose(db);
     /* Verify directory exists */
     struct stat st;
-    ASSERT_TRUE(stat("db", &st) == 0);
+    ASSERT_TRUE(stat("./db", &st) == 0);
     ASSERT_TRUE(S_ISDIR(st.st_mode));
 }
 
@@ -229,7 +229,7 @@ static void testCreateUserEmptyPassword(void) {
 /** @brief createUser rejects wrong database type. */
 static void testCreateUserWrongDBType(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_FAIL);
@@ -402,7 +402,7 @@ static void testDeleteUserNullUser(void) {
 /** @brief deleteUser rejects wrong database type. */
 static void testDeleteUserWrongDBType(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = NULL};
     ASSERT_INT_EQ(deleteUser(db, &u), DB_FAIL);
@@ -519,7 +519,7 @@ static void testVerifyUserEmptyPassword(void) {
 /** @brief verifyUser rejects wrong database type. */
 static void testVerifyUserWrongDBType(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(verifyUser(db, &u), DB_FAIL);
@@ -653,7 +653,7 @@ static void testStoreChatNullDB(void) {
 /** @brief storeChat rejects NULL Chat pointer. */
 static void testStoreChatNullChat(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(storeChat(db, RoomTestA, NULL), DB_FAIL);
     dbClose(db);
@@ -662,7 +662,7 @@ static void testStoreChatNullChat(void) {
 /** @brief storeChat rejects NULL message. */
 static void testStoreChatNullMessage(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidAlpha, 0, NULL, (time_t)TimeBase};
     ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_FAIL);
@@ -672,7 +672,7 @@ static void testStoreChatNullMessage(void) {
 /** @brief storeChat rejects empty message. */
 static void testStoreChatEmptyMessage(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidAlpha, 0, "", (time_t)TimeBase};
     ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_FAIL);
@@ -692,7 +692,7 @@ static void testStoreChatWrongDBType(void) {
 /** @brief storeChat: basic success, msgId is populated. */
 static void testStoreChatBasic(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidAlpha, 0, "Hello, world!", (time_t)TimeBase};
     ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
@@ -704,7 +704,7 @@ static void testStoreChatBasic(void) {
 /** @brief storeChat: msgId is strictly monotonically increasing. */
 static void testStoreChatMsgIdMonotonic(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch1 = {TestUidAlpha, 0, "msg1", (time_t)TimeBase};
     Chat ch2 = {TestUidAlpha, 0, "msg2", (time_t)TimeBase};
@@ -717,7 +717,7 @@ static void testStoreChatMsgIdMonotonic(void) {
 /** @brief storeChat: msgId is unique across different rooms. */
 static void testStoreChatCrossRoomUnique(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat chA = {TestUidAlpha, 0, "roomA", (time_t)TimeBase};
     Chat chB = {TestUidAlpha, 0, "roomB", (time_t)TimeBase};
@@ -731,7 +731,7 @@ static void testStoreChatCrossRoomUnique(void) {
 /** @brief storeChat: roomId = 0 works. */
 static void testStoreChatRoomIdZero(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidAlpha, 0, "room zero", (time_t)TimeBase};
     ASSERT_INT_EQ(storeChat(db, 0, &ch), DB_SUCC);
@@ -742,7 +742,7 @@ static void testStoreChatRoomIdZero(void) {
 /** @brief storeChat: roomId = UINT32_MAX works. */
 static void testStoreChatRoomIdMax(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidAlpha, 0, "room max", (time_t)TimeBase};
     ASSERT_INT_EQ(storeChat(db, RoomMaxVal, &ch), DB_SUCC);
@@ -753,7 +753,7 @@ static void testStoreChatRoomIdMax(void) {
 /** @brief storeChat: special characters in message are preserved. */
 static void testStoreChatSpecialChars(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidAlpha, 0,
                       "'; DROP TABLE users; -- \n\r\t\x01\x1F\x7F\xFF",
@@ -772,7 +772,7 @@ static void testStoreChatSpecialChars(void) {
 /** @brief storeChat: timestamp = 0 (epoch) is accepted. */
 static void testStoreChatTimestampZero(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidAlpha, 0, "epoch msg", (time_t)0};
     ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
@@ -791,7 +791,7 @@ static void testQueryMsgIdNullDB(void) {
 /** @brief queryChatByMsgId rejects NULL out pointer. */
 static void testQueryMsgIdNullOut(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, 1, NULL), DB_FAIL);
     dbClose(db);
@@ -810,7 +810,7 @@ static void testQueryMsgIdWrongDBType(void) {
 /** @brief queryChatByMsgId: non-existent msgId returns DB_FAIL. */
 static void testQueryMsgIdNonexistent(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, LargeNonexistentMsgId, &out),
@@ -821,7 +821,7 @@ static void testQueryMsgIdNonexistent(void) {
 /** @brief queryChatByMsgId: non-existent room returns DB_FAIL. */
 static void testQueryMsgIdNonexistentRoom(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(db, 9999, 1, &out), DB_FAIL);
@@ -831,7 +831,7 @@ static void testQueryMsgIdNonexistentRoom(void) {
 /** @brief queryChatByMsgId: store and retrieve roundtrip. */
 static void testQueryMsgIdRoundtrip(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat in = {TestUidAlpha, 0, "roundtrip test!", (time_t)TimeBase};
     ASSERT_INT_EQ(storeChat(db, RoomTestA, &in), DB_SUCC);
@@ -848,7 +848,7 @@ static void testQueryMsgIdRoundtrip(void) {
 /** @brief queryChatByMsgId: msgId = 0 finds a stored message. */
 static void testQueryMsgIdZeroSearch(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     /* Store a message and note its msgId, then query by that exact id */
     Chat in = {TestUidAlpha, 0, "zero test", (time_t)TimeBase};
@@ -858,7 +858,7 @@ static void testQueryMsgIdZeroSearch(void) {
     free(out.message);
     /* msgId=0 before any store should fail */
     removeDBFiles();
-    DB *db2 = dbInit(ChatHistoryDB);
+    DB *db2 = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db2 != NULL);
     Chat out2;
     ASSERT_INT_EQ(queryChatByMsgId(db2, RoomTestA, 0, &out2), DB_FAIL);
@@ -868,7 +868,7 @@ static void testQueryMsgIdZeroSearch(void) {
 /** @brief queryChatByMsgId: UINT64_MAX msgId fails (does not crash). */
 static void testQueryMsgIdMax(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, UINT64_MAX, &out), DB_FAIL);
@@ -878,7 +878,7 @@ static void testQueryMsgIdMax(void) {
 /** @brief queryChatByMsgId: out->message is NULL on failure. */
 static void testQueryMsgIdOutNotTouchedOnFailure(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat out;
     memset(&out, 0, sizeof(out));
@@ -903,7 +903,7 @@ static void testQueryTimeNullDB(void) {
 /** @brief queryChatByTimeRange rejects NULL out. */
 static void testQueryTimeNullOut(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     size_t count = 0;
     ASSERT_INT_EQ(queryChatByTimeRange(db, RoomTestA, 0, (time_t)0, (time_t)1,
@@ -915,7 +915,7 @@ static void testQueryTimeNullOut(void) {
 /** @brief queryChatByTimeRange rejects NULL count. */
 static void testQueryTimeNullCount(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat *out = NULL;
     ASSERT_INT_EQ(queryChatByTimeRange(db, RoomTestA, 0, (time_t)0, (time_t)1,
@@ -940,7 +940,7 @@ static void testQueryTimeWrongDBType(void) {
 /** @brief queryChatByTimeRange: empty room returns DB_SUCC with count=0. */
 static void testQueryTimeEmptyRoom(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat *out = (Chat *)(uintptr_t)TestSentinelPtr;
     size_t count = TestCountSentinel;
@@ -956,7 +956,7 @@ static void testQueryTimeEmptyRoom(void) {
 /** @brief queryChatByTimeRange: uid filter returns only matching user. */
 static void testQueryTimeUIDFilter(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     /* Store messages from two different users */
     Chat ch1 = {TestUidAlpha, 0, "alpha msg", (time_t)TimeBase};
@@ -980,7 +980,7 @@ static void testQueryTimeUIDFilter(void) {
 /** @brief queryChatByTimeRange: uid=0 returns all users. */
 static void testQueryTimeAllUids(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch1 = {TestUidAlpha, 0, "A", (time_t)TimeBase};
     Chat ch2 = {TestUidBravo, 0, "B", (time_t)TimeBase};
@@ -1002,7 +1002,7 @@ static void testQueryTimeAllUids(void) {
 /** @brief queryChatByTimeRange: time range with no match returns 0. */
 static void testQueryTimeNoMatch(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidAlpha, 0, "msg", (time_t)TimeBase};
     ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
@@ -1022,7 +1022,7 @@ static void testQueryTimeNoMatch(void) {
 /** @brief queryChatByTimeRange: startTime > endTime returns empty result. */
 static void testQueryTimeInvertedRange(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidAlpha, 0, "msg", (time_t)TimeBase};
     ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
@@ -1040,7 +1040,7 @@ static void testQueryTimeInvertedRange(void) {
 /** @brief queryChatByTimeRange: startTime == endTime (single-point range). */
 static void testQueryTimeEqualRange(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch1 = {TestUidAlpha, 0, "exact", (time_t)TimeBase};
     Chat ch2 = {TestUidAlpha, 0, "after",
@@ -1061,7 +1061,7 @@ static void testQueryTimeEqualRange(void) {
 /** @brief queryChatByTimeRange: results are ordered by msgId ASC. */
 static void testQueryTimeOrdering(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch1 = {TestUidAlpha, 0, "third",
                        (time_t)(TimeBase + TimeOffset3)};
@@ -1090,7 +1090,7 @@ static void testQueryTimeOrdering(void) {
 /** @brief queryChatByTimeRange: large number of messages does not crash. */
 static void testQueryTimeManyMessages(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     enum { MsgCount = 50 };
     for (int i = 0; i < MsgCount; i++) {
@@ -1118,7 +1118,7 @@ static void testQueryTimeManyMessages(void) {
  * independent. */
 static void testQueryTimeCrossRoomIsolation(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat chA = {TestUidAlpha, 0, "roomA", (time_t)TimeBase};
     Chat chB = {TestUidAlpha, 0, "roomB", (time_t)TimeBase};
@@ -1163,7 +1163,7 @@ static void testPersistenceChatDB(void) {
     removeDBFiles();
     uint64_t savedMsgId = 0;
     {
-        DB *db = dbInit(ChatHistoryDB);
+        DB *db = dbInit(ChatHistoryDB, NULL);
         ASSERT_TRUE(db != NULL);
         Chat ch = {TestUidAlpha, 0, "persistent msg", (time_t)TimeBase};
         ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
@@ -1171,7 +1171,7 @@ static void testPersistenceChatDB(void) {
         dbClose(db);
     }
     {
-        DB *db2 = dbInit(ChatHistoryDB);
+        DB *db2 = dbInit(ChatHistoryDB, NULL);
         ASSERT_TRUE(db2 != NULL);
         Chat out;
         ASSERT_INT_EQ(queryChatByMsgId(db2, RoomTestA, savedMsgId, &out),
@@ -1187,7 +1187,7 @@ static void testPersistenceMsgSeqContinues(void) {
     removeDBFiles();
     uint64_t lastBeforeClose = 0;
     {
-        DB *db = dbInit(ChatHistoryDB);
+        DB *db = dbInit(ChatHistoryDB, NULL);
         ASSERT_TRUE(db != NULL);
         Chat ch = {TestUidAlpha, 0, "pre-close", (time_t)TimeBase};
         ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
@@ -1195,7 +1195,7 @@ static void testPersistenceMsgSeqContinues(void) {
         dbClose(db);
     }
     {
-        DB *db = dbInit(ChatHistoryDB);
+        DB *db = dbInit(ChatHistoryDB, NULL);
         ASSERT_TRUE(db != NULL);
         Chat ch = {TestUidAlpha, 0, "post-close", (time_t)TimeBase};
         ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
@@ -1235,7 +1235,7 @@ static void testSQLInjectionUsername(void) {
  */
 static void testSQLInjectionMessage(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidAlpha, 0,
                       "'); DELETE FROM room_1; INSERT INTO room_1 "
@@ -1276,7 +1276,7 @@ static void testCrossTypeChatOnUserDB(void) {
  */
 static void testCrossTypeUserOnChatDB(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     User u = { .username = "alice", .nickname = "TestNick", .uid = TestUidAlpha, .password = "pass"};
     ASSERT_INT_EQ(createUser(db, &u), DB_FAIL);
@@ -1298,20 +1298,20 @@ static void testUsernameEmbeddedNul(void) {
 
 /** @brief dbInit handles directory busy (file exists where dir expected). */
 static void testDbInitFileWhereDirExpected(void) {
-    /* Create a regular file named "db" after cleaning up */
+    /* Create a regular file named "./db" after cleaning up */
     removeDBFiles();
-    rmdir("db");
-    FILE *f = fopen("db", "w");
+    rmdir("./db");
+    FILE *f = fopen("./db", "w");
     if (f != NULL) {
         fclose(f);
-        /* dbInit should fail because "db" is a file, not a directory */
+        /* dbInit should fail because "./db" is a file, not a directory */
         DB *db = testUserDB();
         /* It may or may not return NULL depending on implementation;
          * the important thing is that it does not crash or produce UB */
         if (db != NULL) {
             dbClose(db);
         }
-        remove("db");
+        remove("./db");
     }
 }
 
@@ -1552,7 +1552,7 @@ static void testSetTotpSecretNullDB(void) {
 
 static void testSetTotpSecretWrongDBType(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     User u = {.username = "wrongdb", .nickname = "W", .uid = 1, .password = "pw"};
     ASSERT_INT_EQ(setTOTPSecret(db, &u, "AAAA"), DB_FAIL);
@@ -1615,7 +1615,7 @@ static void testTOTPSecretWrongDEKFails(void) {
         dbClose(db);
     }
     {
-        DB *db = dbInit(UserDB);
+        DB *db = dbInit(UserDB, NULL);
         ASSERT_TRUE(db != NULL);
         enum { BadDekVal = 0xFF };
         uint8_t badDek[AES_GCM_KEY_LEN];
@@ -1635,7 +1635,7 @@ static void testTOTPSecretWrongDEKFails(void) {
 static void testTOTPSecretDEKUnsetFails(void) {
     removeDBFiles();
     {
-        DB *db = dbInit(UserDB);
+        DB *db = dbInit(UserDB, NULL);
         ASSERT_TRUE(db != NULL);
         enum { TestDekByte = 0xAA };
         uint8_t customDek[AES_GCM_KEY_LEN];
@@ -1651,7 +1651,7 @@ static void testTOTPSecretDEKUnsetFails(void) {
         dbClose(db);
     }
     {
-        DB *db = dbInit(UserDB);
+        DB *db = dbInit(UserDB, NULL);
         ASSERT_TRUE(db != NULL);
         /* DEK is all-zeros from calloc — different from encrypt DEK */
         User u = {.username = "nodek",
@@ -1712,7 +1712,7 @@ static void testGetTOTPSecretWithSecret(void) {
 
 static void testSetServerKeyBasic(void) {
     removeDBFiles();
-    DB *db = dbInit(ServerDB);
+    DB *db = dbInit(ServerDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     const uint8_t val[] = {0xDE, 0xAD, 0xBE, 0xEF};
@@ -1729,7 +1729,7 @@ static void testSetServerKeyBasic(void) {
 
 static void testSetServerKeyOverwrite(void) {
     removeDBFiles();
-    DB *db = dbInit(ServerDB);
+    DB *db = dbInit(ServerDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     const uint8_t old[] = {0x01, 0x02};
@@ -1750,7 +1750,7 @@ static void testSetServerKeyOverwrite(void) {
 
 static void testSetServerKeyEmptyBlob(void) {
     removeDBFiles();
-    DB *db = dbInit(ServerDB);
+    DB *db = dbInit(ServerDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(setServerKey(db, "empty", NULL, 0), DB_SUCC);
@@ -1766,7 +1766,7 @@ static void testSetServerKeyEmptyBlob(void) {
 
 static void testGetServerKeyNotFound(void) {
     removeDBFiles();
-    DB *db = dbInit(ServerDB);
+    DB *db = dbInit(ServerDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     uint8_t *out = NULL;
@@ -1784,7 +1784,7 @@ static void testSetServerKeyNullDB(void) {
 
 static void testSetServerKeyWrongDBType(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(setServerKey(db, "k", NULL, 0), DB_FAIL);
     dbClose(db);
@@ -1792,7 +1792,7 @@ static void testSetServerKeyWrongDBType(void) {
 
 static void testSetServerKeyEmptyName(void) {
     removeDBFiles();
-    DB *db = dbInit(ServerDB);
+    DB *db = dbInit(ServerDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(setServerKey(db, "", NULL, 0), DB_FAIL);
     dbClose(db);
@@ -1800,7 +1800,7 @@ static void testSetServerKeyEmptyName(void) {
 
 static void testGetServerKeyEmptyName(void) {
     removeDBFiles();
-    DB *db = dbInit(ServerDB);
+    DB *db = dbInit(ServerDB, NULL);
     ASSERT_TRUE(db != NULL);
     uint8_t *out = NULL;
     size_t outLen = 0;
@@ -1811,7 +1811,7 @@ static void testGetServerKeyEmptyName(void) {
 /** @brief storeChat: negative timestamp (time_t)-1 works. */
 static void testStoreChatTimestampNegative(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidAlpha, 0, "neg time", (time_t)-1};
     ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
@@ -1825,7 +1825,7 @@ static void testStoreChatTimestampNegative(void) {
 /** @brief storeChat: LONG_MAX timestamp works. */
 static void testStoreChatTimestampLongMax(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidAlpha, 0, "max time", (time_t)LONG_MAX};
     ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
@@ -1839,7 +1839,7 @@ static void testStoreChatTimestampLongMax(void) {
 /** @brief storeChat: UINT32_MAX uid works. */
 static void testStoreChatUidMax(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidMax, 0, "max uid msg", (time_t)TimeBase};
     ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
@@ -1853,7 +1853,7 @@ static void testStoreChatUidMax(void) {
 /** @brief msgId is globally unique across 5 different rooms. */
 static void testStoreChatCrossRoomUniqueMulti(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     enum { MultiRoomCount = 5 };
     uint64_t msgIds[MultiRoomCount];
@@ -1875,7 +1875,7 @@ static void testStoreChatCrossRoomUniqueMulti(void) {
  * results. */
 static void testQueryTimeExactCapacity(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     enum { InitCap = 16, /* matches database.c QUERY_INITIAL_CAPACITY */ };
     enum { ExactCount = InitCap };
@@ -1910,7 +1910,7 @@ static void testQueryUserAllNullDB(void) {
 /** @brief queryChatByUserAllRooms rejects NULL out. */
 static void testQueryUserAllNullOut(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     size_t count = TestCountSentinel;
     ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)0,
@@ -1923,7 +1923,7 @@ static void testQueryUserAllNullOut(void) {
 /** @brief queryChatByUserAllRooms rejects NULL count. */
 static void testQueryUserAllNullCount(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat *out = (Chat *)(uintptr_t)TestSentinelPtr;
     ASSERT_INT_EQ(queryChatByUserAllRooms(db, TestUidAlpha, (time_t)0,
@@ -1951,7 +1951,7 @@ static void testQueryUserAllWrongDBType(void) {
 /** @brief queryChatByUserAllRooms rejects uid=0. */
 static void testQueryUserAllUidZero(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat *out = (Chat *)(uintptr_t)TestSentinelPtr;
     size_t count = TestCountSentinel;
@@ -1966,7 +1966,7 @@ static void testQueryUserAllUidZero(void) {
 /** @brief queryChatByUserAllRooms: no rooms exist → empty result (SUCC). */
 static void testQueryUserAllNoRooms(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat *out = (Chat *)(uintptr_t)TestSentinelPtr;
     size_t count = TestCountSentinel;
@@ -1982,7 +1982,7 @@ static void testQueryUserAllNoRooms(void) {
  *  empty result. */
 static void testQueryUserAllNoMatch(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     /* Store messages for TestUidBravo only */
     Chat ch = {TestUidBravo, 0, "bravo msg", (time_t)TimeBase};
@@ -2003,7 +2003,7 @@ static void testQueryUserAllNoMatch(void) {
  *  queryChatByTimeRange. */
 static void testQueryUserAllSingleRoom(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     /* Store 3 messages from same user in one room */
     Chat ch1 = {TestUidAlpha, 0, "first", (time_t)TimeBase};
@@ -2044,7 +2044,7 @@ static void testQueryUserAllSingleRoom(void) {
  *  messages. */
 static void testQueryUserAllMultiRoom(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     /* Store TestUidAlpha messages in 3 different rooms */
     Chat chA = {TestUidAlpha, 0, "room-A", (time_t)(TimeBase)};
@@ -2084,7 +2084,7 @@ static void testQueryUserAllMultiRoom(void) {
  *  users' are excluded. */
 static void testQueryUserAllUidIsolation(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     /* Interleave messages from 3 users across 2 rooms */
     Chat chA1 = {TestUidAlpha, 0, "A-room1", (time_t)TimeBase};
@@ -2116,7 +2116,7 @@ static void testQueryUserAllUidIsolation(void) {
 /** @brief queryChatByUserAllRooms: results sorted globally by msgId ASC. */
 static void testQueryUserAllOrdering(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     /* Store messages across rooms in non-ordered room sequence */
     Chat ch1 = {TestUidAlpha, 0, "m1", (time_t)(TimeBase + TimeOffset3)};
@@ -2143,7 +2143,7 @@ static void testQueryUserAllOrdering(void) {
 /** @brief queryChatByUserAllRooms: time range filters correctly. */
 static void testQueryUserAllTimeRange(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat inside = {TestUidAlpha, 0, "inside",
                           (time_t)(TimeBase + TimeOffset1)};
@@ -2170,7 +2170,7 @@ static void testQueryUserAllTimeRange(void) {
 /** @brief queryChatByUserAllRooms: startTime == endTime (single-point). */
 static void testQueryUserAllEqualRange(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat exact = {TestUidAlpha, 0, "exact", (time_t)TimeBase};
     Chat near = {TestUidAlpha, 0, "near",
@@ -2192,7 +2192,7 @@ static void testQueryUserAllEqualRange(void) {
 /** @brief queryChatByUserAllRooms: startTime > endTime → empty result. */
 static void testQueryUserAllInvertedRange(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidAlpha, 0, "msg", (time_t)TimeBase};
     ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
@@ -2212,7 +2212,7 @@ static void testQueryUserAllInvertedRange(void) {
  *  different room — must be found. */
 static void testQueryUserAllCrossRoomTimeMatch(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat chA = {TestUidAlpha, 0, "roomA-ts1",
                        (time_t)(TimeBase + TimeOffset1)};
@@ -2236,7 +2236,7 @@ static void testQueryUserAllCrossRoomTimeMatch(void) {
 /** @brief queryChatByUserAllRooms: large number of messages across rooms. */
 static void testQueryUserAllManyMessages(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     enum { MsgPerRoom = 20, RoomCount = 3, TotalMsgs = MsgPerRoom * RoomCount };
     for (uint32_t r = 0; r < RoomCount; r++) {
@@ -2269,7 +2269,7 @@ static void testQueryUserAllManyMessages(void) {
  *  even when results exist. */
 static void testQueryUserAllOutputSetOnSuccess(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     Chat ch = {TestUidAlpha, 0, "msg", (time_t)TimeBase};
     ASSERT_INT_EQ(storeChat(db, RoomTestA, &ch), DB_SUCC);
@@ -2292,7 +2292,7 @@ static void testQueryUserAllOutputSetOnSuccess(void) {
  *  are discoverable. */
 static void testQueryUserAllRoomIdBoundaries(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     enum { RoomZero = 0 };
     Chat chZero = {TestUidAlpha, 0, "rm-zero", (time_t)TimeBase};
@@ -2324,7 +2324,7 @@ static void testQueryUserAllRoomIdBoundaries(void) {
  *  if other rooms have data, result is correct. */
 static void testQueryUserAllOneRoomEmpty(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     /* Room A has messages, Room B has none (table never created) */
     Chat chA = {TestUidAlpha, 0, "only-roomA", (time_t)TimeBase};
@@ -2346,7 +2346,7 @@ static void testQueryUserAllOneRoomEmpty(void) {
  *  querying across rooms without cross-contamination. */
 static void testQueryUserAllMultiUserCrossRoom(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     /* Alice in rooms A and B; Bob in room B only */
     Chat aA = {TestUidAlpha, 0, "A-in-A", (time_t)TimeBase};
@@ -2390,7 +2390,7 @@ static void testQueryUserAllMultiUserCrossRoom(void) {
  */
 static void testRoomStmtCacheCollision(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     /* room 0 and ROOM_STMT_BUCKETS share bucket index 0 */
     enum { CollideA = 0, CollideB = ROOM_STMT_BUCKETS };
@@ -2427,7 +2427,7 @@ static void testRoomStmtCacheCollision(void) {
  */
 static void testChatSchemaExists(void) {
     removeDBFiles();
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     /* Store a message which triggers room table creation */
     Chat ch = {TestUidAlpha, 0, "schema", (time_t)TimeBase};
@@ -2469,19 +2469,19 @@ static void testChatSchemaExists(void) {
 /* ═══════════════════  GameDB: room persistence tests  ═══════════════════ */
 
 static void testGameDbInitBasic(void) {
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(db->type, GameDB);
     dbClose(db);
 }
 
 static void testGameDbInitInvalidType(void) {
-    DB *db = dbInit((DBType)(-1));
+    DB *db = dbInit((DBType)(-1), NULL);
     ASSERT_TRUE(db == NULL);
 }
 
 static void testCreateRoomBasic(void) {
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(createRoom(db, 1001, 42), DB_SUCC);
@@ -2491,7 +2491,7 @@ static void testCreateRoomBasic(void) {
 }
 
 static void testCreateRoomDuplicateRejected(void) {
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(createRoom(db, 2001, 42), DB_SUCC);
@@ -2512,14 +2512,14 @@ static void testCreateRoomWrongDBType(void) {
 }
 
 static void testCreateRoomIdZero(void) {
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(createRoom(db, 0, 42), DB_FAIL);
     dbClose(db);
 }
 
 static void testDeleteRoomBasic(void) {
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(createRoom(db, 3001, 42), DB_SUCC);
@@ -2530,7 +2530,7 @@ static void testDeleteRoomBasic(void) {
 }
 
 static void testDeleteRoomNonexistent(void) {
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(deleteRoom(db, 9999), DB_FAIL);
@@ -2540,7 +2540,7 @@ static void testDeleteRoomNonexistent(void) {
 
 static void testListRoomsEmpty(void) {
     removeDBFiles();
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     uint32_t *ids = (uint32_t *)(uintptr_t)1;
@@ -2555,7 +2555,7 @@ static void testListRoomsEmpty(void) {
 
 static void testListRoomsSingle(void) {
     removeDBFiles();
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(createRoom(db, 4001, 42), DB_SUCC);
@@ -2572,7 +2572,7 @@ static void testListRoomsSingle(void) {
 
 static void testListRoomsMultiple(void) {
     removeDBFiles();
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(createRoom(db, 5001, 42), DB_SUCC);
@@ -2593,7 +2593,7 @@ static void testListRoomsMultiple(void) {
 }
 
 static void testListRoomsNullOut(void) {
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(listRooms(db, NULL, NULL), DB_FAIL);
     dbClose(db);
@@ -2609,7 +2609,7 @@ static void testListRoomsWrongDBType(void) {
 }
 
 static void testRoomExistsBasic(void) {
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(createRoom(db, 6001, 42), DB_SUCC);
@@ -2619,7 +2619,7 @@ static void testRoomExistsBasic(void) {
 }
 
 static void testRoomExistsNotFound(void) {
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(roomExists(db, 9999), DB_FAIL);
@@ -2629,7 +2629,7 @@ static void testRoomExistsNotFound(void) {
 }
 
 static void testCreateDeleteRecreate(void) {
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(createRoom(db, 7001, 42), DB_SUCC);
@@ -2655,7 +2655,7 @@ static void testDeleteRoomWrongDBType(void) {
 
 /** @brief Deleting same room twice fails on second attempt. */
 static void testDeleteRoomTwice(void) {
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(createRoom(db, 8001, 42), DB_SUCC);
     ASSERT_INT_EQ(deleteRoom(db, 8001), DB_SUCC);
@@ -2678,7 +2678,7 @@ static void testRoomExistsWrongDBType(void) {
 
 /** @brief RoomExists returns DB_FAIL for deleted room. */
 static void testRoomExistsAfterDelete(void) {
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(createRoom(db, 9001, 42), DB_SUCC);
     ASSERT_INT_EQ(deleteRoom(db, 9001), DB_SUCC);
@@ -2689,13 +2689,13 @@ static void testRoomExistsAfterDelete(void) {
 /** @brief GameDB persists rooms across close and reopen. */
 static void testGameDBPersistence(void) {
     removeDBFiles();
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(createRoom(db, 11001, 42), DB_SUCC);
     ASSERT_INT_EQ(createRoom(db, 11002, 99), DB_SUCC);
     dbClose(db);
 
-    DB *db2 = dbInit(GameDB);
+    DB *db2 = dbInit(GameDB, NULL);
     ASSERT_TRUE(db2 != NULL);
     ASSERT_INT_EQ(roomExists(db2, 11001), DB_SUCC);
     ASSERT_INT_EQ(roomExists(db2, 11002), DB_SUCC);
@@ -2705,7 +2705,7 @@ static void testGameDBPersistence(void) {
 
 /** @brief createRoom fails on ChatHistoryDB (cross-type misuse). */
 static void testCreateRoomOnChatHistoryDB(void) {
-    DB *db = dbInit(ChatHistoryDB);
+    DB *db = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(createRoom(db, 1001, 42), DB_FAIL);
     dbClose(db);
@@ -2714,7 +2714,7 @@ static void testCreateRoomOnChatHistoryDB(void) {
 /** @brief listRooms reflects deletions. */
 static void testListRoomsAfterDelete(void) {
     removeDBFiles();
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(createRoom(db, 12001, 42), DB_SUCC);
     ASSERT_INT_EQ(createRoom(db, 12002, 99), DB_SUCC);
@@ -2733,7 +2733,7 @@ static void testListRoomsAfterDelete(void) {
 /** @brief listRooms triggers realloc when exceeding QUERY_INITIAL_CAPACITY. */
 static void testListRoomsReallocTrigger(void) {
     removeDBFiles();
-    DB *db = dbInit(GameDB);
+    DB *db = dbInit(GameDB, NULL);
     ASSERT_TRUE(db != NULL);
     enum { RoomCount = 20, BaseRoomRealloc = 13001 };
     for (uint32_t i = 0; i < RoomCount; i++) {
@@ -2748,6 +2748,79 @@ static void testListRoomsReallocTrigger(void) {
     }
     free(ids);
     dbClose(db);
+}
+
+/* ═══════════════════════  dbEncKey tests  ═════════════════════════════════ */
+
+/** @brief DB_ENC_KEY_LEN must be 256-bit (32 bytes). */
+static void testDbEncKeyLen(void) {
+    ASSERT_UINT_EQ(DB_ENC_KEY_LEN, 32U);
+}
+
+/** @brief dbSetDbEncKey(NULL, ...) is a safe no-op. */
+static void testDbSetDbEncKeyNullDB(void) {
+    enum { TestByte = 0xAA };
+    uint8_t dummy[DB_ENC_KEY_LEN];
+    memset(dummy, TestByte, sizeof(dummy));
+    dbSetDbEncKey(NULL, dummy); /* must not crash */
+}
+
+/** @brief dbSetDbEncKey(db, NULL) zeros the dbEncKey field. */
+static void testDbSetDbEncKeyNullKey(void) {
+    removeDBFiles();
+    DB *db = dbInit(UserDB, NULL);
+    ASSERT_TRUE(db != NULL);
+
+    enum { FillByte = 0xCC };
+    uint8_t key[DB_ENC_KEY_LEN];
+    memset(key, FillByte, sizeof(key));
+    dbSetDbEncKey(db, key);
+    dbSetDbEncKey(db, NULL);
+
+    static const uint8_t zeros[DB_ENC_KEY_LEN];
+    ASSERT_MEM_EQ(db->dbEncKey, zeros, DB_ENC_KEY_LEN);
+    dbClose(db);
+}
+
+/** @brief dbSetDbEncKey correctly copies a key into the handle. */
+static void testDbSetDbEncKeyBasic(void) {
+    removeDBFiles();
+    DB *db = dbInit(UserDB, NULL);
+    ASSERT_TRUE(db != NULL);
+
+    uint8_t key[DB_ENC_KEY_LEN];
+    enum { FirstByte = 0xDE, SecondByte = 0xAD, MaskByte = 0xFFU };
+    key[0] = FirstByte;
+    key[1] = SecondByte;
+    for (size_t i = 2; i < DB_ENC_KEY_LEN; i++) {
+        key[i] = (uint8_t)(i & MaskByte);
+    }
+    dbSetDbEncKey(db, key);
+    ASSERT_MEM_EQ(db->dbEncKey, key, DB_ENC_KEY_LEN);
+    dbClose(db);
+}
+
+/** @brief dbInit passes encKey through to dbEncKey (non-NULL and NULL). */
+static void testDbInitEncKeyParam(void) {
+    removeDBFiles();
+    uint8_t key[DB_ENC_KEY_LEN];
+    enum { NonZeroByte = 0x5A };
+    memset(key, NonZeroByte, sizeof(key));
+
+    /* Non-NULL key */
+    DB *db1 = dbInit(UserDB, key);
+    ASSERT_TRUE(db1 != NULL);
+    ASSERT_MEM_EQ(db1->dbEncKey, key, DB_ENC_KEY_LEN);
+    dbClose(db1);
+
+    /* NULL key (dbEncKey stays zero from calloc)
+     * Note: re-create the DB since the previous call encrypted it. */
+    removeDBFiles();
+    DB *db2 = dbInit(UserDB, NULL);
+    ASSERT_TRUE(db2 != NULL);
+    static const uint8_t zeros[DB_ENC_KEY_LEN];
+    ASSERT_MEM_EQ(db2->dbEncKey, zeros, DB_ENC_KEY_LEN);
+    dbClose(db2);
 }
 
 /* ═══════════════════════  main  ══════════════════════════════════════════ */
@@ -2955,6 +3028,13 @@ int main(void) {
     RUN_TEST(testCreateRoomOnChatHistoryDB);
     RUN_TEST(testListRoomsAfterDelete);
     RUN_TEST(testListRoomsReallocTrigger);
+
+    /* ──────────── dbEncKey ──────────────────────── */
+    RUN_TEST(testDbEncKeyLen);
+    RUN_TEST(testDbSetDbEncKeyNullDB);
+    RUN_TEST(testDbSetDbEncKeyNullKey);
+    RUN_TEST(testDbSetDbEncKeyBasic);
+    RUN_TEST(testDbInitEncKeyParam);
 
     removeDBFiles();
 

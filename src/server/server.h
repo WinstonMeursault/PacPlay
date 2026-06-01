@@ -28,6 +28,7 @@
 #include "crypto.h"
 #include "protocol.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
 
@@ -63,6 +64,9 @@ struct DB;
 /** @brief select() timeout in microseconds (~60 Hz, reserves headroom for
  *         future per-tick game updates). */
 #define SERVER_SELECT_TIMEOUT_US 16000
+
+/** @brief Length of per-database encryption keys (256-bit). */
+#define DB_ENC_KEY_LEN 32
 
 /* ──────────────────────── return codes ─────────────────────────────────── */
 
@@ -127,7 +131,11 @@ typedef struct {
     struct DB *chatDB;
     struct DB *gameDB;
     struct DB *serverDB;          /**< Server key-value store. */
+    bool freshKeysGenerated;          /**< True if keys were freshly generated (first run). */
     uint8_t dekKey[AES_GCM_KEY_LEN]; /**< Decrypted DEK, available after serverInitKeys. */
+    uint8_t userDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted UserDBKey, loaded at startup. */
+    uint8_t chatDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted ChatHistoryDBKey. */
+    uint8_t gameDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted GameDBKey. */
 } Server;
 
 /* ──────────────────────── public API ───────────────────────────────────── */

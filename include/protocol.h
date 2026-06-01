@@ -53,6 +53,9 @@
  *         (32 chars + NUL). */
 #define TOTP_SETUP_SECRET_LEN 33
 
+/** @brief Length of a per-user client database encryption key (256-bit). */
+#define CLIENT_DB_KEY_LEN 32
+
 /** @brief Extra bytes added by AES-256-GCM encryption: nonce + tag. */
 #define AES_PACKET_EXTRA_LEN (AES_GCM_NONCE_LEN + AES_GCM_TAG_LEN)
 
@@ -87,6 +90,9 @@ typedef enum {
     MsgTOTPSetupResp,
     MsgTOTPVerifyReq,
     MsgTOTPVerifyResp,
+
+    MsgDBKeyReq,
+    MsgDBKeyResp,
 
     /* Room management. */
     MsgRoomListReq,
@@ -206,6 +212,16 @@ typedef struct {
 typedef struct {
     uint32_t code;
 } TOTPVerifyPayload;
+#pragma pack(pop)
+
+/** @brief DB key response payload sent from server to client.
+ *
+ *  Used by @c MsgDBKeyResp.  Contains the decrypted per-user CDBKey
+ *  (256-bit / 32 bytes of raw key material).  Fixed size: CLIENT_DB_KEY_LEN. */
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t cdbkey[CLIENT_DB_KEY_LEN];
+} DBKeyRespPayload;
 #pragma pack(pop)
 
 /** @brief Chat message payload sent from client to server.

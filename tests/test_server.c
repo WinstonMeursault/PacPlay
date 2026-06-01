@@ -169,7 +169,7 @@ static int recvStatus(SocketFD fd, AESGCMKey *key, MessageType expectedMt) {
 
 static DB *ensureTestUser(const char *username, uint32_t uid,
                            const char *password) {
-    DB *userDB = dbInit(UserDB);
+    DB *userDB = dbInit(UserDB, NULL);
     if (userDB == NULL) {
         return NULL;
     }
@@ -188,16 +188,19 @@ static DB *ensureTestUser(const char *username, uint32_t uid,
 
 static void removeDBFiles(void) {
     /* Clean up test database files */
-    remove("db/user.db");
-    remove("db/user.db-wal");
-    remove("db/user.db-shm");
-    remove("db/chatHistory.db");
-    remove("db/chatHistory.db-wal");
-    remove("db/chatHistory.db-shm");
-    remove("db/game.db");
-    remove("db/game.db-wal");
-    remove("db/game.db-shm");
-    rmdir("db");
+    remove("./db/user.db");
+    remove("./db/user.db-wal");
+    remove("./db/user.db-shm");
+    remove("./db/chatHistory.db");
+    remove("./db/chatHistory.db-wal");
+    remove("./db/chatHistory.db-shm");
+    remove("./db/game.db");
+    remove("./db/game.db-wal");
+    remove("./db/game.db-shm");
+    remove("./db/server.db");
+    remove("./db/server.db-wal");
+    remove("./db/server.db-shm");
+    rmdir("./db");
 }
 
 /* ═══════════════════════  Login Tests  ═══════════════════════════════════ */
@@ -214,7 +217,7 @@ static void testLoginSuccess(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
 
@@ -296,7 +299,7 @@ static void testLoginWrongPassword(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         Packet pkt;
@@ -374,7 +377,7 @@ static void testLoginNonexistentUser(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        DB *uDB = dbInit(UserDB);
+        DB *uDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         Packet pkt;
@@ -432,7 +435,7 @@ static void testRoomCreateAndJoin(void) {
     removeDBFiles();
     DB *userDB = ensureTestUser("Alice", LoginUidAlice, "alice");
     ASSERT_TRUE(userDB != NULL);
-    DB *gameDB = dbInit(GameDB);
+    DB *gameDB = dbInit(GameDB, NULL);
     ASSERT_TRUE(gameDB != NULL);
 
     SocketFD sv[2];
@@ -443,8 +446,8 @@ static void testRoomCreateAndJoin(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
-        gameDB = dbInit(GameDB);
+        userDB = dbInit(UserDB, NULL);
+        gameDB = dbInit(GameDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -550,8 +553,8 @@ static void testRoomJoinNonexistent(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
-        DB *gDB = dbInit(GameDB);
+        userDB = dbInit(UserDB, NULL);
+        DB *gDB = dbInit(GameDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -629,7 +632,7 @@ static void testRoomJoinNonexistent(void) {
 /** @brief Room list returns rooms sorted by ID (direct DB test, no fork). */
 static void testRoomList(void) {
     removeDBFiles();
-    DB *gameDB = dbInit(GameDB);
+    DB *gameDB = dbInit(GameDB, NULL);
     ASSERT_TRUE(gameDB != NULL);
     ASSERT_INT_EQ(createRoom(gameDB, RoomIdA, 1), DB_SUCC);
     ASSERT_INT_EQ(createRoom(gameDB, RoomIdC, 1), DB_SUCC);
@@ -651,13 +654,13 @@ static void testRoomList(void) {
 /** @brief Send a chat message and verify it is stored + broadcast. */
 static void testChatSendAndBroadcast(void) {
     removeDBFiles();
-    DB *gameDB = dbInit(GameDB);
+    DB *gameDB = dbInit(GameDB, NULL);
     ASSERT_TRUE(gameDB != NULL);
     ASSERT_INT_EQ(createRoom(gameDB, RoomIdCharlies, 1), DB_SUCC);
 
     DB *userDB = ensureTestUser("Charlie", LoginUidCharlie, "chatpass");
     ASSERT_TRUE(userDB != NULL);
-    DB *chatDB = dbInit(ChatHistoryDB);
+    DB *chatDB = dbInit(ChatHistoryDB, NULL);
     ASSERT_TRUE(chatDB != NULL);
 
     SocketFD sv[2];
@@ -669,9 +672,9 @@ static void testChatSendAndBroadcast(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
-        chatDB = dbInit(ChatHistoryDB);
-        gameDB = dbInit(GameDB);
+        userDB = dbInit(UserDB, NULL);
+        chatDB = dbInit(ChatHistoryDB, NULL);
+        gameDB = dbInit(GameDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -815,7 +818,7 @@ static void testLogout(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        DB *uDB = dbInit(UserDB);
+        DB *uDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -896,7 +899,7 @@ static void testStateMachineViolationKeyex(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        DB *uDB = dbInit(UserDB);
+        DB *uDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         /* Expect the next packet to be garbage — disconnect */
@@ -922,7 +925,7 @@ static void testUnencryptedPacketAfterAuth(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        DB *uDB = dbInit(UserDB);
+        DB *uDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         /* Try to receive the next packet — should fail because
@@ -975,7 +978,7 @@ static void testHeartbeatEcho(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -1070,7 +1073,7 @@ static void testLoginEmptyPassword(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        DB *uDB = dbInit(UserDB);
+        DB *uDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -1130,7 +1133,7 @@ static void testTOTPSetupAfterLogin(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -1230,7 +1233,7 @@ static void testTOTPSetupAlreadyEnabled(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -1339,7 +1342,7 @@ static void testTOTPVerifySuccess(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[SockParent]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[SockChild], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -1449,7 +1452,7 @@ static void testTOTPVerifyWrongCode(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[SockParent]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[SockChild], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -1538,7 +1541,7 @@ static void testTOTPVerifyMalformedPayload(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[SockParent]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[SockChild], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -1624,7 +1627,7 @@ static void testSessionTOTPVerifyStateViolation(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[SockParent]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[SockChild], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -1703,7 +1706,7 @@ static void testLoginPayloadTooSmall(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
 
@@ -1772,7 +1775,7 @@ static void testLoginUsernameNotNulTerminated(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
 
@@ -1841,7 +1844,7 @@ static void testCreateRoomZeroPayload(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -1924,8 +1927,8 @@ static void testJoinRoomZeroPayload(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
-        DB *gDB = dbInit(GameDB);
+        userDB = dbInit(UserDB, NULL);
+        DB *gDB = dbInit(GameDB, NULL);
         ASSERT_INT_EQ(createRoom(gDB, TestRoomId, LoginUidBob), DB_SUCC);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
@@ -2001,7 +2004,7 @@ static void testJoinRoomZeroPayload(void) {
 /** @brief Chat with payload < sizeof(int64_t) causes disconnect. */
 static void testChatZeroPayload(void) {
     removeDBFiles();
-    DB *gameDB = dbInit(GameDB);
+    DB *gameDB = dbInit(GameDB, NULL);
     ASSERT_TRUE(gameDB != NULL);
     ASSERT_INT_EQ(createRoom(gameDB, RoomIdCharlies, LoginUidCharlie), DB_SUCC);
     DB *userDB = ensureTestUser("chzuser", LoginUidCharlie, "chzpw");
@@ -2015,8 +2018,8 @@ static void testChatZeroPayload(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
-        gameDB = dbInit(GameDB);
+        userDB = dbInit(UserDB, NULL);
+        gameDB = dbInit(GameDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -2117,7 +2120,7 @@ static void testChatZeroPayload(void) {
 /** @brief Chat with message not NUL-terminated causes disconnect. */
 static void testChatMsgNotNulTerminated(void) {
     removeDBFiles();
-    DB *gameDB = dbInit(GameDB);
+    DB *gameDB = dbInit(GameDB, NULL);
     ASSERT_TRUE(gameDB != NULL);
     ASSERT_INT_EQ(createRoom(gameDB, RoomIdCharlies, LoginUidCharlie), DB_SUCC);
     DB *userDB = ensureTestUser("chnuser", LoginUidCharlie, "chnpw");
@@ -2131,8 +2134,8 @@ static void testChatMsgNotNulTerminated(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
-        gameDB = dbInit(GameDB);
+        userDB = dbInit(UserDB, NULL);
+        gameDB = dbInit(GameDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -2245,7 +2248,7 @@ static void testChatMsgNotNulTerminated(void) {
 /** @brief Register a new user successfully. */
 static void testRegisterSuccess(void) {
     removeDBFiles();
-    DB *userDB = dbInit(UserDB);
+    DB *userDB = dbInit(UserDB, NULL);
     ASSERT_TRUE(userDB != NULL);
 
     SocketFD sv[2];
@@ -2255,7 +2258,7 @@ static void testRegisterSuccess(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
 
@@ -2312,7 +2315,7 @@ static void testRegisterSuccess(void) {
 static void testRegisterDuplicate(void) {
     removeDBFiles();
     enum { DupRegisterUid = 888 };
-    DB *userDB = dbInit(UserDB);
+    DB *userDB = dbInit(UserDB, NULL);
     ASSERT_TRUE(userDB != NULL);
 
     /* Pre-create a user so duplicate registration fails */
@@ -2333,7 +2336,7 @@ static void testRegisterDuplicate(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
 
@@ -2390,7 +2393,7 @@ static void testRegisterDuplicate(void) {
  *  first succeeds, second fails due to UNIQUE constraint. */
 static void testRegisterDuplicateSameSession(void) {
     removeDBFiles();
-    DB *userDB = dbInit(UserDB);
+    DB *userDB = dbInit(UserDB, NULL);
     ASSERT_TRUE(userDB != NULL);
 
     SocketFD sv[2];
@@ -2400,7 +2403,7 @@ static void testRegisterDuplicateSameSession(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -2486,7 +2489,7 @@ static void testRegisterDuplicateSameSession(void) {
 /** @brief Register with empty password fails. */
 static void testRegisterEmptyPassword(void) {
     removeDBFiles();
-    DB *userDB = dbInit(UserDB);
+    DB *userDB = dbInit(UserDB, NULL);
     ASSERT_TRUE(userDB != NULL);
 
     SocketFD sv[2];
@@ -2496,7 +2499,7 @@ static void testRegisterEmptyPassword(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
 
@@ -2559,7 +2562,7 @@ static void testRegisterEmptyPassword(void) {
 /** @brief Register with payload smaller than MinPayload => StatusFailure. */
 static void testRegisterPayloadTooSmall(void) {
     removeDBFiles();
-    DB *userDB = dbInit(UserDB);
+    DB *userDB = dbInit(UserDB, NULL);
     ASSERT_TRUE(userDB != NULL);
 
     SocketFD sv[2];
@@ -2569,7 +2572,7 @@ static void testRegisterPayloadTooSmall(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
 
@@ -2618,7 +2621,7 @@ static void testRegisterPayloadTooSmall(void) {
 /** @brief Register with username not NUL-terminated => StatusFailure. */
 static void testRegisterUsernameNotNulTerminated(void) {
     removeDBFiles();
-    DB *userDB = dbInit(UserDB);
+    DB *userDB = dbInit(UserDB, NULL);
     ASSERT_TRUE(userDB != NULL);
 
     SocketFD sv[2];
@@ -2628,7 +2631,7 @@ static void testRegisterUsernameNotNulTerminated(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
 
@@ -2678,7 +2681,7 @@ static void testRegisterUsernameNotNulTerminated(void) {
  *  => StatusFailure. */
 static void testRegisterPasswordNotNulTerminated(void) {
     removeDBFiles();
-    DB *userDB = dbInit(UserDB);
+    DB *userDB = dbInit(UserDB, NULL);
     ASSERT_TRUE(userDB != NULL);
 
     SocketFD sv[2];
@@ -2688,7 +2691,7 @@ static void testRegisterPasswordNotNulTerminated(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
 
@@ -2751,7 +2754,7 @@ static void testRegisterPasswordNotNulTerminated(void) {
 /** @brief Full E2E: register a user, then login with same credentials. */
 static void testRegisterThenLogin(void) {
     removeDBFiles();
-    DB *userDB = dbInit(UserDB);
+    DB *userDB = dbInit(UserDB, NULL);
     ASSERT_TRUE(userDB != NULL);
 
     SocketFD sv[2];
@@ -2761,7 +2764,7 @@ static void testRegisterThenLogin(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
 
@@ -2885,7 +2888,7 @@ static void testRegisterBeforeKeyExchange(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        DB *uDB = dbInit(UserDB);
+        DB *uDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         /* Register before key exchange is a protocol violation —
@@ -2918,7 +2921,7 @@ static void testRegisterAfterLogin(void) {
     pid_t child = fork();
     if (child == 0) {
         socketClose(&sv[0]);
-        userDB = dbInit(UserDB);
+        userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
         ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
         uint32_t seq = 0;
@@ -2998,6 +3001,110 @@ static void testRegisterAfterLogin(void) {
     waitpid(child, NULL, 0);
 }
 
+/* ═══════════════════════  Key Management Tests  ═══════════════════════════ */
+
+/** @brief First-run serverInitKeys generates 4 keys and stores them. */
+static void testServerInitKeysFirstRun(void) {
+    removeDBFiles();
+    DB *serverDB = dbInit(ServerDB, NULL);
+    ASSERT_TRUE(serverDB != NULL);
+
+    Server srv;
+    memset(&srv, 0, sizeof(srv));
+    srv.serverDB = serverDB;
+
+    ASSERT_FALSE(srv.freshKeysGenerated);
+
+    /* Supply an empty stdin so getchar() returns EOF without blocking */
+    FILE *savedStdin = stdin;
+    stdin = fopen("/dev/null", "r");
+    ASSERT_TRUE(stdin != NULL);
+
+    int ret = serverInitKeys(&srv);
+
+    fclose(stdin);
+    stdin = savedStdin;
+
+    ASSERT_INT_EQ(ret, SERVER_SUCC);
+    ASSERT_TRUE(srv.freshKeysGenerated);
+
+    /* All 4 keys must be non-zero (generate was called) */
+    static const uint8_t zeros32[32];
+    ASSERT_TRUE(memcmp(srv.dekKey, zeros32, sizeof(srv.dekKey)) != 0);
+    ASSERT_TRUE(
+        memcmp(srv.userDbEncKey, zeros32, sizeof(srv.userDbEncKey)) != 0);
+    ASSERT_TRUE(
+        memcmp(srv.chatDbEncKey, zeros32, sizeof(srv.chatDbEncKey)) != 0);
+    ASSERT_TRUE(
+        memcmp(srv.gameDbEncKey, zeros32, sizeof(srv.gameDbEncKey)) != 0);
+
+    /* All 4 keys must be distinct from each other */
+    ASSERT_TRUE(memcmp(srv.dekKey, srv.userDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.dekKey, srv.chatDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.dekKey, srv.gameDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.userDbEncKey, srv.chatDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.userDbEncKey, srv.gameDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.chatDbEncKey, srv.gameDbEncKey, 32) != 0);
+
+    /* Verify all 4 envelopes are stored in ServerDB */
+    uint8_t *outDek = NULL;
+    uint8_t *outUser = NULL;
+    uint8_t *outChat = NULL;
+    uint8_t *outGame = NULL;
+    size_t lenDek = 0;
+    size_t lenUser = 0;
+    size_t lenChat = 0;
+    size_t lenGame = 0;
+    ASSERT_INT_EQ(getServerKey(serverDB, "DEK", &outDek, &lenDek), DB_SUCC);
+    ASSERT_INT_EQ(
+        getServerKey(serverDB, "UserDBKey", &outUser, &lenUser), DB_SUCC);
+    ASSERT_INT_EQ(
+        getServerKey(serverDB, "ChatHistoryDBKey", &outChat, &lenChat),
+        DB_SUCC);
+    ASSERT_INT_EQ(
+        getServerKey(serverDB, "GameDBKey", &outGame, &lenGame), DB_SUCC);
+
+    enum {
+        EnvelopeLen = 12 + 32 + 16
+    }; /* nonce + key + tag */
+    ASSERT_TRUE(outDek != NULL);
+    ASSERT_UINT_EQ(lenDek, (size_t)EnvelopeLen);
+    ASSERT_TRUE(outUser != NULL);
+    ASSERT_UINT_EQ(lenUser, (size_t)EnvelopeLen);
+    ASSERT_TRUE(outChat != NULL);
+    ASSERT_UINT_EQ(lenChat, (size_t)EnvelopeLen);
+    ASSERT_TRUE(outGame != NULL);
+    ASSERT_UINT_EQ(lenGame, (size_t)EnvelopeLen);
+
+    free(outDek);
+    free(outUser);
+    free(outChat);
+    free(outGame);
+
+    OPENSSL_cleanse(srv.dekKey, sizeof(srv.dekKey));
+    OPENSSL_cleanse(srv.userDbEncKey, sizeof(srv.userDbEncKey));
+    OPENSSL_cleanse(srv.chatDbEncKey, sizeof(srv.chatDbEncKey));
+    OPENSSL_cleanse(srv.gameDbEncKey, sizeof(srv.gameDbEncKey));
+    dbClose(serverDB);
+    removeDBFiles();
+}
+
+/** @brief freshKeysGenerated flag defaults to false (memset-zero). */
+static void testFreshKeysGeneratedFlag(void) {
+    /* A zero-initialized Server must have the flag false */
+    Server srv;
+    memset(&srv, 0, sizeof(srv));
+    ASSERT_FALSE(srv.freshKeysGenerated);
+
+    /* Manually set to true and verify */
+    srv.freshKeysGenerated = true;
+    ASSERT_TRUE(srv.freshKeysGenerated);
+
+    /* Manually set back to false and verify */
+    srv.freshKeysGenerated = false;
+    ASSERT_FALSE(srv.freshKeysGenerated);
+}
+
 /* ═══════════════════════  Main  ══════════════════════════════════════════ */
 
 int main(void) {
@@ -3051,6 +3158,10 @@ int main(void) {
     RUN_TEST(testTOTPVerifyWrongCode);
     RUN_TEST(testTOTPVerifyMalformedPayload);
     RUN_TEST(testSessionTOTPVerifyStateViolation);
+
+    /* —— Key Management —— */
+    RUN_TEST(testServerInitKeysFirstRun);
+    RUN_TEST(testFreshKeysGeneratedFlag);
 
     removeDBFiles();
 
