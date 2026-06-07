@@ -32,12 +32,33 @@
 
 #include <stddef.h>
 
-/* ──────────────────────── generic macros ───────────────────────────────── */
+/* ───────────────────────────── generic macros ───────────────────────────── */
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
-/* ──────────────────────── time utilities ───────────────────────────────── */
+/* ─────────────────────────── platform utilities ─────────────────────────── */
+
+#ifdef _WIN32
+#include <direct.h>
+/** @brief Cross-platform mkdir wrapper (Windows ignores mode). */
+#define PLATFORM_MKDIR(path, mode) _mkdir(path)
+#else
+/** @brief Cross-platform mkdir wrapper (POSIX). */
+#define PLATFORM_MKDIR(path, mode) mkdir(path, mode)
+#endif
+
+/* ───────────────────────────── hex utilities ────────────────────────────── */
+
+/**
+ * @brief Convert a single hex character to its 4-bit nibble value.
+ *
+ * @param c  Hex character (0-9, a-f, A-F).
+ * @return Nibble value 0-15, or -1 if @p c is not a valid hex digit.
+ */
+int hexCharToNibble(char c);
+
+/* ───────────────────────────── time utilities ───────────────────────────── */
 
 /**
  * @brief Get the current UNIX timestamp in seconds (UTC).

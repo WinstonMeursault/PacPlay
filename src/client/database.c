@@ -26,9 +26,11 @@
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
-#include "client.h"
 #include "client/database.h"
+#include "client.h"
+#include "db.h"
 #include "log.h"
+#include "utils.h"
 
 #include <errno.h>
 #include <stdbool.h>
@@ -43,14 +45,7 @@
 /** @brief SQLCipher key setter — not declared in standard sqlite3.h. */
 int sqlite3_key(sqlite3 *db, const void *pKey, int nKey);
 
-#ifdef _WIN32
-#include <direct.h>
-#define PLATFORM_MKDIR(path, mode) _mkdir(path)
-#else
-#define PLATFORM_MKDIR(path, mode) mkdir(path, mode)
-#endif
-
-/* ──────────────────────── SQL schema definitions ──────────────────────── */
+/* ───────────────────────── SQL schema definitions ───────────────────────── */
 
 #define SQL_CREATE_GAMELIST                                                    \
     "CREATE TABLE IF NOT EXISTS gameList ("                                    \
@@ -60,22 +55,22 @@ int sqlite3_key(sqlite3 *db, const void *pKey, int nKey);
     "playTime INTEGER NOT NULL DEFAULT 0"                                      \
     ");"
 
-/* ──────────────────────── prepared SQL ─────────────────────────────────── */
+/* ────────────────────────────── prepared SQL ────────────────────────────── */
 
 /** @brief INSERT a game record. Params: ?1=gameId, ?2=gameName, ?3=gamePath,
     ?4=playTime (initially 0). */
 #define SQL_INSERT_GAME                                                        \
-    "INSERT INTO gameList (gameId, gameName, gamePath, playTime) "            \
+    "INSERT INTO gameList (gameId, gameName, gamePath, playTime) "             \
     "VALUES (?, ?, ?, 0);"
 
 /** @brief SELECT all games ordered by gameName. */
 #define SQL_SELECT_ALL_GAMES                                                   \
-    "SELECT gameId, gameName, gamePath, playTime FROM gameList "              \
+    "SELECT gameId, gameName, gamePath, playTime FROM gameList "               \
     "ORDER BY gameName ASC;"
 
 /** @brief SELECT a single game by gameId. Params: ?1=gameId. */
 #define SQL_SELECT_GAME_BY_ID                                                  \
-    "SELECT gameId, gameName, gamePath, playTime FROM gameList "              \
+    "SELECT gameId, gameName, gamePath, playTime FROM gameList "               \
     "WHERE gameId = ?;"
 
 /** @brief DELETE a game by gameId. Params: ?1=gameId. */
@@ -85,47 +80,16 @@ int sqlite3_key(sqlite3 *db, const void *pKey, int nKey);
 #define SQL_UPDATE_PLAY_TIME                                                   \
     "UPDATE gameList SET playTime = ? WHERE gameId = ?;"
 
-/* ──────────────────────── misc constants ──────────────────────────────── */
+/* ───────────────────────────── misc constants ───────────────────────────── */
 
 #define DB_DIR_MODE 0755
 
-/* ──────────────────────── helpers ─────────────────────────────────────── */
+/* ──────────────────────────────── helpers ───────────────────────────────── */
 
 /**
  * @brief Execute a single SQL statement with no bound parameters.
  */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-static int execStmt(sqlite3 *dbHandle, const char *sql, const char *context) {
-    sqlite3_stmt *stmt = NULL;
-    int rc = sqlite3_prepare_v2(dbHandle, sql, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        LOG_ERROR("%s: prepare failed: %s (rc=%d)", context,
-                  sqlite3_errmsg(dbHandle), rc);
-        return CLIENT_DB_FAIL;
-    }
-
-    rc = sqlite3_step(stmt);
-    if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
-        LOG_ERROR("%s: step failed: %s (rc=%d)", context,
-                  sqlite3_errmsg(dbHandle), rc);
-        sqlite3_finalize(stmt);
-        return CLIENT_DB_FAIL;
-    }
-
-    sqlite3_finalize(stmt);
-    return CLIENT_DB_SUCC;
-}
-
-/**
- * @brief Finalize a cached prepared statement if it is non-NULL.
- */
-static void finalizeStmt(sqlite3_stmt **stmt) {
-    if (stmt != NULL && *stmt != NULL) {
-        sqlite3_finalize(*stmt);
-        *stmt = NULL;
-    }
-}
-
 /**
  * @brief Prepare and cache all statements for the gameList table.
  */
@@ -151,8 +115,9 @@ static int prepareGameListStmts(ClientDB *db) {
     rc = sqlite3_prepare_v2(db->handle, SQL_SELECT_GAME_BY_ID, -1,
                             &db->stmtSelectById, NULL);
     if (rc != SQLITE_OK) {
-        LOG_ERROR("prepareGameListStmts: SELECT BY ID prepare failed: %s (rc=%d)",
-                  sqlite3_errmsg(db->handle), rc);
+        LOG_ERROR(
+            "prepareGameListStmts: SELECT BY ID prepare failed: %s (rc=%d)",
+            sqlite3_errmsg(db->handle), rc);
         return CLIENT_DB_FAIL;
     }
 
@@ -175,12 +140,11 @@ static int prepareGameListStmts(ClientDB *db) {
     return CLIENT_DB_SUCC;
 }
 
-/* ──────────────────────── public API: lifecycle ───────────────────────── */
+/* ───────────────────────── public API: lifecycle ────────────────────────── */
 
 int clientInitDB(Client *client) {
     if (client == NULL || client->db != NULL) {
-        LOG_ERROR("clientInitDB: client=%p, client->db=%p",
-                  (void *)client,
+        LOG_ERROR("clientInitDB: client=%p, client->db=%p", (void *)client,
                   client != NULL ? (void *)client->db : NULL);
         return CLIENT_DB_FAIL;
     }
@@ -228,17 +192,17 @@ int clientInitDB(Client *client) {
         return CLIENT_DB_FAIL;
     }
 
-    if (execStmt(db->handle, "PRAGMA journal_mode=WAL;",
-                 "PRAGMA journal_mode") != CLIENT_DB_SUCC) {
+    if (dbExec(db->handle, "PRAGMA journal_mode=WAL;", "PRAGMA journal_mode") !=
+        CLIENT_DB_SUCC) {
         LOG_WARN("clientInitDB: WAL mode not enabled, continuing");
     }
 
-    if (execStmt(db->handle, "PRAGMA foreign_keys=ON;",
-                 "PRAGMA foreign_keys") != CLIENT_DB_SUCC) {
+    if (dbExec(db->handle, "PRAGMA foreign_keys=ON;", "PRAGMA foreign_keys") !=
+        CLIENT_DB_SUCC) {
         LOG_WARN("clientInitDB: foreign_keys not enabled, continuing");
     }
 
-    if (execStmt(db->handle, SQL_CREATE_GAMELIST, "CREATE TABLE gameList") !=
+    if (dbExec(db->handle, SQL_CREATE_GAMELIST, "CREATE TABLE gameList") !=
         CLIENT_DB_SUCC) {
         LOG_ERROR("clientInitDB: schema creation failed");
         sqlite3_close(db->handle);
@@ -267,11 +231,11 @@ void clientCloseDB(Client *client) {
 
     ClientDB *db = client->db;
 
-    finalizeStmt(&db->stmtInsert);
-    finalizeStmt(&db->stmtSelectAll);
-    finalizeStmt(&db->stmtSelectById);
-    finalizeStmt(&db->stmtDelete);
-    finalizeStmt(&db->stmtUpdatePlayTime);
+    dbFinalize(&db->stmtInsert);
+    dbFinalize(&db->stmtSelectAll);
+    dbFinalize(&db->stmtSelectById);
+    dbFinalize(&db->stmtDelete);
+    dbFinalize(&db->stmtUpdatePlayTime);
 
     int rc = sqlite3_close(db->handle);
     if (rc != SQLITE_OK) {
@@ -285,7 +249,7 @@ void clientCloseDB(Client *client) {
     LOG_INFO("clientCloseDB: database closed");
 }
 
-/* ──────────────────────── public API: game operations ─────────────────── */
+/* ────────────────────── public API: game operations ─────────────────────── */
 
 int addGame(Client *client, uint32_t gameId, const char *gameName,
             const char *gamePath) {
@@ -367,8 +331,8 @@ int listGames(Client *client, GameRecord ***outRecords, size_t *count) {
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         if (n >= capacity) {
             size_t newCapacity = capacity * 2;
-            GameRecord **tmp =
-                (GameRecord **)realloc((void *)results, newCapacity * sizeof(GameRecord *));
+            GameRecord **tmp = (GameRecord **)realloc(
+                (void *)results, newCapacity * sizeof(GameRecord *));
             if (tmp == NULL) {
                 LOG_ERROR("listGames: realloc failed (errno=%d)", errno);
                 for (size_t i = 0; i < n; i++) {

@@ -45,7 +45,7 @@
 /** @brief SQLCipher key setter — not declared in standard sqlite3.h. */
 int sqlite3_key(sqlite3 *db, const void *pKey, int nKey);
 
-/* ───────────── helper constants ───────────────────────────────────────── */
+/* ──────────────────────────── helper constants ──────────────────────────── */
 
 enum {
     TestGameA = 100,
@@ -66,7 +66,7 @@ enum {
     ExpectedResultCountEmpty = 0
 };
 
-/* ───────────── file-level helpers ─────────────────────────────────────── */
+/* ─────────────────────────── file-level helpers ─────────────────────────── */
 
 /**
  * @brief Remove stale client test database files so each test starts clean.
@@ -99,9 +99,7 @@ static void initTestClient(Client *client) {
 /**
  * @brief Close and destroy a test Client created by initTestClient().
  */
-static void destroyTestClient(Client *client) {
-    clientCloseDB(client);
-}
+static void destroyTestClient(Client *client) { clientCloseDB(client); }
 
 /**
  * @brief Generate a random non-zero CDBKey into @p out.
@@ -126,12 +124,10 @@ static void freeGameRecords(GameRecord **records, size_t count) {
     free((void *)records);
 }
 
-/* ═══════════════════════  1. Constants & Layout  ════════════════════════ */
+/* ═════════════════════════ 1. Constants & Layout ══════════════════════════ */
 
 /** @brief CLIENT_DB_KEY_LEN must be exactly 256-bit. */
-static void testClientDBKeyLen(void) {
-    ASSERT_UINT_EQ(CLIENT_DB_KEY_LEN, 32U);
-}
+static void testClientDBKeyLen(void) { ASSERT_UINT_EQ(CLIENT_DB_KEY_LEN, 32U); }
 
 /** @brief CLIENT_DB_SUCC / CLIENT_DB_FAIL are distinct. */
 static void testClientDBReturnCodes(void) {
@@ -153,18 +149,19 @@ static void testDBKeyRespPayloadOffset(void) {
 /** @brief GameRecord fields are at deterministic relative offsets. */
 static void testGameRecordLayout(void) {
     ASSERT_UINT_EQ(offsetof(GameRecord, gameId), (size_t)0);
-    ASSERT_TRUE(offsetof(GameRecord, gameName) >
-                offsetof(GameRecord, gameId));
+    ASSERT_TRUE(offsetof(GameRecord, gameName) > offsetof(GameRecord, gameId));
     ASSERT_TRUE(offsetof(GameRecord, gamePath) >
                 offsetof(GameRecord, gameName));
     ASSERT_TRUE(offsetof(GameRecord, playTime) >
                 offsetof(GameRecord, gamePath));
-    enum { ExpectedSize = sizeof(uint32_t) + sizeof(char *) + sizeof(char *) +
-                         sizeof(uint64_t) };
+    enum {
+        ExpectedSize = sizeof(uint32_t) + sizeof(char *) + sizeof(char *) +
+                       sizeof(uint64_t)
+    };
     ASSERT_TRUE(sizeof(GameRecord) >= ExpectedSize);
 }
 
-/* ═══════════════════════  2. clientInitDB  ══════════════════════════════ */
+/* ════════════════════════════ 2. clientInitDB ═════════════════════════════ */
 
 /** @brief clientInitDB rejects NULL client. */
 static void testInitDBNullClient(void) {
@@ -213,12 +210,10 @@ static void testInitDBCreatesFile(void) {
     ASSERT_TRUE(stat(CLIENT_DB_PATH, &st) == 0);
 }
 
-/* ═══════════════════════  3. clientCloseDB  ═════════════════════════════ */
+/* ════════════════════════════ 3. clientCloseDB ════════════════════════════ */
 
 /** @brief clientCloseDB on a NULL client is a safe no-op. */
-static void testCloseDBNull(void) {
-    clientCloseDB(NULL);
-}
+static void testCloseDBNull(void) { clientCloseDB(NULL); }
 
 /** @brief clientCloseDB on client with db == NULL is a safe no-op. */
 static void testCloseDBUninit(void) {
@@ -248,11 +243,12 @@ static void testCloseDBSetsNull(void) {
     ASSERT_TRUE(client.db == NULL);
 }
 
-/* ═══════════════════════  4. addGame  ═══════════════════════════════════ */
+/* ═══════════════════════════════ 4. addGame ═══════════════════════════════ */
 
 /** @brief addGame rejects NULL client. */
 static void testAddGameNullClient(void) {
-    ASSERT_INT_EQ(addGame(NULL, TestGameA, "Test", "/tmp/test"), CLIENT_DB_FAIL);
+    ASSERT_INT_EQ(addGame(NULL, TestGameA, "Test", "/tmp/test"),
+                  CLIENT_DB_FAIL);
 }
 
 /** @brief addGame rejects uninitialised db. */
@@ -332,8 +328,7 @@ static void testAddGameEmptyName(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "", "/tmp/test"),
-                  CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "", "/tmp/test"), CLIENT_DB_SUCC);
     destroyTestClient(&client);
 }
 
@@ -346,7 +341,7 @@ static void testAddGameEmptyPath(void) {
     destroyTestClient(&client);
 }
 
-/* ═══════════════════════  5. addGame — SQL injection resistance ═════════ */
+/* ═════════════════ 5. addGame — SQL injection resistance ══════════════════ */
 
 /** @brief addGame with SQL injection payload in gameName is safely stored. */
 static void testAddGameSQLInjectionName(void) {
@@ -402,7 +397,7 @@ static void testAddGameSpecialChars(void) {
     destroyTestClient(&client);
 }
 
-/* ═══════════════════════  6. listGames  ═════════════════════════════════ */
+/* ══════════════════════════════ 6. listGames ══════════════════════════════ */
 
 /** @brief listGames rejects NULL client. */
 static void testListGamesNullClient(void) {
@@ -504,7 +499,7 @@ static void testListGamesFailOutputUntouched(void) {
     ASSERT_INT_EQ(listGames(&client, &records, &count), CLIENT_DB_FAIL);
 }
 
-/* ═══════════════════════  7. deleteGame  ════════════════════════════════ */
+/* ═════════════════════════════ 7. deleteGame ══════════════════════════════ */
 
 /** @brief deleteGame rejects NULL client. */
 static void testDeleteGameNullClient(void) {
@@ -549,8 +544,7 @@ static void testDeleteGameTwice(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "Once", "/once"),
-                  CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "Once", "/once"), CLIENT_DB_SUCC);
     ASSERT_INT_EQ(deleteGame(&client, TestGameA), CLIENT_DB_SUCC);
     ASSERT_INT_EQ(deleteGame(&client, TestGameA), CLIENT_DB_FAIL);
     destroyTestClient(&client);
@@ -574,7 +568,7 @@ static void testDeleteGameIsolation(void) {
     destroyTestClient(&client);
 }
 
-/* ═══════════════════════  8. updatePlayTime  ════════════════════════════ */
+/* ═══════════════════════════ 8. updatePlayTime ════════════════════════════ */
 
 /** @brief updatePlayTime rejects NULL client. */
 static void testUpdatePlayTimeNullClient(void) {
@@ -672,7 +666,7 @@ static void testUpdatePlayTimeAccumulate(void) {
     destroyTestClient(&client);
 }
 
-/* ═══════════  9. End-to-End Round-Trips  ════════════════════════════════ */
+/* ═══════════════════════ 9. End-to-End Round-Trips ════════════════════════ */
 
 /** @brief add → list → delete → list full cycle preserves isolation. */
 static void testAddListDeleteRoundTrip(void) {
@@ -741,7 +735,7 @@ static void testFullCRUDRoundTrip(void) {
     destroyTestClient(&client);
 }
 
-/* ═══════════  10. Encryption Security  ══════════════════════════════════ */
+/* ════════════════════════ 10. Encryption Security ═════════════════════════ */
 
 /** @brief DB file cannot be read without the encryption key. */
 static void testDBEncryptedOnDisk(void) {
@@ -758,8 +752,7 @@ static void testDBEncryptedOnDisk(void) {
     ASSERT_INT_EQ(rc, SQLITE_OK);
     ASSERT_TRUE(raw != NULL);
 
-    rc = sqlite3_exec(raw,
-                      "SELECT count(*) FROM gameList;", NULL, NULL, NULL);
+    rc = sqlite3_exec(raw, "SELECT count(*) FROM gameList;", NULL, NULL, NULL);
     ASSERT_TRUE(rc != SQLITE_OK);
     sqlite3_close(raw);
 }
@@ -783,8 +776,7 @@ static void testWrongKeyFails(void) {
     rc = sqlite3_key(raw, wrongKey, (int)sizeof(wrongKey));
     ASSERT_INT_EQ(rc, SQLITE_OK);
 
-    rc = sqlite3_exec(raw,
-                      "SELECT count(*) FROM gameList;", NULL, NULL, NULL);
+    rc = sqlite3_exec(raw, "SELECT count(*) FROM gameList;", NULL, NULL, NULL);
     ASSERT_TRUE(rc != SQLITE_OK);
     sqlite3_close(raw);
 }
@@ -896,7 +888,7 @@ static void testFileCorruptionDetected(void) {
     /* init failure is also acceptable. */
 }
 
-/* ═══════════  11. Lifecycle Reuse  ══════════════════════════════════════ */
+/* ══════════════════════════ 11. Lifecycle Reuse ═══════════════════════════ */
 
 /** @brief Init → Close → Init reuses the same Client struct safely. */
 static void testLifecycleReuse(void) {
@@ -922,7 +914,7 @@ static void testLifecycleReuse(void) {
     destroyTestClient(&client);
 }
 
-/* ═══════════════════════  main  ════════════════════════════════════════ */
+/* ══════════════════════════════════ main ══════════════════════════════════ */
 
 int main(void) {
     logSetQuiet(true);

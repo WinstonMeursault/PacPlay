@@ -17,7 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ──────────── type instantiations ─────────────────────────────────────── */
+/* ────────────────────────── type instantiations ─────────────────────────── */
 
 typedef int Int;
 QUEUE_DEFINE(Packet)
@@ -25,7 +25,7 @@ QUEUE_DEFINE(Int)
 ARRAY_DEFINE(Packet)
 ARRAY_DEFINE(Int)
 
-/* ──────────── helper constants ────────────────────────────────────────── */
+/* ──────────────────────────── helper constants ──────────────────────────── */
 
 enum {
     DefaultCap = 8,
@@ -50,7 +50,7 @@ enum {
     PayloadFillByte = 0xAB
 };
 
-/* ──────────── Packet helper ───────────────────────────────────────────── */
+/* ───────────────────────────── Packet helper ────────────────────────────── */
 
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static Packet makeTestPacket(MessageType msgType, uint32_t seqID) {

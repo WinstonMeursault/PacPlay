@@ -36,6 +36,20 @@
 /* ASCII DEL character (used for backspace on some terminals). */
 #define ASCII_DEL 0x7F
 
+int hexCharToNibble(char c) {
+    enum { HexBaseValue = 10 };
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + HexBaseValue;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + HexBaseValue;
+    }
+    return -1;
+}
+
 time_t getCurrentTimestamp(void) { return time(NULL); }
 
 size_t readPasswordMasked(char *buf, size_t bufsize) {

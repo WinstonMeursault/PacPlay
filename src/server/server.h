@@ -32,9 +32,7 @@
 #include <stdint.h>
 #include <time.h>
 
-#include "server/communication.h"
-
-/* ──────────────────────── constants ────────────────────────────────────── */
+/* ─────────────────────────────── constants ──────────────────────────────── */
 
 /** @brief Maximum username length (including NUL terminator). */
 #define USERNAME_MAX_LEN 32
@@ -49,11 +47,11 @@ _Static_assert(LOGIN_USERNAME_LEN == USERNAME_MAX_LEN,
 _Static_assert(LOGIN_NICKNAME_LEN == NICKNAME_MAX_LEN,
                "LOGIN_NICKNAME_LEN must equal NICKNAME_MAX_LEN");
 
-/* ──────────────────────── forward declarations ─────────────────────────── */
+/* ────────────────────────── forward declarations ────────────────────────── */
 
 struct DB;
 
-/* ──────────────────────── constants (continued) ────────────────────────── */
+/* ───────────────────────── constants (continued) ────────────────────────── */
 
 /** @brief Maximum clients a single room can hold. */
 #define MAX_CLIENTS_PER_ROOM 10
@@ -68,12 +66,12 @@ struct DB;
 /** @brief Length of per-database encryption keys (256-bit). */
 #define DB_ENC_KEY_LEN 32
 
-/* ──────────────────────── return codes ─────────────────────────────────── */
+/* ────────────────────────────── return codes ────────────────────────────── */
 
 #define SERVER_SUCC (0)
 #define SERVER_FAIL (-1)
 
-/* ──────────────────────── types ────────────────────────────────────────── */
+/* ───────────────────────────────── types ────────────────────────────────── */
 
 typedef struct {
     char username[USERNAME_MAX_LEN];
@@ -105,9 +103,9 @@ typedef struct {
     SocketFD fd;
     SessionState state;
     AESGCMKey aesKey;
-    User currentUser;    /**< Populated after successful login. */
+    User currentUser;       /**< Populated after successful login. */
     uint32_t currentRoomId; /**< 0 if not in any room. */
-    uint32_t seqID;      /**< Per-client monotonic sequence counter. */
+    uint32_t seqID;         /**< Per-client monotonic sequence counter. */
 } ClientSession;
 
 /** @brief In-memory room with currently-connected members (used for
@@ -127,18 +125,21 @@ typedef struct {
     ActiveRoom **activeRooms; /**< Dynamic array of rooms with ≥1 member. */
     int activeRoomCount;
     int activeRoomCapacity;
-    struct DB *userDB;            /**< Opaque DB handle (full def in database.h). */
+    struct DB *userDB; /**< Opaque DB handle (full def in database.h). */
     struct DB *chatDB;
     struct DB *gameDB;
-    struct DB *serverDB;          /**< Server key-value store. */
-    bool freshKeysGenerated;          /**< True if keys were freshly generated (first run). */
-    uint8_t dekKey[AES_GCM_KEY_LEN]; /**< Decrypted DEK, available after serverInitKeys. */
-    uint8_t userDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted UserDBKey, loaded at startup. */
+    struct DB *serverDB;     /**< Server key-value store. */
+    bool freshKeysGenerated; /**< True if keys were freshly generated (first
+                                run). */
+    uint8_t dekKey[AES_GCM_KEY_LEN];      /**< Decrypted DEK, available after
+                                             serverInitKeys. */
+    uint8_t userDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted UserDBKey, loaded at
+                                             startup. */
     uint8_t chatDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted ChatHistoryDBKey. */
     uint8_t gameDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted GameDBKey. */
 } Server;
 
-/* ──────────────────────── public API ───────────────────────────────────── */
+/* ─────────────────────────────── public API ─────────────────────────────── */
 
 /**
  * @brief Initialise server cryptographic keys (envelope encryption).

@@ -38,7 +38,7 @@
 /* Forward — full definition in client.h. */
 struct Client;
 
-/* ──────────────────────── constants ────────────────────────────────────── */
+/* ─────────────────────────────── constants ──────────────────────────────── */
 
 /** @brief File path for the client-side encrypted database. */
 #define CLIENT_DB_PATH "./db/client.db"
@@ -46,12 +46,12 @@ struct Client;
 /** @brief Directory containing the client database file. */
 #define CLIENT_DB_DIR "./db"
 
-/* ──────────────────────── return codes ─────────────────────────────────── */
+/* ────────────────────────────── return codes ────────────────────────────── */
 
 #define CLIENT_DB_SUCC (0)
 #define CLIENT_DB_FAIL (-1)
 
-/* ──────────────────────── types ────────────────────────────────────────── */
+/* ───────────────────────────────── types ────────────────────────────────── */
 
 /**
  * @brief A single row from the gameList table.
@@ -61,8 +61,8 @@ struct Client;
  */
 typedef struct {
     uint32_t gameId;
-    char *gameName;   /**< Human-readable game name, caller-freed. */
-    char *gamePath;   /**< Filesystem path to the game, caller-freed. */
+    char *gameName;    /**< Human-readable game name, caller-freed. */
+    char *gamePath;    /**< Filesystem path to the game, caller-freed. */
     uint64_t playTime; /**< Accumulated play time in seconds. */
 } GameRecord;
 
@@ -83,7 +83,7 @@ typedef struct ClientDB {
     uint8_t dbEncKey[CLIENT_DB_KEY_LEN]; /**< SQLCipher page-level key. */
 } ClientDB;
 
-/* ──────────────────────── lifecycle ────────────────────────────────────── */
+/* ─────────────────────────────── lifecycle ──────────────────────────────── */
 
 /**
  * @brief Open (and optionally create) the client encrypted database.
@@ -105,7 +105,7 @@ int clientInitDB(struct Client *client);
  */
 void clientCloseDB(struct Client *client);
 
-/* ──────────────────────── game operations ──────────────────────────────── */
+/* ──────────────────────────── game operations ───────────────────────────── */
 
 /**
  * @brief Insert a game record into the local game library.

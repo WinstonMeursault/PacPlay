@@ -28,6 +28,7 @@
 
 #include "protocol.h"
 #include "test_utils.h"
+#include "utils.h"
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -35,7 +36,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-/* ───────────── helper constants for readability ────────────────────────── */
+/* ──────────────────── helper constants for readability ──────────────────── */
 
 enum {
     /** Expected PacketHeader total size (packed, fixed-width types). */
@@ -93,7 +94,7 @@ static const uint8_t wrongAESKey[AES_GCM_KEY_LEN] = {
     0xF4, 0xF3, 0xF2, 0xF1, 0xF0, 0xEF, 0xEE, 0xED, 0xEC, 0xEB, 0xEA,
     0xE9, 0xE8, 0xE7, 0xE6, 0xE5, 0xE4, 0xE3, 0xE2, 0xE1, 0xE0};
 
-/* ───────────── helpers ───────────────────────────────────────────────── */
+/* ──────────────────────────────── helpers ───────────────────────────────── */
 
 /**
  * @brief Create a heap-allocated plaintext Packet for testing.
@@ -139,7 +140,7 @@ static int makeSocketPair(SocketFD pair[SockPairLen]) {
     return 0;
 }
 
-/* ═══════════════════════  1. Constants & Enums  ═════════════════════════ */
+/* ══════════════════════════ 1. Constants & Enums ══════════════════════════ */
 
 /** @brief PACKET_MAGIC matches the documented ASCII 'PPPM' value. */
 static void testPacketMagicValue(void) {
@@ -203,7 +204,7 @@ static void testProtocolReturnCodes(void) {
     ASSERT_TRUE(PROTOCOL_FAIL != PROTOCOL_AUTH_FAIL);
 }
 
-/* ═══════════════════════  2. PacketHeader Layout  ══════════════════════ */
+/* ═════════════════════════ 2. PacketHeader Layout ═════════════════════════ */
 
 /** @brief PacketHeader size matches expected packed size. */
 static void testPacketHeaderSize(void) {
@@ -241,9 +242,10 @@ static void testPacketHeaderFieldValues(void) {
     ASSERT_UINT_EQ(hdr.sequenceID, TestSeq);
 }
 
-/* ─── LoginRequestPayload layout ─────────────────────────────────────── */
+/* ─────────────────────── LoginRequestPayload layout ─────────────────────── */
 
-/** @brief LoginRequestPayload fixed-header fields are at deterministic offsets. */
+/** @brief LoginRequestPayload fixed-header fields are at deterministic offsets.
+ */
 static void testLoginRequestPayloadOffsets(void) {
     /* Login payload: username(32B) at offset 0, password(FAM) at offset 32. */
     ASSERT_UINT_EQ(offsetof(LoginRequestPayload, username), (size_t)0);
@@ -257,7 +259,7 @@ static void testLoginRequestPayloadSize(void) {
     ASSERT_UINT_EQ(sizeof(LoginRequestPayload), (size_t)LOGIN_USERNAME_LEN);
 }
 
-/* ─── RegisterRequestPayload layout ──────────────────────────────────── */
+/* ───────────────────── RegisterRequestPayload layout ────────────────────── */
 
 /** @brief RegisterRequestPayload fields are at deterministic offsets. */
 static void testRegisterRequestPayloadOffsets(void) {
@@ -268,13 +270,14 @@ static void testRegisterRequestPayloadOffsets(void) {
                    (size_t)(LOGIN_USERNAME_LEN + LOGIN_NICKNAME_LEN));
 }
 
-/** @brief sizeof(RegisterRequestPayload) equals the fixed part (excludes FAM). */
+/** @brief sizeof(RegisterRequestPayload) equals the fixed part (excludes FAM).
+ */
 static void testRegisterRequestPayloadSize(void) {
     ASSERT_UINT_EQ(sizeof(RegisterRequestPayload),
                    (size_t)(LOGIN_USERNAME_LEN + LOGIN_NICKNAME_LEN));
 }
 
-/* ─── LoginResponsePayload layout ────────────────────────────────────── */
+/* ────────────────────── LoginResponsePayload layout ─────────────────────── */
 
 /** @brief LoginResponsePayload is 68 bytes (uid + username + nickname). */
 static void testLoginResponsePayloadSize(void) {
@@ -286,16 +289,14 @@ static void testLoginResponsePayloadSize(void) {
 /** @brief LoginResponsePayload fields are at deterministic offsets. */
 static void testLoginResponsePayloadOffsets(void) {
     ASSERT_UINT_EQ(offsetof(LoginResponsePayload, uid), (size_t)0);
-    ASSERT_UINT_EQ(offsetof(LoginResponsePayload, username),
-                   sizeof(uint32_t));
+    ASSERT_UINT_EQ(offsetof(LoginResponsePayload, username), sizeof(uint32_t));
     ASSERT_UINT_EQ(offsetof(LoginResponsePayload, nickname),
                    sizeof(uint32_t) + LOGIN_USERNAME_LEN);
     ASSERT_UINT_EQ(offsetof(LoginResponsePayload, totpEnabled),
-                   sizeof(uint32_t) + LOGIN_USERNAME_LEN +
-                       LOGIN_NICKNAME_LEN);
+                   sizeof(uint32_t) + LOGIN_USERNAME_LEN + LOGIN_NICKNAME_LEN);
 }
 
-/* ─── TOTPVerifyPayload layout ────────────────────────────────────────── */
+/* ──────────────────────── TOTPVerifyPayload layout ──────────────────────── */
 
 /** @brief sizeof(TOTPVerifyPayload) == sizeof(uint32_t). */
 static void testTOTPVerifyPayloadSize(void) {
@@ -307,7 +308,7 @@ static void testTOTPVerifyPayloadOffset(void) {
     ASSERT_UINT_EQ(offsetof(TOTPVerifyPayload, code), (size_t)0);
 }
 
-/* ─── ChatPacketPayload layout ───────────────────────────────────────── */
+/* ──────────────────────── ChatPacketPayload layout ──────────────────────── */
 
 /** @brief ChatPacketPayload timestamp is at offset 0. */
 static void testChatPacketPayloadOffsets(void) {
@@ -320,7 +321,7 @@ static void testChatPacketPayloadSize(void) {
     ASSERT_UINT_EQ(sizeof(ChatPacketPayload), sizeof(int64_t));
 }
 
-/* ─── ChatBroadcastPayload layout ────────────────────────────────────── */
+/* ────────────────────── ChatBroadcastPayload layout ─────────────────────── */
 
 /** @brief ChatBroadcastPayload fields are packed in order. */
 static void testChatBroadcastPayloadOffsets(void) {
@@ -332,7 +333,8 @@ static void testChatBroadcastPayloadOffsets(void) {
                    sizeof(uint32_t) + sizeof(uint64_t) + sizeof(int64_t));
 }
 
-/** @brief sizeof(ChatBroadcastPayload) equals the fixed header (excludes FAM). */
+/** @brief sizeof(ChatBroadcastPayload) equals the fixed header (excludes FAM).
+ */
 static void testChatBroadcastPayloadSize(void) {
     /* 4B uid + 8B msgId + 8B timestamp = 20B fixed. */
     enum { ExpectedFixedSize = 20 };
@@ -349,7 +351,7 @@ static void testTOTPSetupRespPayloadOffset(void) {
     ASSERT_UINT_EQ(offsetof(TOTPSetupRespPayload, secret), 0);
 }
 
-/* ═══════════════════════  3. packetClear  ══════════════════════════════ */
+/* ═════════════════════════════ 3. packetClear ═════════════════════════════ */
 
 /** @brief packetClear frees payload and sets it to NULL. */
 static void testPacketClearFreesPayload(void) {
@@ -383,7 +385,103 @@ static void testPacketClearIdempotent(void) {
     ASSERT_TRUE(pkt.payload == NULL);
 }
 
-/* ═══════════════════════  4. packetSerialize  ══════════════════════════ */
+/* ═════════════════════════════ 3.5. packetInit ═════════════════════════════ */
+
+/** @brief packetInit rejects NULL packet. */
+static void testPacketInitNullPacket(void) {
+    enum { TestLen = 4 };
+    uint8_t data[TestLen] = {0};
+    ASSERT_INT_EQ(
+        packetInit(NULL, MsgChat, 0, PlaintextPacket, data, TestLen),
+        PROTOCOL_FAIL);
+}
+
+/** @brief packetInit rejects payload that is NULL when dataLen > 0. */
+static void testPacketInitNullDataPositiveLen(void) {
+    Packet pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    pkt.payload = NULL;
+    ASSERT_INT_EQ(packetInit(&pkt, MsgChat, 0, PlaintextPacket, NULL, 5),
+                  PROTOCOL_FAIL);
+}
+
+/** @brief packetInit rejects dataLen exceeding MAX_PAYLOAD_LEN. */
+static void testPacketInitExceedsMaxPayload(void) {
+    Packet pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    pkt.payload = NULL;
+    ASSERT_INT_EQ(
+        packetInit(&pkt, MsgChat, 0, PlaintextPacket, NULL,
+                   (size_t)MAX_PAYLOAD_LEN + 1),
+        PROTOCOL_FAIL);
+}
+
+/** @brief packetInit rejects packet whose payload is not NULL on entry. */
+static void testPacketInitPayloadNotNull(void) {
+    Packet pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    uint8_t dummy = 0;
+    pkt.payload = &dummy;
+    ASSERT_INT_EQ(packetInit(&pkt, MsgChat, 0, PlaintextPacket, NULL, 0),
+                  PROTOCOL_FAIL);
+}
+
+/** @brief packetInit with zero-length payload and NULL data succeeds. */
+static void testPacketInitZeroPayload(void) {
+    Packet pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    pkt.payload = NULL;
+    ASSERT_INT_EQ(packetInit(&pkt, MsgHeartbeat, 7, PlaintextPacket, NULL, 0),
+                  PROTOCOL_SUCC);
+    ASSERT_UINT_EQ(pkt.header.magic, PACKET_MAGIC);
+    ASSERT_INT_EQ(pkt.header.messageType, MsgHeartbeat);
+    ASSERT_UINT_EQ(pkt.header.payloadLength, 0);
+    ASSERT_UINT_EQ(pkt.header.sequenceID, 7);
+    ASSERT_TRUE(pkt.payload == NULL);
+    packetClear(&pkt);
+}
+
+/** @brief packetInit with normal payload sets all fields correctly. */
+static void testPacketInitNormal(void) {
+    enum { DataLen = 8, TestSeq = 42 };
+    uint8_t data[DataLen];
+    memset(data, FillByteA, sizeof(data));
+
+    Packet pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    pkt.payload = NULL;
+    ASSERT_INT_EQ(
+        packetInit(&pkt, MsgLoginReq, TestSeq, AES256GCMPacket, data, DataLen),
+        PROTOCOL_SUCC);
+
+    ASSERT_UINT_EQ(pkt.header.magic, PACKET_MAGIC);
+    ASSERT_INT_EQ(pkt.header.packetType, AES256GCMPacket);
+    ASSERT_INT_EQ(pkt.header.messageType, MsgLoginReq);
+    ASSERT_UINT_EQ(pkt.header.payloadLength, DataLen);
+    ASSERT_UINT_EQ(pkt.header.sequenceID, TestSeq);
+    ASSERT_TRUE(pkt.payload != NULL);
+    ASSERT_MEM_EQ(pkt.payload, data, DataLen);
+
+    packetClear(&pkt);
+}
+
+/** @brief packetInit with dataLen at exactly MAX_PAYLOAD_LEN succeeds. */
+static void testPacketInitExactlyMaxPayload(void) {
+    uint8_t data[MAX_PAYLOAD_LEN];
+    memset(data, FillByteB, sizeof(data));
+
+    Packet pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    pkt.payload = NULL;
+    ASSERT_INT_EQ(
+        packetInit(&pkt, MsgChat, 0, PlaintextPacket, data, MAX_PAYLOAD_LEN),
+        PROTOCOL_SUCC);
+    ASSERT_UINT_EQ(pkt.header.payloadLength, MAX_PAYLOAD_LEN);
+    ASSERT_MEM_EQ(pkt.payload, data, MAX_PAYLOAD_LEN);
+    packetClear(&pkt);
+}
+
+/* ═══════════════════════════ 4. packetSerialize ═══════════════════════════ */
 
 /** @brief Serialize a normal packet and verify output size. */
 static void testSerializeSuccess(void) {
@@ -528,7 +626,7 @@ static void testSerializeOversizedBufferUntouched(void) {
     packetClear(&pkt);
 }
 
-/* ═══════════════════════  5. packetDeserialize  ════════════════════════ */
+/* ══════════════════════════ 5. packetDeserialize ══════════════════════════ */
 
 /** @brief Deserialize a valid buffer into a Packet. */
 static void testDeserializeSuccess(void) {
@@ -684,7 +782,7 @@ static void testDeserializeBufferWithTrailingBytes(void) {
     packetClear(&restored);
 }
 
-/* ══════════════════  6. Serialize / Deserialize Roundtrip  ═════════════ */
+/* ══════════════════ 6. Serialize / Deserialize Roundtrip ══════════════════ */
 
 /** @brief Serialize then deserialize preserves all fields and payload. */
 static void testSerializeDeserializeRoundtrip(void) {
@@ -776,7 +874,7 @@ static void testSerializeDeserializeBinaryPayload(void) {
     packetClear(&restored);
 }
 
-/* ═══════════════════════  7. packetAESEncrypt  ═════════════════════════ */
+/* ══════════════════════════ 7. packetAESEncrypt ═══════════════════════════ */
 
 /** @brief Encrypt a plaintext packet and verify state transitions. */
 static void testAESEncryptSuccess(void) {
@@ -873,8 +971,7 @@ static void testAESEncryptZeroPayload(void) {
 
     int ret = packetAESEncrypt(&pkt, (uint8_t *)testAESKey);
     ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
-    ASSERT_UINT_EQ(pkt.header.payloadLength,
-                   (size_t)AES_PACKET_EXTRA_LEN);
+    ASSERT_UINT_EQ(pkt.header.payloadLength, (size_t)AES_PACKET_EXTRA_LEN);
 
     packetClear(&pkt);
 }
@@ -886,7 +983,8 @@ static void testAESEncryptPreservesHeaderFields(void) {
                                 sizeof(testPayloadStr));
 
     uint32_t magicBefore = pkt.header.magic;
-    uint32_t msgTypeBefore = pkt.header.messageType;    uint32_t seqBefore = pkt.header.sequenceID;
+    uint32_t msgTypeBefore = pkt.header.messageType;
+    uint32_t seqBefore = pkt.header.sequenceID;
 
     int ret = packetAESEncrypt(&pkt, (uint8_t *)testAESKey);
     ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
@@ -898,7 +996,7 @@ static void testAESEncryptPreservesHeaderFields(void) {
     packetClear(&pkt);
 }
 
-/* ═══════════════════════  8. packetAESDecrypt  ═════════════════════════ */
+/* ══════════════════════════ 8. packetAESDecrypt ═══════════════════════════ */
 
 /** @brief Decrypt fails with NULL packet. */
 static void testAESDecryptNullPacket(void) {
@@ -953,7 +1051,7 @@ static void testAESDecryptPayloadTooShort(void) {
     packetClear(&pkt);
 }
 
-/* ══════════════  9. AES Encrypt / Decrypt Roundtrip  ══════════════════ */
+/* ═══════════════════ 9. AES Encrypt / Decrypt Roundtrip ═══════════════════ */
 
 /** @brief Encrypt then decrypt restores the original plaintext. */
 static void testAESRoundtrip(void) {
@@ -1173,6 +1271,195 @@ static void testAESRoundtripMultipleSequenceIDs(void) {
     }
 }
 
+/* ═════════════ 9.5. packetSendEncrypted / packetRecvEncrypted ═════════════ */
+
+static void testPacketSendEncryptedSuccess(void) {
+    enum { TestSeq = 0x42 };
+    SocketFD pair[SockPairLen];
+    ASSERT_INT_EQ(makeSocketPair(pair), 0);
+
+    uint32_t seqID = TestSeq;
+    int ret = packetSendEncrypted(pair[SockPairA], MsgChat, &seqID,
+                                  (uint8_t *)testAESKey, testPayloadStr,
+                                  sizeof(testPayloadStr));
+    ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
+    ASSERT_UINT_EQ(seqID, TestSeq + 1);
+
+    /* Receive and verify the decrypted content. */
+    Packet recvd;
+    memset(&recvd, 0, sizeof(recvd));
+    ret = packetRecvEncrypted(pair[SockPairB], &recvd, (uint8_t *)testAESKey);
+    ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
+    ASSERT_UINT_EQ(recvd.header.sequenceID, TestSeq);
+    ASSERT_MEM_EQ(recvd.payload, testPayloadStr, sizeof(testPayloadStr));
+
+    packetClear(&recvd);
+    socketClose(&pair[SockPairA]);
+    socketClose(&pair[SockPairB]);
+}
+
+static void testPacketSendEncryptedNullSeqID(void) {
+    ASSERT_INT_EQ(
+        packetSendEncrypted(0, MsgChat, NULL, (uint8_t *)testAESKey, "x", 1),
+        PROTOCOL_FAIL);
+}
+
+static void testPacketSendEncryptedNullKey(void) {
+    uint32_t seq = 0;
+    ASSERT_INT_EQ(packetSendEncrypted(0, MsgChat, &seq, NULL, "x", 1),
+                  PROTOCOL_FAIL);
+}
+
+static void testPacketSendEncryptedNullDataNonZeroLen(void) {
+    uint32_t seq = 0;
+    /* Sending NULL data with non-zero length should fail in packetInit. */
+    ASSERT_INT_EQ(
+        packetSendEncrypted(0, MsgChat, &seq, (uint8_t *)testAESKey, NULL, 5),
+        PROTOCOL_FAIL);
+}
+
+static void testPacketSendEncryptedZeroPayload(void) {
+    enum { TestSeq = 8 };
+    SocketFD pair[SockPairLen];
+    ASSERT_INT_EQ(makeSocketPair(pair), 0);
+
+    uint32_t seqID = TestSeq;
+    int ret = packetSendEncrypted(pair[SockPairA], MsgHeartbeat, &seqID,
+                                  (uint8_t *)testAESKey, NULL, 0);
+    ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
+
+    Packet recvd;
+    memset(&recvd, 0, sizeof(recvd));
+    ret = packetRecvEncrypted(pair[SockPairB], &recvd, (uint8_t *)testAESKey);
+    ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
+    ASSERT_UINT_EQ(recvd.header.payloadLength, 0);
+
+    packetClear(&recvd);
+    socketClose(&pair[SockPairA]);
+    socketClose(&pair[SockPairB]);
+}
+
+static void testPacketRecvEncryptedSuccess(void) {
+    enum { TestSeq = 77 };
+    SocketFD pair[SockPairLen];
+    ASSERT_INT_EQ(makeSocketPair(pair), 0);
+
+    Packet sent = makeTestPacket(MsgChat, TestSeq, testPayloadStr,
+                                 sizeof(testPayloadStr));
+    int ret = packetAESEncrypt(&sent, (uint8_t *)testAESKey);
+    ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
+    ret = packetSend(&sent, pair[SockPairA]);
+    ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
+    packetClear(&sent);
+
+    Packet recvd;
+    memset(&recvd, 0, sizeof(recvd));
+    ret = packetRecvEncrypted(pair[SockPairB], &recvd, (uint8_t *)testAESKey);
+    ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
+    ASSERT_UINT_EQ(recvd.header.messageType, MsgChat);
+    ASSERT_UINT_EQ(recvd.header.sequenceID, TestSeq);
+    ASSERT_UINT_EQ(recvd.header.packetType, PlaintextPacket);
+    ASSERT_MEM_EQ(recvd.payload, testPayloadStr, sizeof(testPayloadStr));
+
+    packetClear(&recvd);
+    socketClose(&pair[SockPairA]);
+    socketClose(&pair[SockPairB]);
+}
+
+static void testPacketRecvEncryptedNullOut(void) {
+    ASSERT_INT_EQ(packetRecvEncrypted(0, NULL, (uint8_t *)testAESKey),
+                  PROTOCOL_FAIL);
+}
+
+static void testPacketRecvEncryptedNullKey(void) {
+    Packet pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    ASSERT_INT_EQ(packetRecvEncrypted(0, &pkt, NULL), PROTOCOL_FAIL);
+}
+
+static void testPacketRecvEncryptedWrongPacketType(void) {
+    enum { TestSeq = 99 };
+    SocketFD pair[SockPairLen];
+    ASSERT_INT_EQ(makeSocketPair(pair), 0);
+
+    /* Send a plaintext packet — packetRecvEncrypted should reject it. */
+    Packet sent = makeTestPacket(MsgChat, TestSeq, testPayloadStr,
+                                 sizeof(testPayloadStr));
+    /* Explicitly keep it as PlaintextPacket — do NOT encrypt. */
+    int ret = packetSend(&sent, pair[SockPairA]);
+    ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
+    packetClear(&sent);
+
+    Packet recvd;
+    memset(&recvd, 0, sizeof(recvd));
+    ret = packetRecvEncrypted(pair[SockPairB], &recvd, (uint8_t *)testAESKey);
+    ASSERT_INT_EQ(ret, PROTOCOL_FAIL);
+
+    /* Payload must be freed on failure — packetClear must be safe. */
+    packetClear(&recvd);
+    socketClose(&pair[SockPairA]);
+    socketClose(&pair[SockPairB]);
+}
+
+static void testPacketRecvEncryptedWrongKey(void) {
+    enum { TestSeq = 111 };
+    SocketFD pair[SockPairLen];
+    ASSERT_INT_EQ(makeSocketPair(pair), 0);
+
+    Packet sent = makeTestPacket(MsgChat, TestSeq, testPayloadStr,
+                                 sizeof(testPayloadStr));
+    int ret = packetAESEncrypt(&sent, (uint8_t *)testAESKey);
+    ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
+    ret = packetSend(&sent, pair[SockPairA]);
+    ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
+    packetClear(&sent);
+
+    /* Use a different key for decryption. */
+    enum { OtherKeyLen = 32, OtherKeyFill = 0xFF };
+    uint8_t otherKey[OtherKeyLen];
+    memset(otherKey, OtherKeyFill, sizeof(otherKey));
+
+    Packet recvd;
+    memset(&recvd, 0, sizeof(recvd));
+    ret = packetRecvEncrypted(pair[SockPairB], &recvd, otherKey);
+    ASSERT_INT_EQ(ret, PROTOCOL_AUTH_FAIL);
+
+    packetClear(&recvd);
+    socketClose(&pair[SockPairA]);
+    socketClose(&pair[SockPairB]);
+}
+
+static void testPacketRecvEncryptedTamperedCiphertext(void) {
+    enum { TestSeq = 333, TamperOffset = AES_GCM_NONCE_LEN, TamperBit = 0x01 };
+    SocketFD pair[SockPairLen];
+    ASSERT_INT_EQ(makeSocketPair(pair), 0);
+
+    uint32_t seqID = TestSeq;
+    int ret = packetSendEncrypted(pair[SockPairA], MsgChat, &seqID,
+                                  (uint8_t *)testAESKey, testPayloadStr,
+                                  sizeof(testPayloadStr));
+    ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
+
+    /* Receive into a buffer so we can tamper the ciphertext. */
+    Packet recvd;
+    memset(&recvd, 0, sizeof(recvd));
+    ret = packetRecv(&recvd, pair[SockPairB]);
+    ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
+    ASSERT_UINT_EQ(recvd.header.packetType, AES256GCMPacket);
+
+    /* Flip one bit in the ciphertext body (past nonce). */
+    if (recvd.header.payloadLength > TamperOffset) {
+        recvd.payload[TamperOffset] ^= TamperBit;
+    }
+
+    ret = packetAESDecrypt(&recvd, (uint8_t *)testAESKey);
+    ASSERT_INT_EQ(ret, PROTOCOL_AUTH_FAIL);
+
+    packetClear(&recvd);
+    socketClose(&pair[SockPairA]);
+    socketClose(&pair[SockPairB]);
+}
+
 /* ═══════  10. Full Pipeline: Serialize -> Encrypt -> Decrypt -> Deserialize */
 
 /** @brief Full pipeline roundtrip: serialize, encrypt, decrypt, deserialize. */
@@ -1212,7 +1499,7 @@ static void testFullPipelineRoundtrip(void) {
     packetClear(&restored);
 }
 
-/* ═════════════════════  11. packetSend / packetRecv  ════════════════════ */
+/* ══════════════════════ 11. packetSend / packetRecv ═══════════════════════ */
 
 /** @brief packetSend fails when packet is NULL. */
 static void testPacketSendNullPacket(void) {
@@ -1372,7 +1659,7 @@ static void testPacketRecvPeerClosed(void) {
     socketClose(&pair[SockPairB]);
 }
 
-/* ═══════════════════════  12. socket setup / close  ═════════════════════ */
+/* ════════════════════════ 12. socket setup / close ════════════════════════ */
 
 /** @brief socketClose sets the FD to NULL_SOCKETFD. */
 static void testSocketCloseSetsSentinel(void) {
@@ -1431,7 +1718,7 @@ static void testClientSetupConnectionRefused(void) {
     ASSERT_INT_EQ(fd, NULL_SOCKETFD);
 }
 
-/* ═══════════════ 13. Security Hardening Tests ═════════════════════════ */
+/* ══════════════════════ 13. Security Hardening Tests ══════════════════════ */
 
 /** @brief packetClear(NULL) does not crash. */
 static void testPacketClearNull(void) {
@@ -1593,9 +1880,9 @@ static void testLoginPayloadProtocolRoundtrip(void) {
 
     Packet pkt;
     memset(&pkt, 0, sizeof(pkt));
-    ASSERT_INT_EQ(packetInit(&pkt, MsgLoginReq, 5, PlaintextPacket, pl,
-                             payloadLen),
-                  PROTOCOL_SUCC);
+    ASSERT_INT_EQ(
+        packetInit(&pkt, MsgLoginReq, 5, PlaintextPacket, pl, payloadLen),
+        PROTOCOL_SUCC);
 
     /* Serialize to wire format */
     uint8_t buf[TestSerBufSize];
@@ -1635,9 +1922,9 @@ static void testRegisterPayloadProtocolRoundtrip(void) {
 
     Packet pkt;
     memset(&pkt, 0, sizeof(pkt));
-    ASSERT_INT_EQ(packetInit(&pkt, MsgRegisterReq, 7, PlaintextPacket, pl,
-                             payloadLen),
-                  PROTOCOL_SUCC);
+    ASSERT_INT_EQ(
+        packetInit(&pkt, MsgRegisterReq, 7, PlaintextPacket, pl, payloadLen),
+        PROTOCOL_SUCC);
 
     uint8_t buf[TestSerBufSize];
     size_t serLen = 0;
@@ -1675,9 +1962,9 @@ static void testLoginResponsePayloadProtocolRoundtrip(void) {
 
     Packet pkt;
     memset(&pkt, 0, sizeof(pkt));
-    ASSERT_INT_EQ(packetInit(&pkt, MsgLoginResp, 3, PlaintextPacket, &resp,
-                             sizeof(resp)),
-                  PROTOCOL_SUCC);
+    ASSERT_INT_EQ(
+        packetInit(&pkt, MsgLoginResp, 3, PlaintextPacket, &resp, sizeof(resp)),
+        PROTOCOL_SUCC);
 
     uint8_t buf[TestSerBufSize];
     size_t serLen = 0;
@@ -1707,10 +1994,9 @@ static void testTOTPVerifyPayloadProtocolRoundtrip(void) {
 
     Packet pkt;
     memset(&pkt, 0, sizeof(pkt));
-    ASSERT_INT_EQ(
-        packetInit(&pkt, MsgTOTPVerifyResp, 1, PlaintextPacket, &vp,
-                   sizeof(vp)),
-        PROTOCOL_SUCC);
+    ASSERT_INT_EQ(packetInit(&pkt, MsgTOTPVerifyResp, 1, PlaintextPacket, &vp,
+                             sizeof(vp)),
+                  PROTOCOL_SUCC);
 
     uint8_t buf[TestSerBufSize];
     size_t serLen = 0;
@@ -1738,8 +2024,7 @@ static void testTOTPSetupRespPayloadProtocolRoundtrip(void) {
     Packet pkt;
     memset(&pkt, 0, sizeof(pkt));
     ASSERT_INT_EQ(
-        packetInit(&pkt, MsgTOTPSetupResp, 1, PlaintextPacket, &sp,
-                   sizeof(sp)),
+        packetInit(&pkt, MsgTOTPSetupResp, 1, PlaintextPacket, &sp, sizeof(sp)),
         PROTOCOL_SUCC);
 
     uint8_t buf[TestSerBufSize];
@@ -1759,12 +2044,35 @@ static void testTOTPSetupRespPayloadProtocolRoundtrip(void) {
     packetClear(&pkt2);
 }
 
-/** @brief MessageType enum has exactly 23 values. */
-static void testMessageTypeCount(void) {
-    ASSERT_INT_EQ(MsgGameStop, 23);
+/* ═══════════════════════════ 15. Hex Utilities ════════════════════════════ */
+
+static void testHexCharToNibbleDigits(void) {
+    ASSERT_INT_EQ(hexCharToNibble('0'), 0);
+    ASSERT_INT_EQ(hexCharToNibble('5'), 5);
+    ASSERT_INT_EQ(hexCharToNibble('9'), 9);
 }
 
-/* ═══════════════════════  main  ════════════════════════════════════════ */
+static void testHexCharToNibbleLowercase(void) {
+    ASSERT_INT_EQ(hexCharToNibble('a'), 10);
+    ASSERT_INT_EQ(hexCharToNibble('f'), 15);
+}
+
+static void testHexCharToNibbleUppercase(void) {
+    ASSERT_INT_EQ(hexCharToNibble('A'), 10);
+    ASSERT_INT_EQ(hexCharToNibble('F'), 15);
+}
+
+static void testHexCharToNibbleInvalid(void) {
+    enum { InvalidReturn = -1 };
+    ASSERT_INT_EQ(hexCharToNibble('g'), InvalidReturn);
+    ASSERT_INT_EQ(hexCharToNibble('@'), InvalidReturn);
+    ASSERT_INT_EQ(hexCharToNibble('\0'), InvalidReturn);
+}
+
+/** @brief MessageType enum has exactly 23 values. */
+static void testMessageTypeCount(void) { ASSERT_INT_EQ(MsgGameStop, 23); }
+
+/* ══════════════════════════════════ main ══════════════════════════════════ */
 
 /**
  * @brief Entry point for the protocol test suite.
@@ -1808,6 +2116,15 @@ int main(void) {
     RUN_TEST(testPacketClearFreesPayload);
     RUN_TEST(testPacketClearNullPayload);
     RUN_TEST(testPacketClearIdempotent);
+
+    /* 3.5. packetInit */
+    RUN_TEST(testPacketInitNullPacket);
+    RUN_TEST(testPacketInitNullDataPositiveLen);
+    RUN_TEST(testPacketInitExceedsMaxPayload);
+    RUN_TEST(testPacketInitPayloadNotNull);
+    RUN_TEST(testPacketInitZeroPayload);
+    RUN_TEST(testPacketInitNormal);
+    RUN_TEST(testPacketInitExactlyMaxPayload);
 
     /* 4. packetSerialize */
     RUN_TEST(testSerializeSuccess);
@@ -1869,6 +2186,19 @@ int main(void) {
     RUN_TEST(testAESEncryptNonDeterministic);
     RUN_TEST(testAESRoundtripMultipleSequenceIDs);
 
+    /* 9.5. packetSendEncrypted / packetRecvEncrypted */
+    RUN_TEST(testPacketSendEncryptedSuccess);
+    RUN_TEST(testPacketSendEncryptedNullSeqID);
+    RUN_TEST(testPacketSendEncryptedNullKey);
+    RUN_TEST(testPacketSendEncryptedNullDataNonZeroLen);
+    RUN_TEST(testPacketSendEncryptedZeroPayload);
+    RUN_TEST(testPacketRecvEncryptedSuccess);
+    RUN_TEST(testPacketRecvEncryptedNullOut);
+    RUN_TEST(testPacketRecvEncryptedNullKey);
+    RUN_TEST(testPacketRecvEncryptedWrongPacketType);
+    RUN_TEST(testPacketRecvEncryptedWrongKey);
+    RUN_TEST(testPacketRecvEncryptedTamperedCiphertext);
+
     /* 10. Full Pipeline */
     RUN_TEST(testFullPipelineRoundtrip);
 
@@ -1910,6 +2240,12 @@ int main(void) {
     RUN_TEST(testTOTPVerifyPayloadProtocolRoundtrip);
     RUN_TEST(testTOTPSetupRespPayloadProtocolRoundtrip);
     RUN_TEST(testMessageTypeCount);
+
+    /* 15. Hex Utilities */
+    RUN_TEST(testHexCharToNibbleDigits);
+    RUN_TEST(testHexCharToNibbleLowercase);
+    RUN_TEST(testHexCharToNibbleUppercase);
+    RUN_TEST(testHexCharToNibbleInvalid);
 
     return TEST_REPORT();
 }

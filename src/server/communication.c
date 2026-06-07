@@ -29,7 +29,7 @@
 #include <openssl/evp.h>
 #include <string.h>
 
-/* ─────────────────── public API ─────────────────────────────────────────── */
+/* ─────────────────────────────── public API ─────────────────────────────── */
 
 int serverExchangeAESKey(SocketFD clientFD, Packet *reqPacket,
                          AESGCMKey *outKey) {
@@ -37,35 +37,36 @@ int serverExchangeAESKey(SocketFD clientFD, Packet *reqPacket,
         LOG_ERROR("serverExchangeAESKey: NULL argument (reqPacket=%p, "
                   "outKey=%p)",
                   (void *)reqPacket, (void *)outKey);
-        return COMM_FAIL;
+        return PROTOCOL_FAIL;
     }
 
-    /* ──── zero-trust validation of the client's request packet ────────── */
+    /* ────────── zero-trust validation of the client's request packet
+     * ────────── */
 
     if (reqPacket->payload == NULL) {
         LOG_ERROR("serverExchangeAESKey: reqPacket has NULL payload");
-        return COMM_FAIL;
+        return PROTOCOL_FAIL;
     }
 
     if (reqPacket->header.messageType != MsgKeyExchangeReq) {
         LOG_ERROR("serverExchangeAESKey: unexpected message type %d (expected "
                   "MsgKeyExchangeReq=%d)",
                   reqPacket->header.messageType, MsgKeyExchangeReq);
-        return COMM_FAIL;
+        return PROTOCOL_FAIL;
     }
 
     if (reqPacket->header.packetType != PlaintextPacket) {
         LOG_ERROR("serverExchangeAESKey: unexpected packet type %d (expected "
                   "PlaintextPacket=%d)",
                   reqPacket->header.packetType, PlaintextPacket);
-        return COMM_FAIL;
+        return PROTOCOL_FAIL;
     }
 
     if (reqPacket->header.payloadLength != ECDH_PUBLIC_KEY_SIZE) {
         LOG_ERROR("serverExchangeAESKey: unexpected payload length %zu "
                   "(expected %d)",
                   reqPacket->header.payloadLength, ECDH_PUBLIC_KEY_SIZE);
-        return COMM_FAIL;
+        return PROTOCOL_FAIL;
     }
 
     EVP_PKEY *myKeypair = NULL;
@@ -75,7 +76,7 @@ int serverExchangeAESKey(SocketFD clientFD, Packet *reqPacket,
     uint8_t sharedSecret[ECDH_SHARED_SECRET_SIZE];
     KeyExchangePacketPayload keyPayload;
     Packet respPacket;
-    int ret = COMM_FAIL;
+    int ret = PROTOCOL_FAIL;
 
     /* packetInit requires payload == NULL on entry. */
     memset(&respPacket, 0, sizeof(respPacket));
@@ -130,7 +131,7 @@ int serverExchangeAESKey(SocketFD clientFD, Packet *reqPacket,
         goto cleanup;
     }
 
-    ret = COMM_SUCC;
+    ret = PROTOCOL_SUCC;
 
 cleanup:
     /* Securely wipe all sensitive material. */
@@ -143,4 +144,21 @@ cleanup:
     packetClear(&respPacket);
 
     return ret;
+}
+
+int serverSendEncryptedPacket(ClientSession *cs, MessageType mt,
+                              const void *data, size_t dataLen) {
+    int ret = packetSendEncrypted(cs->fd, mt, &cs->seqID, cs->aesKey.key, data,
+                                  dataLen);
+    return (ret == PROTOCOL_SUCC) ? SERVER_SUCC : SERVER_FAIL;
+}
+
+int serverRecvEncryptedPacket(ClientSession *cs, Packet *out) {
+    int ret = packetRecvEncrypted(cs->fd, out, cs->aesKey.key);
+    return (ret == PROTOCOL_SUCC) ? SERVER_SUCC : SERVER_FAIL;
+}
+
+int serverSendStatusResponse(ClientSession *cs, MessageType mt,
+                             uint8_t status) {
+    return serverSendEncryptedPacket(cs, mt, &status, sizeof(status));
 }

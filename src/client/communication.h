@@ -1,6 +1,7 @@
 /**
  * @file communication.h
- * @brief Client-side communication helpers (key exchange, session management).
+ * @brief Client-side communication helpers (key exchange, encrypted packet
+ * I/O).
  *
  * @date 2026-05-20
  * @copyright GPLv3 License
@@ -28,8 +29,7 @@
 #include "crypto.h"
 #include "protocol.h"
 
-#define COMM_SUCC (0)
-#define COMM_FAIL (-1)
+struct Client; /* forward — full definition in client.h */
 
 /**
  * @brief Perform ECDH+HKDF key exchange with the server to derive an AES-256
@@ -47,9 +47,48 @@
  *                 open TCP socket; the function does not create or close it.
  * @param outKey   Output parameter receiving the derived AES-256 key material.
  *                 Must not be NULL.
- * @return @c COMM_SUCC on success, @c COMM_FAIL on failure (socket error,
- *         key generation failure, import failure, or derivation failure).
+ * @return @c PROTOCOL_SUCC on success, @c PROTOCOL_FAIL on failure (socket
+ * error, key generation failure, import failure, or derivation failure).
  */
 int clientExchangeAESKey(SocketFD socketFD, AESGCMKey *outKey);
+
+/**
+ * @brief Build, encrypt, and send a packet to the server.
+ *
+ * Convenience wrapper around @c packetSendEncrypted that reads the
+ * socket, AES key, and sequence counter from @p client.
+ *
+ * @param client   Connected client (must have completed key exchange).
+ * @param mt       Application-layer message type.
+ * @param data     Payload bytes (may be NULL if dataLen is 0).
+ * @param dataLen  Length of @p data in bytes.
+ * @return @c PROTOCOL_SUCC on success, @c PROTOCOL_FAIL on failure.
+ */
+int clientSendEncryptedPacket(struct Client *client, MessageType mt,
+                              const void *data, size_t dataLen);
+
+/**
+ * @brief Receive and decrypt one AES-256-GCM packet from the server.
+ *
+ * Convenience wrapper around @c packetRecvEncrypted.
+ *
+ * @param client  Connected client.
+ * @param out     Destination packet (payload must be NULL on entry).
+ * @return @c PROTOCOL_SUCC on success, @c PROTOCOL_FAIL or
+ *         @c PROTOCOL_AUTH_FAIL on failure.
+ */
+int clientRecvEncryptedPacket(struct Client *client, Packet *out);
+
+/**
+ * @brief Receive a status response from the server and return the value.
+ *
+ * Receives and decrypts a packet whose message type must match
+ * @p expectedMt, then reads a single-byte status from its payload.
+ *
+ * @param client      Connected client.
+ * @param expectedMt  Expected @c MessageType of the response.
+ * @return Status byte 0-255 on success, -1 on failure.
+ */
+int clientRecvStatusResponse(struct Client *client, MessageType expectedMt);
 
 #endif /* CLIENT_COMMUNICATION_H */

@@ -17,9 +17,10 @@
 #include "server/server.h"
 #include "test_utils.h"
 
+#include "client/communication.h"
 #include "server/communication.h"
 #include "server/database.h"
-#include "client/communication.h"
+#include "server/room.h"
 
 #include <errno.h>
 #include <signal.h>
@@ -29,7 +30,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-/* ──────── named constants ──────────────────────────────────────────────── */
+/* ──────────────────────────── named constants ───────────────────────────── */
 
 enum {
     ServerPort = 12345,
@@ -69,7 +70,7 @@ enum {
     DummyPayloadByte = 0xFF
 };
 
-/* ──────── helper prototypes ────────────────────────────────────────────── */
+/* ─────────────────────────── helper prototypes ──────────────────────────── */
 
 static int makeSocketPair(SocketFD pair[2]);
 static int clientDoKeyExchange(SocketFD fd, AESGCMKey *outKey);
@@ -79,10 +80,10 @@ static int sendEnc(SocketFD fd, AESGCMKey *key, uint32_t *seq, MessageType mt,
 static int recvDec(SocketFD fd, AESGCMKey *key, Packet *out);
 static int recvStatus(SocketFD fd, AESGCMKey *key, MessageType expectedMt);
 static DB *ensureTestUser(const char *username, uint32_t uid,
-                           const char *password);
+                          const char *password);
 static void removeDBFiles(void);
 
-/* ──────── helper implementations ───────────────────────────────────────── */
+/* ───────────────────────── helper implementations ───────────────────────── */
 
 static int makeSocketPair(SocketFD pair[2]) {
     int fds[2];
@@ -94,7 +95,7 @@ static int makeSocketPair(SocketFD pair[2]) {
     }
     /* 30-second recv/send timeout to prevent test hangs */
     enum { SocketTimeoutSec = 30 };
-    struct timeval tv = { .tv_sec = SocketTimeoutSec, .tv_usec = 0 };
+    struct timeval tv = {.tv_sec = SocketTimeoutSec, .tv_usec = 0};
     setsockopt(fds[0], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(fds[1], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     pair[0] = fds[0];
@@ -168,7 +169,7 @@ static int recvStatus(SocketFD fd, AESGCMKey *key, MessageType expectedMt) {
 }
 
 static DB *ensureTestUser(const char *username, uint32_t uid,
-                           const char *password) {
+                          const char *password) {
     DB *userDB = dbInit(UserDB, NULL);
     if (userDB == NULL) {
         return NULL;
@@ -203,7 +204,7 @@ static void removeDBFiles(void) {
     rmdir("./db");
 }
 
-/* ═══════════════════════  Login Tests  ═══════════════════════════════════ */
+/* ══════════════════════════════ Login Tests ═══════════════════════════════ */
 
 /** @brief Happy path: valid credentials produce MsgLoginResp(0). */
 static void testLoginSuccess(void) {
@@ -219,7 +220,7 @@ static void testLoginSuccess(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
 
         Packet pkt;
         memset(&pkt, 0, sizeof(pkt));
@@ -247,7 +248,8 @@ static void testLoginSuccess(void) {
         } else {
             LoginResponsePayload failResp;
             memset(&failResp, 0, sizeof(failResp));
-            sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &failResp, sizeof(failResp));
+            sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &failResp,
+                    sizeof(failResp));
         }
 
         packetClear(&pkt);
@@ -258,7 +260,7 @@ static void testLoginSuccess(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
 
     const char *un = "TestUser";
     const char *pw = "testpass";
@@ -269,9 +271,9 @@ static void testLoginSuccess(void) {
     memcpy(loginPayload->password, pw, strlen(pw) + 1);
 
     uint32_t seq = 0;
-    ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &seq, MsgLoginReq, loginPayload,
-                          plen),
-                  PROTOCOL_SUCC);
+    ASSERT_INT_EQ(
+        sendEnc(sv[0], &cliKey, &seq, MsgLoginReq, loginPayload, plen),
+        PROTOCOL_SUCC);
     OPENSSL_cleanse(loginPayload, plen);
     free(loginPayload);
 
@@ -301,7 +303,7 @@ static void testLoginWrongPassword(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         Packet pkt;
         memset(&pkt, 0, sizeof(pkt));
         ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
@@ -327,7 +329,8 @@ static void testLoginWrongPassword(void) {
         } else {
             LoginResponsePayload failResp;
             memset(&failResp, 0, sizeof(failResp));
-            sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &failResp, sizeof(failResp));
+            sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &failResp,
+                    sizeof(failResp));
         }
 
         packetClear(&pkt);
@@ -338,21 +341,20 @@ static void testLoginWrongPassword(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
 
     const char *un = "pwduser";
     const char *pw = "wrongpassword";
-    size_t plen =
-        offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
+    size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
     LoginRequestPayload *loginPayload = calloc(1, plen);
     ASSERT_TRUE(loginPayload != NULL);
     memcpy(loginPayload->username, un, strlen(un) + 1);
     memcpy(loginPayload->password, pw, strlen(pw) + 1);
 
     uint32_t seq = 0;
-    ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &seq, MsgLoginReq, loginPayload,
-                          plen),
-                  PROTOCOL_SUCC);
+    ASSERT_INT_EQ(
+        sendEnc(sv[0], &cliKey, &seq, MsgLoginReq, loginPayload, plen),
+        PROTOCOL_SUCC);
     OPENSSL_cleanse(loginPayload, plen);
     free(loginPayload);
 
@@ -379,7 +381,7 @@ static void testLoginNonexistentUser(void) {
         socketClose(&sv[0]);
         DB *uDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         Packet pkt;
         memset(&pkt, 0, sizeof(pkt));
         ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
@@ -387,7 +389,8 @@ static void testLoginNonexistentUser(void) {
         uint32_t seq = 0;
         LoginResponsePayload failResp;
         memset(&failResp, 0, sizeof(failResp));
-        sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &failResp, sizeof(failResp));
+        sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &failResp,
+                sizeof(failResp));
 
         packetClear(&pkt);
         dbClose(uDB);
@@ -397,21 +400,20 @@ static void testLoginNonexistentUser(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
 
     const char *un = "Nobody";
     const char *pw = "pass";
-    size_t plen =
-        offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
+    size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
     LoginRequestPayload *loginPayload = calloc(1, plen);
     ASSERT_TRUE(loginPayload != NULL);
     memcpy(loginPayload->username, un, strlen(un) + 1);
     memcpy(loginPayload->password, pw, strlen(pw) + 1);
 
     uint32_t seq = 0;
-    ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &seq, MsgLoginReq, loginPayload,
-                          plen),
-                  PROTOCOL_SUCC);
+    ASSERT_INT_EQ(
+        sendEnc(sv[0], &cliKey, &seq, MsgLoginReq, loginPayload, plen),
+        PROTOCOL_SUCC);
     OPENSSL_cleanse(loginPayload, plen);
     free(loginPayload);
 
@@ -428,7 +430,7 @@ static void testLoginNonexistentUser(void) {
     waitpid(child, NULL, 0);
 }
 
-/* ═══════════════════════  Room Tests  ════════════════════════════════════ */
+/* ═══════════════════════════════ Room Tests ═══════════════════════════════ */
 
 /** @brief Create a room via protocol, then join it. */
 static void testRoomCreateAndJoin(void) {
@@ -449,7 +451,7 @@ static void testRoomCreateAndJoin(void) {
         userDB = dbInit(UserDB, NULL);
         gameDB = dbInit(GameDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         uint32_t seq = 0;
 
         /* Phase 1: Login pass-through */
@@ -473,7 +475,8 @@ static void testRoomCreateAndJoin(void) {
             ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
             ASSERT_INT_EQ(pkt.header.messageType, MsgCreateRoom);
             uint32_t roomId = *(uint32_t *)pkt.payload;
-            uint8_t s = (createRoom(gameDB, roomId, LoginUidAlice) == DB_SUCC) ? 0 : 1;
+            uint8_t s =
+                (createRoom(gameDB, roomId, LoginUidAlice) == DB_SUCC) ? 0 : 1;
             sendEnc(sv[1], &srvKey, &seq, MsgCreateRoomResp, &s, sizeof(s));
             packetClear(&pkt);
         }
@@ -498,15 +501,14 @@ static void testRoomCreateAndJoin(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
     uint32_t seq = 0;
 
     /* Login */
     {
         const char *un = "Alice";
         const char *pw = "alice";
-        size_t plen =
-            offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
+        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
         LoginRequestPayload *lp = calloc(1, plen);
         memcpy(lp->username, un, strlen(un) + 1);
         memcpy(lp->password, pw, strlen(pw) + 1);
@@ -556,7 +558,7 @@ static void testRoomJoinNonexistent(void) {
         userDB = dbInit(UserDB, NULL);
         DB *gDB = dbInit(GameDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         uint32_t seq = 0;
 
         /* Login pass-through */
@@ -593,15 +595,14 @@ static void testRoomJoinNonexistent(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
     uint32_t seq = 0;
 
     /* Login */
     {
         const char *un = "Bob";
         const char *pw = "bobpass";
-        size_t plen =
-            offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
+        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
         LoginRequestPayload *lp = calloc(1, plen);
         memcpy(lp->username, un, strlen(un) + 1);
         memcpy(lp->password, pw, strlen(pw) + 1);
@@ -649,7 +650,7 @@ static void testRoomList(void) {
     dbClose(gameDB);
 }
 
-/* ═══════════════════════  Chat Tests  ════════════════════════════════════ */
+/* ═══════════════════════════════ Chat Tests ═══════════════════════════════ */
 
 /** @brief Send a chat message and verify it is stored + broadcast. */
 static void testChatSendAndBroadcast(void) {
@@ -676,7 +677,7 @@ static void testChatSendAndBroadcast(void) {
         chatDB = dbInit(ChatHistoryDB, NULL);
         gameDB = dbInit(GameDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         uint32_t seq = 0;
 
         /* Login pass */
@@ -716,8 +717,7 @@ static void testChatSendAndBroadcast(void) {
             ch.uid = LoginUidCharlie;
             ch.message = strdup((const char *)chat->message);
             ch.timestamp = (time_t)chat->timestamp;
-            ASSERT_INT_EQ(storeChat(chatDB, RoomIdCharlies, &ch),
-                          DB_SUCC);
+            ASSERT_INT_EQ(storeChat(chatDB, RoomIdCharlies, &ch), DB_SUCC);
 
             /* Broadcast: uid + msgId + timestamp + message */
             size_t msgLen = pkt.header.payloadLength - sizeof(int64_t);
@@ -745,15 +745,14 @@ static void testChatSendAndBroadcast(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
     uint32_t seq = 0;
 
     /* Login */
     {
         const char *un = "Charlie";
         const char *pw = "chatpass";
-        size_t plen =
-            offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
+        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
         LoginRequestPayload *lp = calloc(1, plen);
         memcpy(lp->username, un, strlen(un) + 1);
         memcpy(lp->password, pw, strlen(pw) + 1);
@@ -808,7 +807,7 @@ static void testChatSendAndBroadcast(void) {
     waitpid(child, NULL, 0);
 }
 
-/* ═══════════════════════  Session Tests  ══════════════════════════════════ */
+/* ═════════════════════════════ Session Tests ══════════════════════════════ */
 
 /** @brief Logout received by server disconnects client cleanly. */
 static void testLogout(void) {
@@ -820,7 +819,7 @@ static void testLogout(void) {
         socketClose(&sv[0]);
         DB *uDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         uint32_t seq = 0;
 
         /* Login pass */
@@ -855,15 +854,14 @@ static void testLogout(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
     uint32_t seq = 0;
 
     /* Login */
     {
         const char *un = "X";
         const char *pw = "x";
-        size_t plen =
-            offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
+        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
         LoginRequestPayload *lp = calloc(1, plen);
         memcpy(lp->username, un, strlen(un) + 1);
         memcpy(lp->password, pw, strlen(pw) + 1);
@@ -889,7 +887,7 @@ static void testLogout(void) {
     ASSERT_INT_EQ(WEXITSTATUS(status), 0);
 }
 
-/* ═══════════════════════  State Machine Violations  ══════════════════════ */
+/* ════════════════════════ State Machine Violations ════════════════════════ */
 
 /** @brief Sending MsgLoginReq before key exchange should disconnect. */
 static void testStateMachineViolationKeyex(void) {
@@ -901,7 +899,7 @@ static void testStateMachineViolationKeyex(void) {
         socketClose(&sv[0]);
         DB *uDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         /* Expect the next packet to be garbage — disconnect */
         socketClose(&sv[1]);
         dbClose(uDB);
@@ -910,7 +908,7 @@ static void testStateMachineViolationKeyex(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
     /* Silence: parent doesn't send anything, child will timeout and exit */
     socketClose(&sv[0]);
     waitpid(child, NULL, 0);
@@ -927,7 +925,7 @@ static void testUnencryptedPacketAfterAuth(void) {
         socketClose(&sv[0]);
         DB *uDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         /* Try to receive the next packet — should fail because
          * parent sends plaintext and server expects encrypted */
         Packet pkt;
@@ -948,17 +946,16 @@ static void testUnencryptedPacketAfterAuth(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
 
     /* Send a PLAINTEXT packet (not encrypted) after key exchange */
     Packet pkt;
     memset(&pkt, 0, sizeof(pkt));
     enum { PlainPktSeq = 0 };
     uint8_t dummy = DummyPayloadByte;
-    ASSERT_INT_EQ(
-        packetInit(&pkt, MsgLoginReq, PlainPktSeq, PlaintextPacket, &dummy,
-                   sizeof(dummy)),
-        PROTOCOL_SUCC);
+    ASSERT_INT_EQ(packetInit(&pkt, MsgLoginReq, PlainPktSeq, PlaintextPacket,
+                             &dummy, sizeof(dummy)),
+                  PROTOCOL_SUCC);
     ASSERT_INT_EQ(packetSend(&pkt, sv[0]), PROTOCOL_SUCC);
     packetClear(&pkt);
 
@@ -980,7 +977,7 @@ static void testHeartbeatEcho(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         uint32_t seq = 0;
 
         /* Login pass */
@@ -1022,7 +1019,7 @@ static void testHeartbeatEcho(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
     uint32_t seq = 0;
 
     /* Login */
@@ -1075,7 +1072,7 @@ static void testLoginEmptyPassword(void) {
         socketClose(&sv[0]);
         DB *uDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         uint32_t seq = 0;
         Packet pkt;
         memset(&pkt, 0, sizeof(pkt));
@@ -1083,7 +1080,8 @@ static void testLoginEmptyPassword(void) {
         /* Send failure response */
         LoginResponsePayload failResp;
         memset(&failResp, 0, sizeof(failResp));
-        sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &failResp, sizeof(failResp));
+        sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &failResp,
+                sizeof(failResp));
         packetClear(&pkt);
         dbClose(uDB);
         socketClose(&sv[1]);
@@ -1092,7 +1090,7 @@ static void testLoginEmptyPassword(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
     uint32_t seq = 0;
 
     /* Empty password: pw="" */
@@ -1118,11 +1116,15 @@ static void testLoginEmptyPassword(void) {
     waitpid(child, NULL, 0);
 }
 
-/* ═══════════════════════  TOTP Setup  ═══════════════════════════════════ */
+/* ═══════════════════════════════ TOTP Setup ═══════════════════════════════ */
 
 static void testTOTPSetupAfterLogin(void) {
-    enum { TotpUid = 700, TotpNameLen = 9, TestNickLen = 9,
-           TestSecretLen = 16 };
+    enum {
+        TotpUid = 700,
+        TotpNameLen = 9,
+        TestNickLen = 9,
+        TestSecretLen = 16
+    };
     DB *userDB = ensureTestUser("totpguy1", TotpUid, "totppw1");
     ASSERT_TRUE(userDB != NULL);
 
@@ -1135,7 +1137,7 @@ static void testTOTPSetupAfterLogin(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         uint32_t seq = 0;
 
         /* Simulate successful login */
@@ -1173,7 +1175,7 @@ static void testTOTPSetupAfterLogin(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
     uint32_t cliSeq = 0;
 
     /* Login via simulated server */
@@ -1183,8 +1185,8 @@ static void testTOTPSetupAfterLogin(void) {
         LoginRequestPayload *lp = calloc(1, plen);
         memcpy(lp->username, "totpguy1", TotpNameLen);
         memcpy(lp->password, pw, strlen(pw) + 1);
-        ASSERT_INT_EQ(
-            sendEnc(sv[0], &cliKey, &cliSeq, MsgLoginReq, lp, plen), 0);
+        ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &cliSeq, MsgLoginReq, lp, plen),
+                      0);
         OPENSSL_cleanse(lp, plen);
         free(lp);
     }
@@ -1200,8 +1202,8 @@ static void testTOTPSetupAfterLogin(void) {
     }
 
     /* Send TOTP setup request */
-    ASSERT_INT_EQ(
-        sendEnc(sv[0], &cliKey, &cliSeq, MsgTOTPSetupReq, NULL, 0), 0);
+    ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &cliSeq, MsgTOTPSetupReq, NULL, 0),
+                  0);
 
     /* Receive TOTP setup response */
     {
@@ -1210,8 +1212,7 @@ static void testTOTPSetupAfterLogin(void) {
         ASSERT_INT_EQ(recvDec(sv[0], &cliKey, &rpkt), 0);
         ASSERT_INT_EQ(rpkt.header.messageType, MsgTOTPSetupResp);
         ASSERT_TRUE(rpkt.header.payloadLength >= sizeof(TOTPSetupRespPayload));
-        TOTPSetupRespPayload *resp =
-            (TOTPSetupRespPayload *)rpkt.payload;
+        TOTPSetupRespPayload *resp = (TOTPSetupRespPayload *)rpkt.payload;
         ASSERT_TRUE(resp->secret[0] != '\0');
         packetClear(&rpkt);
     }
@@ -1221,8 +1222,12 @@ static void testTOTPSetupAfterLogin(void) {
 }
 
 static void testTOTPSetupAlreadyEnabled(void) {
-    enum { TotpUid = 701, TotpNameLen = 9, TestNickLen = 9,
-           TestSecretLen = 16 };
+    enum {
+        TotpUid = 701,
+        TotpNameLen = 9,
+        TestNickLen = 9,
+        TestSecretLen = 16
+    };
     DB *userDB = ensureTestUser("totpguy2", TotpUid, "totppw2");
     ASSERT_TRUE(userDB != NULL);
 
@@ -1235,7 +1240,7 @@ static void testTOTPSetupAlreadyEnabled(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         uint32_t seq = 0;
 
         /* Login */
@@ -1261,8 +1266,7 @@ static void testTOTPSetupAlreadyEnabled(void) {
             TOTPSetupRespPayload r1;
             memset(&r1, 0, sizeof(r1));
             memcpy(r1.secret, "JBSWY3DPEHPK3PXP", TestSecretLen);
-            sendEnc(sv[1], &srvKey, &seq, MsgTOTPSetupResp, &r1,
-                    sizeof(r1));
+            sendEnc(sv[1], &srvKey, &seq, MsgTOTPSetupResp, &r1, sizeof(r1));
             packetClear(&pkt);
         }
 
@@ -1284,7 +1288,7 @@ static void testTOTPSetupAlreadyEnabled(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
     uint32_t cliSeq = 0;
 
     {
@@ -1293,8 +1297,8 @@ static void testTOTPSetupAlreadyEnabled(void) {
         LoginRequestPayload *lp = calloc(1, plen);
         memcpy(lp->username, "totpguy2", TotpNameLen);
         memcpy(lp->password, pw, strlen(pw) + 1);
-        ASSERT_INT_EQ(
-            sendEnc(sv[0], &cliKey, &cliSeq, MsgLoginReq, lp, plen), 0);
+        ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &cliSeq, MsgLoginReq, lp, plen),
+                      0);
         OPENSSL_cleanse(lp, plen);
         free(lp);
     }
@@ -1307,8 +1311,8 @@ static void testTOTPSetupAlreadyEnabled(void) {
     }
 
     /* First setup — must succeed */
-    ASSERT_INT_EQ(
-        sendEnc(sv[0], &cliKey, &cliSeq, MsgTOTPSetupReq, NULL, 0), 0);
+    ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &cliSeq, MsgTOTPSetupReq, NULL, 0),
+                  0);
     {
         Packet rpkt;
         memset(&rpkt, 0, sizeof(rpkt));
@@ -1318,8 +1322,8 @@ static void testTOTPSetupAlreadyEnabled(void) {
     }
 
     /* Second setup — must be rejected */
-    ASSERT_INT_EQ(
-        sendEnc(sv[0], &cliKey, &cliSeq, MsgTOTPSetupReq, NULL, 0), 0);
+    ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &cliSeq, MsgTOTPSetupReq, NULL, 0),
+                  0);
     int status = recvStatus(sv[0], &cliKey, MsgTOTPSetupResp);
     ASSERT_INT_EQ(status, 1);
 
@@ -1327,11 +1331,16 @@ static void testTOTPSetupAlreadyEnabled(void) {
     waitpid(child, NULL, 0);
 }
 
-/* ═══════════════════════  TOTP Verify  ══════════════════════════════════ */
+/* ══════════════════════════════ TOTP Verify ═══════════════════════════════ */
 
 static void testTOTPVerifySuccess(void) {
-    enum { TotpUid = 800, SockParent = 0, SockChild = 1,
-           NameLen = 9, TestCode = 123456 };
+    enum {
+        TotpUid = 800,
+        SockParent = 0,
+        SockChild = 1,
+        NameLen = 9,
+        TestCode = 123456
+    };
     DB *userDB = ensureTestUser("totpvfy1", TotpUid, "tvpw1");
     ASSERT_TRUE(userDB != NULL);
 
@@ -1344,7 +1353,8 @@ static void testTOTPVerifySuccess(void) {
         socketClose(&sv[SockParent]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[SockChild], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[SockChild], &srvKey),
+                      PROTOCOL_SUCC);
         uint32_t seq = 0;
 
         /* Receive login request — server would challenge with TOTP */
@@ -1387,7 +1397,7 @@ static void testTOTPVerifySuccess(void) {
 
     socketClose(&sv[SockChild]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[SockParent], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[SockParent], &cliKey), PROTOCOL_SUCC);
     uint32_t cliSeq = 0;
 
     /* Login */
@@ -1417,10 +1427,9 @@ static void testTOTPVerifySuccess(void) {
     {
         TOTPVerifyPayload vp;
         vp.code = TestCode;
-        ASSERT_INT_EQ(
-            sendEnc(sv[SockParent], &cliKey, &cliSeq, MsgTOTPVerifyResp, &vp,
-                    sizeof(vp)),
-            0);
+        ASSERT_INT_EQ(sendEnc(sv[SockParent], &cliKey, &cliSeq,
+                              MsgTOTPVerifyResp, &vp, sizeof(vp)),
+                      0);
     }
 
     /* Expect success LoginResp with totpEnabled=1 */
@@ -1454,7 +1463,8 @@ static void testTOTPVerifyWrongCode(void) {
         socketClose(&sv[SockParent]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[SockChild], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[SockChild], &srvKey),
+                      PROTOCOL_SUCC);
         uint32_t seq = 0;
 
         /* Receive login — simulate challenge */
@@ -1487,7 +1497,7 @@ static void testTOTPVerifyWrongCode(void) {
 
     socketClose(&sv[SockChild]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[SockParent], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[SockParent], &cliKey), PROTOCOL_SUCC);
     uint32_t cliSeq = 0;
 
     {
@@ -1543,7 +1553,8 @@ static void testTOTPVerifyMalformedPayload(void) {
         socketClose(&sv[SockParent]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[SockChild], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[SockChild], &srvKey),
+                      PROTOCOL_SUCC);
         uint32_t seq = 0;
 
         {
@@ -1575,7 +1586,7 @@ static void testTOTPVerifyMalformedPayload(void) {
 
     socketClose(&sv[SockChild]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[SockParent], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[SockParent], &cliKey), PROTOCOL_SUCC);
     uint32_t cliSeq = 0;
 
     {
@@ -1613,7 +1624,7 @@ static void testTOTPVerifyMalformedPayload(void) {
     waitpid(child, NULL, 0);
 }
 
-/* ═══════════════════════  State Machine Violations  ═════════════════════ */
+/* ════════════════════════ State Machine Violations ════════════════════════ */
 
 static void testSessionTOTPVerifyStateViolation(void) {
     enum { TotpUid = 803, SockParent = 0, SockChild = 1, NameLen = 9 };
@@ -1629,7 +1640,8 @@ static void testSessionTOTPVerifyStateViolation(void) {
         socketClose(&sv[SockParent]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[SockChild], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[SockChild], &srvKey),
+                      PROTOCOL_SUCC);
         uint32_t seq = 0;
         /* Login → TOTP challenge */
         {
@@ -1657,7 +1669,7 @@ static void testSessionTOTPVerifyStateViolation(void) {
 
     socketClose(&sv[SockChild]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[SockParent], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[SockParent], &cliKey), PROTOCOL_SUCC);
     uint32_t cliSeq = 0;
 
     {
@@ -1692,7 +1704,7 @@ static void testSessionTOTPVerifyStateViolation(void) {
     waitpid(child, NULL, 0);
 }
 
-/* ═══════════════════════  Protocol Edge-Case Tests  ═══════════════════════ */
+/* ════════════════════════ Protocol Edge-Case Tests ════════════════════════ */
 
 /** @brief Login with payload smaller than MinLoginPayload => StatusFailure. */
 static void testLoginPayloadTooSmall(void) {
@@ -1708,7 +1720,7 @@ static void testLoginPayloadTooSmall(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
 
         Packet pkt;
         memset(&pkt, 0, sizeof(pkt));
@@ -1720,7 +1732,8 @@ static void testLoginPayloadTooSmall(void) {
         if (pkt.header.payloadLength < MinLoginPayload) {
             LoginResponsePayload failResp;
             memset(&failResp, 0, sizeof(failResp));
-            sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &failResp, sizeof(failResp));
+            sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &failResp,
+                    sizeof(failResp));
         } else {
             LoginResponsePayload resp;
             memset(&resp, 0, sizeof(resp));
@@ -1735,7 +1748,7 @@ static void testLoginPayloadTooSmall(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
 
     /* Craft a payload with only username(32) = 32 bytes, no password */
     enum { ShortPayloadLen = 32 };
@@ -1777,7 +1790,7 @@ static void testLoginUsernameNotNulTerminated(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
 
         Packet pkt;
         memset(&pkt, 0, sizeof(pkt));
@@ -1790,7 +1803,8 @@ static void testLoginUsernameNotNulTerminated(void) {
         if (bad) {
             LoginResponsePayload failResp;
             memset(&failResp, 0, sizeof(failResp));
-            sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &failResp, sizeof(failResp));
+            sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &failResp,
+                    sizeof(failResp));
         } else {
             LoginResponsePayload resp;
             memset(&resp, 0, sizeof(resp));
@@ -1805,7 +1819,7 @@ static void testLoginUsernameNotNulTerminated(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
 
     const char *pw = "a";
     size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
@@ -1846,7 +1860,7 @@ static void testCreateRoomZeroPayload(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         uint32_t seq = 0;
 
         /* Login pass-through */
@@ -1869,8 +1883,7 @@ static void testCreateRoomZeroPayload(void) {
             memset(&pkt, 0, sizeof(pkt));
             ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
             ASSERT_INT_EQ(pkt.header.messageType, MsgCreateRoom);
-            uint8_t s =
-                (pkt.header.payloadLength != sizeof(uint32_t)) ? 1 : 0;
+            uint8_t s = (pkt.header.payloadLength != sizeof(uint32_t)) ? 1 : 0;
             sendEnc(sv[1], &srvKey, &seq, MsgCreateRoomResp, &s, sizeof(s));
             packetClear(&pkt);
         }
@@ -1882,7 +1895,7 @@ static void testCreateRoomZeroPayload(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
     uint32_t seq = 0;
 
     /* Login */
@@ -1931,7 +1944,7 @@ static void testJoinRoomZeroPayload(void) {
         DB *gDB = dbInit(GameDB, NULL);
         ASSERT_INT_EQ(createRoom(gDB, TestRoomId, LoginUidBob), DB_SUCC);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         uint32_t seq = 0;
 
         /* Login pass-through */
@@ -1954,8 +1967,7 @@ static void testJoinRoomZeroPayload(void) {
             memset(&pkt, 0, sizeof(pkt));
             ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
             ASSERT_INT_EQ(pkt.header.messageType, MsgJoinRoom);
-            uint8_t s =
-                (pkt.header.payloadLength != sizeof(uint32_t)) ? 1 : 0;
+            uint8_t s = (pkt.header.payloadLength != sizeof(uint32_t)) ? 1 : 0;
             sendEnc(sv[1], &srvKey, &seq, MsgJoinRoomResp, &s, sizeof(s));
             packetClear(&pkt);
         }
@@ -1968,7 +1980,7 @@ static void testJoinRoomZeroPayload(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
     uint32_t seq = 0;
 
     /* Login */
@@ -2021,7 +2033,7 @@ static void testChatZeroPayload(void) {
         userDB = dbInit(UserDB, NULL);
         gameDB = dbInit(GameDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         uint32_t seq = 0;
 
         /* Login pass */
@@ -2070,7 +2082,7 @@ static void testChatZeroPayload(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
     uint32_t seq = 0;
 
     /* Login */
@@ -2137,7 +2149,7 @@ static void testChatMsgNotNulTerminated(void) {
         userDB = dbInit(UserDB, NULL);
         gameDB = dbInit(GameDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         uint32_t seq = 0;
 
         /* Login pass */
@@ -2169,10 +2181,9 @@ static void testChatMsgNotNulTerminated(void) {
             ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
             ASSERT_INT_EQ(pkt.header.messageType, MsgChat);
             ChatPacketPayload *chat = (ChatPacketPayload *)pkt.payload;
-            size_t msgLen =
-                pkt.header.payloadLength - sizeof(int64_t);
-            int bad = (msgLen == 0 ||
-                       memchr(chat->message, '\0', msgLen) == NULL);
+            size_t msgLen = pkt.header.payloadLength - sizeof(int64_t);
+            int bad =
+                (msgLen == 0 || memchr(chat->message, '\0', msgLen) == NULL);
             packetClear(&pkt);
             if (bad) {
                 dbClose(userDB);
@@ -2190,7 +2201,7 @@ static void testChatMsgNotNulTerminated(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
     uint32_t seq = 0;
 
     /* Login */
@@ -2243,7 +2254,7 @@ static void testChatMsgNotNulTerminated(void) {
     waitpid(child, NULL, 0);
 }
 
-/* ═══════════════════════  Registration Tests  ══════════════════════════════ */
+/* ═══════════════════════════ Registration Tests ═══════════════════════════ */
 
 /** @brief Register a new user successfully. */
 static void testRegisterSuccess(void) {
@@ -2260,7 +2271,7 @@ static void testRegisterSuccess(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
 
         Packet pkt;
         memset(&pkt, 0, sizeof(pkt));
@@ -2288,7 +2299,7 @@ static void testRegisterSuccess(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
 
     const char *un = "RegUser";
     const char *pw = "regpass";
@@ -2338,7 +2349,7 @@ static void testRegisterDuplicate(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
 
         Packet pkt;
         memset(&pkt, 0, sizeof(pkt));
@@ -2366,7 +2377,7 @@ static void testRegisterDuplicate(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
 
     const char *un = "DupUser";
     const char *pw = "secondpw";
@@ -2405,7 +2416,7 @@ static void testRegisterDuplicateSameSession(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         uint32_t seq = 0;
 
         /* First register — should succeed */
@@ -2414,8 +2425,7 @@ static void testRegisterDuplicateSameSession(void) {
             memset(&pkt, 0, sizeof(pkt));
             ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
             ASSERT_INT_EQ(pkt.header.messageType, MsgRegisterReq);
-            RegisterRequestPayload *reg =
-                (RegisterRequestPayload *)pkt.payload;
+            RegisterRequestPayload *reg = (RegisterRequestPayload *)pkt.payload;
             User u;
             memset(&u, 0, sizeof(u));
             memcpy(u.username, reg->username, USERNAME_MAX_LEN);
@@ -2435,8 +2445,7 @@ static void testRegisterDuplicateSameSession(void) {
             memset(&pkt, 0, sizeof(pkt));
             ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
             ASSERT_INT_EQ(pkt.header.messageType, MsgRegisterReq);
-            RegisterRequestPayload *reg =
-                (RegisterRequestPayload *)pkt.payload;
+            RegisterRequestPayload *reg = (RegisterRequestPayload *)pkt.payload;
             User u;
             memset(&u, 0, sizeof(u));
             memcpy(u.username, reg->username, USERNAME_MAX_LEN);
@@ -2457,13 +2466,12 @@ static void testRegisterDuplicateSameSession(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
     uint32_t seq = 0;
 
     const char *un = "DupSession";
     const char *pw = "sessionpw";
-    size_t plen =
-        offsetof(RegisterRequestPayload, password) + strlen(pw) + 1;
+    size_t plen = offsetof(RegisterRequestPayload, password) + strlen(pw) + 1;
     RegisterRequestPayload *rp = calloc(1, plen);
     ASSERT_TRUE(rp != NULL);
     memcpy(rp->username, un, strlen(un) + 1);
@@ -2501,7 +2509,7 @@ static void testRegisterEmptyPassword(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
 
         Packet pkt;
         memset(&pkt, 0, sizeof(pkt));
@@ -2536,7 +2544,7 @@ static void testRegisterEmptyPassword(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
 
     const char *un = "EmptyPw";
     const char *pw = "";
@@ -2574,7 +2582,7 @@ static void testRegisterPayloadTooSmall(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
 
         Packet pkt;
         memset(&pkt, 0, sizeof(pkt));
@@ -2582,11 +2590,9 @@ static void testRegisterPayloadTooSmall(void) {
         ASSERT_INT_EQ(pkt.header.messageType, MsgRegisterReq);
 
         enum { MinPayload = 65 };
-        uint8_t status =
-            (pkt.header.payloadLength < MinPayload) ? 1 : 0;
+        uint8_t status = (pkt.header.payloadLength < MinPayload) ? 1 : 0;
         uint32_t seq = 0;
-        sendEnc(sv[1], &srvKey, &seq, MsgRegisterResp, &status,
-                sizeof(status));
+        sendEnc(sv[1], &srvKey, &seq, MsgRegisterResp, &status, sizeof(status));
         packetClear(&pkt);
         dbClose(userDB);
         socketClose(&sv[1]);
@@ -2595,7 +2601,7 @@ static void testRegisterPayloadTooSmall(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
 
     /* Craft a payload with only username(32) + nickname(32) = 64 bytes */
     enum { ShortPayloadLen = 64 };
@@ -2633,7 +2639,7 @@ static void testRegisterUsernameNotNulTerminated(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
 
         Packet pkt;
         memset(&pkt, 0, sizeof(pkt));
@@ -2644,8 +2650,7 @@ static void testRegisterUsernameNotNulTerminated(void) {
         uint8_t status =
             (reg->username[LOGIN_USERNAME_LEN - 1] != '\0') ? 1 : 0;
         uint32_t seq = 0;
-        sendEnc(sv[1], &srvKey, &seq, MsgRegisterResp, &status,
-                sizeof(status));
+        sendEnc(sv[1], &srvKey, &seq, MsgRegisterResp, &status, sizeof(status));
         packetClear(&pkt);
         dbClose(userDB);
         socketClose(&sv[1]);
@@ -2654,11 +2659,10 @@ static void testRegisterUsernameNotNulTerminated(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
 
     const char *pw = "a";
-    size_t plen =
-        offsetof(RegisterRequestPayload, password) + strlen(pw) + 1;
+    size_t plen = offsetof(RegisterRequestPayload, password) + strlen(pw) + 1;
     RegisterRequestPayload *rp = calloc(1, plen);
     ASSERT_TRUE(rp != NULL);
     /* Fill entire username buffer — no NUL at last byte */
@@ -2693,7 +2697,7 @@ static void testRegisterPasswordNotNulTerminated(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
 
         Packet pkt;
         memset(&pkt, 0, sizeof(pkt));
@@ -2703,8 +2707,7 @@ static void testRegisterPasswordNotNulTerminated(void) {
         RegisterRequestPayload *reg = (RegisterRequestPayload *)pkt.payload;
         size_t pwLen = pkt.header.payloadLength -
                        offsetof(RegisterRequestPayload, password);
-        uint8_t status =
-            (memchr(reg->password, '\0', pwLen) == NULL) ? 1 : 0;
+        uint8_t status = (memchr(reg->password, '\0', pwLen) == NULL) ? 1 : 0;
         if (status == 0) {
             User u;
             memset(&u, 0, sizeof(u));
@@ -2717,8 +2720,7 @@ static void testRegisterPasswordNotNulTerminated(void) {
             status = (dbRet == DB_SUCC) ? 0 : 1;
         }
         uint32_t seq = 0;
-        sendEnc(sv[1], &srvKey, &seq, MsgRegisterResp, &status,
-                sizeof(status));
+        sendEnc(sv[1], &srvKey, &seq, MsgRegisterResp, &status, sizeof(status));
         packetClear(&pkt);
         dbClose(userDB);
         socketClose(&sv[1]);
@@ -2727,7 +2729,7 @@ static void testRegisterPasswordNotNulTerminated(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
 
     const char *un = "NoNulPw";
     enum { PwBufLen = 4 };
@@ -2766,7 +2768,7 @@ static void testRegisterThenLogin(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
 
         uint32_t seq = 0;
 
@@ -2777,8 +2779,7 @@ static void testRegisterThenLogin(void) {
             ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
             ASSERT_INT_EQ(pkt.header.messageType, MsgRegisterReq);
 
-            RegisterRequestPayload *reg =
-                (RegisterRequestPayload *)pkt.payload;
+            RegisterRequestPayload *reg = (RegisterRequestPayload *)pkt.payload;
             User u;
             memset(&u, 0, sizeof(u));
             memcpy(u.username, reg->username, USERNAME_MAX_LEN);
@@ -2789,8 +2790,7 @@ static void testRegisterThenLogin(void) {
             free(u.password);
 
             uint8_t s = (dbRet == DB_SUCC) ? 0 : 1;
-            sendEnc(sv[1], &srvKey, &seq, MsgRegisterResp, &s,
-                    sizeof(s));
+            sendEnc(sv[1], &srvKey, &seq, MsgRegisterResp, &s, sizeof(s));
             packetClear(&pkt);
         }
 
@@ -2801,8 +2801,7 @@ static void testRegisterThenLogin(void) {
             ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
             ASSERT_INT_EQ(pkt.header.messageType, MsgLoginReq);
 
-            LoginRequestPayload *login =
-                (LoginRequestPayload *)pkt.payload;
+            LoginRequestPayload *login = (LoginRequestPayload *)pkt.payload;
             User verify;
             memset(&verify, 0, sizeof(verify));
             memcpy(verify.username, login->username, USERNAME_MAX_LEN);
@@ -2818,11 +2817,13 @@ static void testRegisterThenLogin(void) {
                 resp.uid = verify.uid;
                 memcpy(resp.username, verify.username, LOGIN_USERNAME_LEN);
                 memcpy(resp.nickname, verify.nickname, LOGIN_NICKNAME_LEN);
-                sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &resp, sizeof(resp));
+                sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &resp,
+                        sizeof(resp));
             } else {
                 LoginResponsePayload failResp;
                 memset(&failResp, 0, sizeof(failResp));
-                sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &failResp, sizeof(failResp));
+                sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &failResp,
+                        sizeof(failResp));
             }
             packetClear(&pkt);
         }
@@ -2834,13 +2835,14 @@ static void testRegisterThenLogin(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
     uint32_t seq = 0;
 
     const char *un = "E2EUser";
     const char *pw = "e2epass";
     const char *nick = "TestNick";
-    size_t regPlen = offsetof(RegisterRequestPayload, password) + strlen(pw) + 1;
+    size_t regPlen =
+        offsetof(RegisterRequestPayload, password) + strlen(pw) + 1;
     RegisterRequestPayload *regPayload = calloc(1, regPlen);
     ASSERT_TRUE(regPayload != NULL);
     memcpy(regPayload->username, un, strlen(un) + 1);
@@ -2848,8 +2850,9 @@ static void testRegisterThenLogin(void) {
     memcpy(regPayload->password, pw, strlen(pw) + 1);
 
     /* Register */
-    ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &seq, MsgRegisterReq, regPayload, regPlen),
-                  PROTOCOL_SUCC);
+    ASSERT_INT_EQ(
+        sendEnc(sv[0], &cliKey, &seq, MsgRegisterReq, regPayload, regPlen),
+        PROTOCOL_SUCC);
     ASSERT_INT_EQ(recvStatus(sv[0], &cliKey, MsgRegisterResp), 0);
 
     /* Login */
@@ -2859,8 +2862,9 @@ static void testRegisterThenLogin(void) {
     memcpy(loginPayload->username, un, strlen(un) + 1);
     memcpy(loginPayload->password, pw, strlen(pw) + 1);
 
-    ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &seq, MsgLoginReq, loginPayload, loginPlen),
-                  PROTOCOL_SUCC);
+    ASSERT_INT_EQ(
+        sendEnc(sv[0], &cliKey, &seq, MsgLoginReq, loginPayload, loginPlen),
+        PROTOCOL_SUCC);
 
     Packet rpkt;
     memset(&rpkt, 0, sizeof(rpkt));
@@ -2890,7 +2894,7 @@ static void testRegisterBeforeKeyExchange(void) {
         socketClose(&sv[0]);
         DB *uDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         /* Register before key exchange is a protocol violation —
          * the real server returns SERVER_FAIL (disconnect). */
         socketClose(&sv[1]);
@@ -2900,7 +2904,7 @@ static void testRegisterBeforeKeyExchange(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
 
     /* Parent does nothing — child closes cleanly on its own */
     socketClose(&sv[0]);
@@ -2923,7 +2927,7 @@ static void testRegisterAfterLogin(void) {
         socketClose(&sv[0]);
         userDB = dbInit(UserDB, NULL);
         AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), COMM_SUCC);
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
         uint32_t seq = 0;
 
         /* Login pass */
@@ -2957,15 +2961,14 @@ static void testRegisterAfterLogin(void) {
 
     socketClose(&sv[1]);
     AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), COMM_SUCC);
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
     uint32_t seq = 0;
 
     /* Login */
     {
         const char *un = "RegLate";
         const char *pw = "latepw";
-        size_t plen =
-            offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
+        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
         LoginRequestPayload *lp = calloc(1, plen);
         memcpy(lp->username, un, strlen(un) + 1);
         memcpy(lp->password, pw, strlen(pw) + 1);
@@ -2991,8 +2994,7 @@ static void testRegisterAfterLogin(void) {
         memcpy(rp->username, "BadReg", BadRegLen);
         memcpy(rp->nickname, "TestNick", StrLenTestNick + 1);
         memcpy(rp->password, pw, strlen(pw) + 1);
-        ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &seq, MsgRegisterReq, rp,
-                              plen),
+        ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &seq, MsgRegisterReq, rp, plen),
                       PROTOCOL_SUCC);
         free(rp);
     }
@@ -3001,7 +3003,7 @@ static void testRegisterAfterLogin(void) {
     waitpid(child, NULL, 0);
 }
 
-/* ═══════════════════════  Key Management Tests  ═══════════════════════════ */
+/* ══════════════════════════ Key Management Tests ══════════════════════════ */
 
 /** @brief First-run serverInitKeys generates 4 keys and stores them. */
 static void testServerInitKeysFirstRun(void) {
@@ -3031,12 +3033,12 @@ static void testServerInitKeysFirstRun(void) {
     /* All 4 keys must be non-zero (generate was called) */
     static const uint8_t zeros32[32];
     ASSERT_TRUE(memcmp(srv.dekKey, zeros32, sizeof(srv.dekKey)) != 0);
-    ASSERT_TRUE(
-        memcmp(srv.userDbEncKey, zeros32, sizeof(srv.userDbEncKey)) != 0);
-    ASSERT_TRUE(
-        memcmp(srv.chatDbEncKey, zeros32, sizeof(srv.chatDbEncKey)) != 0);
-    ASSERT_TRUE(
-        memcmp(srv.gameDbEncKey, zeros32, sizeof(srv.gameDbEncKey)) != 0);
+    ASSERT_TRUE(memcmp(srv.userDbEncKey, zeros32, sizeof(srv.userDbEncKey)) !=
+                0);
+    ASSERT_TRUE(memcmp(srv.chatDbEncKey, zeros32, sizeof(srv.chatDbEncKey)) !=
+                0);
+    ASSERT_TRUE(memcmp(srv.gameDbEncKey, zeros32, sizeof(srv.gameDbEncKey)) !=
+                0);
 
     /* All 4 keys must be distinct from each other */
     ASSERT_TRUE(memcmp(srv.dekKey, srv.userDbEncKey, 32) != 0);
@@ -3056,17 +3058,15 @@ static void testServerInitKeysFirstRun(void) {
     size_t lenChat = 0;
     size_t lenGame = 0;
     ASSERT_INT_EQ(getServerKey(serverDB, "DEK", &outDek, &lenDek), DB_SUCC);
-    ASSERT_INT_EQ(
-        getServerKey(serverDB, "UserDBKey", &outUser, &lenUser), DB_SUCC);
+    ASSERT_INT_EQ(getServerKey(serverDB, "UserDBKey", &outUser, &lenUser),
+                  DB_SUCC);
     ASSERT_INT_EQ(
         getServerKey(serverDB, "ChatHistoryDBKey", &outChat, &lenChat),
         DB_SUCC);
-    ASSERT_INT_EQ(
-        getServerKey(serverDB, "GameDBKey", &outGame, &lenGame), DB_SUCC);
+    ASSERT_INT_EQ(getServerKey(serverDB, "GameDBKey", &outGame, &lenGame),
+                  DB_SUCC);
 
-    enum {
-        EnvelopeLen = 12 + 32 + 16
-    }; /* nonce + key + tag */
+    enum { EnvelopeLen = 12 + 32 + 16 }; /* nonce + key + tag */
     ASSERT_TRUE(outDek != NULL);
     ASSERT_UINT_EQ(lenDek, (size_t)EnvelopeLen);
     ASSERT_TRUE(outUser != NULL);
@@ -3105,7 +3105,341 @@ static void testFreshKeysGeneratedFlag(void) {
     ASSERT_FALSE(srv.freshKeysGenerated);
 }
 
-/* ═══════════════════════  Main  ══════════════════════════════════════════ */
+/* ═══════════════════ ActiveRoom Helper Function Tests ══════════════════════ */
+
+enum {
+    ActiveTestRoomNew = 42,
+    ActiveTestRoomReuse = 99,
+    ActiveTestRoomA = 100,
+    ActiveTestRoomB = 200,
+    ActiveTestRoomFind = 77,
+    ActiveTestRoomMissing = 88,
+    ActiveTestRoomRmA = 10,
+    ActiveTestRoomRmB = 20,
+    ActiveTestRoomRmC = 30,
+    ActiveTestRoomKeep = 1,
+    ActiveTestRoomNonexistRm = 999,
+    ActiveTestRoomClean = 50
+};
+
+/* Helper: allocate ActiveRoom pointer array with explicit cast for clang-tidy */
+static ActiveRoom **allocActiveRoomArray(size_t n) {
+    return (ActiveRoom **)calloc(n, sizeof(ActiveRoom *));
+}
+
+/** @brief serverFindActiveRoom on empty server returns NULL. */
+static void testFindActiveRoomEmpty(void) {
+    Server s;
+    memset(&s, 0, sizeof(s));
+    ASSERT_TRUE(serverFindActiveRoom(&s, ActiveTestRoomMissing) == NULL);
+}
+
+/** @brief serverGetOrCreateActiveRoom creates a new room on first call. */
+static void testGetOrCreateActiveRoomNew(void) {
+    Server s;
+    memset(&s, 0, sizeof(s));
+    s.activeRoomCapacity = SERVER_INITIAL_CAPACITY;
+    s.activeRooms = allocActiveRoomArray((size_t)s.activeRoomCapacity);
+    ASSERT_TRUE(s.activeRooms != NULL);
+
+    ActiveRoom *room =
+        serverGetOrCreateActiveRoom(&s, ActiveTestRoomNew);
+    ASSERT_TRUE(room != NULL);
+    ASSERT_UINT_EQ(room->roomId, (uint32_t)ActiveTestRoomNew);
+    ASSERT_UINT_EQ(room->memberCount, (unsigned long long)0);
+    ASSERT_UINT_EQ(s.activeRoomCount, (unsigned long long)1);
+
+    free(s.activeRooms[0]);
+    free((void *)s.activeRooms);
+}
+
+/** @brief serverGetOrCreateActiveRoom returns same room on second call. */
+static void testGetOrCreateActiveRoomReuse(void) {
+    Server s;
+    memset(&s, 0, sizeof(s));
+    s.activeRoomCapacity = SERVER_INITIAL_CAPACITY;
+    s.activeRooms = allocActiveRoomArray((size_t)s.activeRoomCapacity);
+    ASSERT_TRUE(s.activeRooms != NULL);
+
+    ActiveRoom *r1 =
+        serverGetOrCreateActiveRoom(&s, ActiveTestRoomReuse);
+    ActiveRoom *r2 =
+        serverGetOrCreateActiveRoom(&s, ActiveTestRoomReuse);
+    ASSERT_TRUE(r1 != NULL);
+    ASSERT_TRUE(r2 != NULL);
+    ASSERT_TRUE(r1 == r2);
+    ASSERT_UINT_EQ(s.activeRoomCount, (unsigned long long)1);
+
+    free(s.activeRooms[0]);
+    free((void *)s.activeRooms);
+}
+
+/** @brief serverGetOrCreateActiveRoom creates distinct rooms for different IDs.
+ */
+static void testGetOrCreateActiveRoomDistinct(void) {
+    Server s;
+    memset(&s, 0, sizeof(s));
+    s.activeRoomCapacity = SERVER_INITIAL_CAPACITY;
+    s.activeRooms = allocActiveRoomArray((size_t)s.activeRoomCapacity);
+    ASSERT_TRUE(s.activeRooms != NULL);
+
+    ActiveRoom *rA = serverGetOrCreateActiveRoom(&s, ActiveTestRoomA);
+    ActiveRoom *rB = serverGetOrCreateActiveRoom(&s, ActiveTestRoomB);
+    ASSERT_TRUE(rA != NULL);
+    ASSERT_TRUE(rB != NULL);
+    ASSERT_TRUE(rA != rB);
+    ASSERT_UINT_EQ(rA->roomId, (uint32_t)ActiveTestRoomA);
+    ASSERT_UINT_EQ(rB->roomId, (uint32_t)ActiveTestRoomB);
+    ASSERT_UINT_EQ(s.activeRoomCount, (unsigned long long)2);
+
+    free(s.activeRooms[0]);
+    free(s.activeRooms[1]);
+    free((void *)s.activeRooms);
+}
+
+/** @brief serverFindActiveRoom finds existing room, returns NULL for missing. */
+static void testFindActiveRoomSuccess(void) {
+    Server s;
+    memset(&s, 0, sizeof(s));
+    s.activeRoomCapacity = SERVER_INITIAL_CAPACITY;
+    s.activeRooms = allocActiveRoomArray((size_t)s.activeRoomCapacity);
+    ASSERT_TRUE(s.activeRooms != NULL);
+
+    serverGetOrCreateActiveRoom(&s, ActiveTestRoomFind);
+    ASSERT_TRUE(
+        serverFindActiveRoom(&s, ActiveTestRoomFind) != NULL);
+    ASSERT_TRUE(
+        serverFindActiveRoom(&s, ActiveTestRoomMissing) == NULL);
+
+    free(s.activeRooms[0]);
+    free((void *)s.activeRooms);
+}
+
+/** @brief serverRemoveActiveRoom removes room and compacts array. */
+static void testRemoveActiveRoomBasic(void) {
+    Server s;
+    memset(&s, 0, sizeof(s));
+    s.activeRoomCapacity = SERVER_INITIAL_CAPACITY;
+    s.activeRooms = allocActiveRoomArray((size_t)s.activeRoomCapacity);
+    ASSERT_TRUE(s.activeRooms != NULL);
+
+    serverGetOrCreateActiveRoom(&s, ActiveTestRoomRmA);
+    serverGetOrCreateActiveRoom(&s, ActiveTestRoomRmB);
+    serverGetOrCreateActiveRoom(&s, ActiveTestRoomRmC);
+    ASSERT_UINT_EQ(s.activeRoomCount, (unsigned long long)3);
+
+    serverRemoveActiveRoom(&s, ActiveTestRoomRmB);
+    ASSERT_UINT_EQ(s.activeRoomCount, (unsigned long long)2);
+    ASSERT_TRUE(
+        serverFindActiveRoom(&s, ActiveTestRoomRmB) == NULL);
+    ASSERT_TRUE(
+        serverFindActiveRoom(&s, ActiveTestRoomRmA) != NULL);
+    ASSERT_TRUE(
+        serverFindActiveRoom(&s, ActiveTestRoomRmC) != NULL);
+
+    free(s.activeRooms[0]);
+    free(s.activeRooms[1]);
+    free((void *)s.activeRooms);
+}
+
+/** @brief serverRemoveActiveRoom on nonexistent is a no-op. */
+static void testRemoveActiveRoomNotFound(void) {
+    Server s;
+    memset(&s, 0, sizeof(s));
+    s.activeRoomCapacity = SERVER_INITIAL_CAPACITY;
+    s.activeRooms = allocActiveRoomArray((size_t)s.activeRoomCapacity);
+    ASSERT_TRUE(s.activeRooms != NULL);
+
+    serverGetOrCreateActiveRoom(&s, ActiveTestRoomKeep);
+    ASSERT_UINT_EQ(s.activeRoomCount, (unsigned long long)1);
+    serverRemoveActiveRoom(&s, ActiveTestRoomNonexistRm);
+    ASSERT_UINT_EQ(s.activeRoomCount, (unsigned long long)1);
+
+    free(s.activeRooms[0]);
+    free((void *)s.activeRooms);
+}
+
+/** @brief serverRemoveClientFromRoom with currentRoomId=0 is a no-op. */
+static void testRemoveClientFromRoomNoRoom(void) {
+    Server s;
+    memset(&s, 0, sizeof(s));
+    s.activeRoomCapacity = SERVER_INITIAL_CAPACITY;
+    s.activeRooms = allocActiveRoomArray((size_t)s.activeRoomCapacity);
+    ASSERT_TRUE(s.activeRooms != NULL);
+
+    ClientSession cs;
+    memset(&cs, 0, sizeof(cs));
+    cs.currentRoomId = 0;
+    serverRemoveClientFromRoom(&s, &cs);
+    ASSERT_UINT_EQ(cs.currentRoomId, (uint32_t)0);
+
+    free((void *)s.activeRooms);
+}
+
+/** @brief serverRemoveClientFromRoom removes client and cleans empty room. */
+static void testRemoveClientFromRoomCleansEmpty(void) {
+    Server s;
+    memset(&s, 0, sizeof(s));
+    s.activeRoomCapacity = SERVER_INITIAL_CAPACITY;
+    s.activeRooms = allocActiveRoomArray((size_t)s.activeRoomCapacity);
+    ASSERT_TRUE(s.activeRooms != NULL);
+
+    ActiveRoom *room =
+        serverGetOrCreateActiveRoom(&s, ActiveTestRoomClean);
+    ASSERT_TRUE(room != NULL);
+
+    ClientSession cs;
+    memset(&cs, 0, sizeof(cs));
+    cs.currentRoomId = ActiveTestRoomClean;
+    room->members[0] = &cs;
+    room->memberCount = 1;
+
+    serverRemoveClientFromRoom(&s, &cs);
+    ASSERT_UINT_EQ(cs.currentRoomId, (uint32_t)0);
+    ASSERT_UINT_EQ(s.activeRoomCount, (unsigned long long)0);
+
+    free((void *)s.activeRooms);
+}
+
+/** @brief serverInitKeys subsequent-run: pre-populate envelopes, feed
+ *  known MK via stdin, verify decrypted keys are loaded correctly. */
+static void testServerInitKeysSubsequentRun(void) {
+    enum {
+        KeyLen = 32,
+        NonceLen = AES_GCM_NONCE_LEN,
+        TagLen = AES_GCM_TAG_LEN,
+        EnvelopeLen = NonceLen + KeyLen + TagLen,
+        HexMkLen = KeyLen * 2,
+        MkInputBufSize = HexMkLen + 4
+    };
+
+    /*
+     * Known deterministic keys — deliberately patterned for verification.
+     * In production these would be cryptoRandomBytes; for testing a
+     * subsequent-run we pre-compute the envelopes ourselves.
+     */
+    static const uint8_t knownMk[KeyLen] = {
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F};
+    static const uint8_t knownDek[KeyLen] = {
+        0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE,
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF,
+        0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10,
+        0x0F, 0x1E, 0x2D, 0x3C, 0x4B, 0x5A, 0x69, 0x78};
+    static const uint8_t knownUserDbKey[KeyLen] = {
+        0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7,
+        0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF,
+        0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7,
+        0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF};
+    static const uint8_t knownChatDbKey[KeyLen] = {
+        0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,
+        0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF,
+        0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7,
+        0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF};
+    static const uint8_t knownGameDbKey[KeyLen] = {
+        0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7,
+        0xE8, 0xE9, 0xEA, 0xEB, 0xEC, 0xED, 0xEE, 0xEF,
+        0xF0, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7,
+        0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF};
+
+    removeDBFiles();
+
+    /* --- Step 1: pre-populate ServerDB with known-encrypted envelopes --- */
+    {
+        DB *serverDB = dbInit(ServerDB, NULL);
+        ASSERT_TRUE(serverDB != NULL);
+
+        AESGCMKey encKey;
+        memcpy(encKey.key, knownMk, KeyLen);
+
+        /* Encrypt and store each key using AES-256-GCM */
+        const struct {
+            const uint8_t *data;
+            const char *name;
+        } keys[] = {
+            {knownDek, "DEK"},
+            {knownUserDbKey, "UserDBKey"},
+            {knownChatDbKey, "ChatHistoryDBKey"},
+            {knownGameDbKey, "GameDBKey"},
+        };
+        enum { KeyCount = 4 };
+
+        for (int i = 0; i < KeyCount; i++) {
+            ASSERT_INT_EQ(cryptoRandomBytes(encKey.nonce, NonceLen),
+                          CRYPTO_SUCC);
+
+            AESGCMBuffer pt;
+            pt.data = (uint8_t *)(uintptr_t)keys[i].data;
+            pt.capacity = KeyLen;
+            pt.len = KeyLen;
+
+            AESGCMCipher ct;
+            ASSERT_INT_EQ(aesGCMBufferInit(&ct.buffer, KeyLen), CRYPTO_SUCC);
+            ASSERT_INT_EQ(encryptAESGCM(&pt, NULL, &encKey, &ct), CRYPTO_SUCC);
+
+            uint8_t envelope[EnvelopeLen];
+            memcpy(envelope, encKey.nonce, NonceLen);
+            memcpy(envelope + NonceLen, ct.buffer.data, KeyLen);
+            memcpy(envelope + NonceLen + KeyLen, ct.tag, TagLen);
+
+            ASSERT_INT_EQ(
+                setServerKey(serverDB, keys[i].name, envelope, sizeof(envelope)),
+                DB_SUCC);
+
+            aesGCMBufferDeinit(&ct.buffer);
+        }
+
+        dbClose(serverDB);
+    }
+
+    /* --- Step 2: subsequent run — feed MK hex via stdin, verify keys --- */
+    {
+        DB *serverDB = dbInit(ServerDB, NULL);
+        ASSERT_TRUE(serverDB != NULL);
+
+        Server srv;
+        memset(&srv, 0, sizeof(srv));
+        srv.serverDB = serverDB;
+
+        /* Build MK hex string */
+        char mkHex[MkInputBufSize];
+        for (size_t i = 0; i < KeyLen; i++) {
+            snprintf(mkHex + i * 2, 3, "%02x", knownMk[i]);
+        }
+        mkHex[HexMkLen] = '\0';
+
+        /* Pipe MK into stdin */
+        FILE *pipeIn = fopen("/tmp/pp_mk_input.txt", "w+");
+        ASSERT_TRUE(pipeIn != NULL);
+        fprintf(pipeIn, "%s\n\n", mkHex);
+        fseek(pipeIn, 0, SEEK_SET);
+
+        FILE *savedStdin = stdin;
+        stdin = pipeIn;
+        int ret = serverInitKeys(&srv);
+        fclose(pipeIn);
+        stdin = savedStdin;
+        remove("/tmp/pp_mk_input.txt");
+
+        ASSERT_INT_EQ(ret, SERVER_SUCC);
+        ASSERT_FALSE(srv.freshKeysGenerated);
+        ASSERT_MEM_EQ(srv.dekKey, knownDek, KeyLen);
+        ASSERT_MEM_EQ(srv.userDbEncKey, knownUserDbKey, KeyLen);
+        ASSERT_MEM_EQ(srv.chatDbEncKey, knownChatDbKey, KeyLen);
+        ASSERT_MEM_EQ(srv.gameDbEncKey, knownGameDbKey, KeyLen);
+
+        OPENSSL_cleanse(srv.dekKey, sizeof(srv.dekKey));
+        OPENSSL_cleanse(srv.userDbEncKey, sizeof(srv.userDbEncKey));
+        OPENSSL_cleanse(srv.chatDbEncKey, sizeof(srv.chatDbEncKey));
+        OPENSSL_cleanse(srv.gameDbEncKey, sizeof(srv.gameDbEncKey));
+        dbClose(serverDB);
+    }
+    removeDBFiles();
+}
+
+/* ══════════════════════════════════ Main ══════════════════════════════════ */
 
 int main(void) {
     logSetLevel(LogLevelFatal);
@@ -3137,6 +3471,17 @@ int main(void) {
     RUN_TEST(testCreateRoomZeroPayload);
     RUN_TEST(testJoinRoomZeroPayload);
 
+    /* —— ActiveRoom Helpers —— */
+    RUN_TEST(testFindActiveRoomEmpty);
+    RUN_TEST(testGetOrCreateActiveRoomNew);
+    RUN_TEST(testGetOrCreateActiveRoomReuse);
+    RUN_TEST(testGetOrCreateActiveRoomDistinct);
+    RUN_TEST(testFindActiveRoomSuccess);
+    RUN_TEST(testRemoveActiveRoomBasic);
+    RUN_TEST(testRemoveActiveRoomNotFound);
+    RUN_TEST(testRemoveClientFromRoomNoRoom);
+    RUN_TEST(testRemoveClientFromRoomCleansEmpty);
+
     /* —— Chat —— */
     RUN_TEST(testChatSendAndBroadcast);
     RUN_TEST(testChatZeroPayload);
@@ -3161,6 +3506,7 @@ int main(void) {
 
     /* —— Key Management —— */
     RUN_TEST(testServerInitKeysFirstRun);
+    RUN_TEST(testServerInitKeysSubsequentRun);
     RUN_TEST(testFreshKeysGeneratedFlag);
 
     removeDBFiles();

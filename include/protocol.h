@@ -403,4 +403,40 @@ int packetSend(Packet *packet, SocketFD socketFD);
  */
 int packetRecv(Packet *dest, SocketFD socketFD);
 
+/**
+ * @brief Build, encrypt, and send a packet in one call.
+ *
+ * Constructs a plaintext packet via @c packetInit, encrypts it in-place
+ * via @c packetAESEncrypt, increments @p *seqID, sends it via
+ * @c packetSend, then clears the packet.  The caller owns @p seqID; this
+ * function only increments it on success.
+ *
+ * @param fd      Destination socket.
+ * @param mt      Application-layer message type.
+ * @param seqID   Pointer to the caller's monotonic sequence counter.
+ * @param key     32-byte AES-256-GCM key.
+ * @param data    Payload bytes to send (may be NULL if dataLen is 0).
+ * @param dataLen Length of @p data in bytes.
+ * @return @c PROTOCOL_SUCC on success, @c PROTOCOL_FAIL on failure.
+ */
+int packetSendEncrypted(SocketFD fd, MessageType mt, uint32_t *seqID,
+                        uint8_t key[AES_GCM_KEY_LEN], const void *data,
+                        size_t dataLen);
+
+/**
+ * @brief Receive and decrypt an AES-256-GCM packet.
+ *
+ * Receives a packet via @c packetRecv, verifies the packet type is
+ * @c AES256GCMPacket, decrypts the payload in-place via
+ * @c packetAESDecrypt, and restores @c PlaintextPacket on success.
+ * On any failure the packet is cleared and its payload is freed.
+ *
+ * @param fd   Socket to read from.
+ * @param out  Destination packet (must have NULL payload on entry).
+ * @param key  32-byte AES-256-GCM key.
+ * @return @c PROTOCOL_SUCC on success, @c PROTOCOL_FAIL or
+ *         @c PROTOCOL_AUTH_FAIL on failure.
+ */
+int packetRecvEncrypted(SocketFD fd, Packet *out, uint8_t key[AES_GCM_KEY_LEN]);
+
 #endif /* PROTOCOL_H */

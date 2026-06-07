@@ -34,7 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ───────────── helper constants for readability ────────────────────────── */
+/* ──────────────────── helper constants for readability ──────────────────── */
 
 enum { ExpectedKeyLen = 32, ExpectedNonceLen = 12, ExpectedTagLen = 16 };
 
@@ -64,7 +64,7 @@ static const uint8_t testNonce[AES_GCM_NONCE_LEN] = {
 static const uint8_t testAADData[] = {0xDE, 0xAD, 0xBE, 0xEF,
                                       0xCA, 0xFE, 0xBA, 0xBE};
 
-/* ═══════════════════════  1. Constants  ═════════════════════════════════ */
+/* ══════════════════════════════ 1. Constants ══════════════════════════════ */
 
 /** @brief AES-GCM constant sizes are correct. */
 static void testAESGCMConstants(void) {
@@ -82,7 +82,7 @@ static void testCryptoReturnCodes(void) {
     ASSERT_TRUE(CRYPTO_FAIL != CRYPTO_AUTH_FAIL);
 }
 
-/* ═══════════════════════  2. AESGCMBuffer  ═════════════════════════════ */
+/* ════════════════════════════ 2. AESGCMBuffer ═════════════════════════════ */
 
 /** @brief aesGCMBufferInit allocates memory and sets fields. */
 static void testBufferInit(void) {
@@ -105,7 +105,7 @@ static void testBufferDeinit(void) {
     ASSERT_TRUE(buf.data == NULL);
 }
 
-/* ═══════════════════════  3. encryptAESGCM  ════════════════════════════ */
+/* ════════════════════════════ 3. encryptAESGCM ════════════════════════════ */
 
 /** @brief Basic encryption succeeds and produces output. */
 static void testEncryptBasic(void) {
@@ -183,7 +183,7 @@ static void testEncryptOutputTooSmall(void) {
     aesGCMBufferDeinit(&cipher.buffer);
 }
 
-/* ═══════════════════════  4. decryptAESGCM  ════════════════════════════ */
+/* ════════════════════════════ 4. decryptAESGCM ════════════════════════════ */
 
 /** @brief decryptAESGCM fails with NULL cipher. */
 static void testDecryptNullCipher(void) {
@@ -230,7 +230,7 @@ static void testDecryptNullPlaintext(void) {
     ASSERT_INT_EQ(decryptAESGCM(&cipher, NULL, &key, NULL), CRYPTO_FAIL);
 }
 
-/* ═══════════════════════  5. Encrypt/Decrypt Roundtrip  ════════════════ */
+/* ══════════════════════ 5. Encrypt/Decrypt Roundtrip ══════════════════════ */
 
 /** @brief Encrypt then decrypt restores the original plaintext (no AAD). */
 static void testRoundtripNoAAD(void) {
@@ -346,7 +346,7 @@ static void testRoundtripLargePayload(void) {
     aesGCMBufferDeinit(&decrypted);
 }
 
-/* ═══════════════════════  6. Tamper Resistance  ════════════════════════ */
+/* ══════════════════════════ 6. Tamper Resistance ══════════════════════════ */
 
 /** @brief Decrypt with wrong key returns CRYPTO_AUTH_FAIL. */
 static void testDecryptWrongKey(void) {
@@ -465,7 +465,7 @@ static void testDecryptAADMismatch(void) {
     aesGCMBufferDeinit(&decrypted);
 }
 
-/* ═══════════════════════  7. cryptoRandomBytes  ════════════════════════ */
+/* ══════════════════════════ 7. cryptoRandomBytes ══════════════════════════ */
 
 /** @brief cryptoRandomBytes fills buffer with data. */
 static void testCryptoRandomBytesBasic(void) {
@@ -509,7 +509,7 @@ static void testCryptoRandomBytesNonDeterministic(void) {
     ASSERT_TRUE(memcmp(buf1, buf2, RandLen) != 0);
 }
 
-/* ═══════════════════  7a. Buffer NULL safety  ═════════════════════════ */
+/* ═════════════════════════ 7a. Buffer NULL safety ═════════════════════════ */
 
 /** @brief aesGCMBufferInit with NULL buf returns CRYPTO_FAIL. */
 static void testBufferInitNullBuf(void) {
@@ -555,7 +555,7 @@ static void testDecryptNullCipherData(void) {
     aesGCMBufferDeinit(&pt);
 }
 
-/* ═══════════════════════  8. ECDH Key Generation & Export/Import  ══════ */
+/* ═════════════════ 8. ECDH Key Generation & Export/Import ═════════════════ */
 
 /** @brief genECDHKeypair returns a non-NULL key pair. */
 static void testGenECDHKeypair(void) {
@@ -682,7 +682,7 @@ static void testImportECDHPeerPublicKeyAllZero(void) {
     EVP_PKEY_free(zeroPeer);
 }
 
-/* ═══════════════════════  9. ECDH Shared Secret Derivation  ═══════════ */
+/* ════════════════════ 9. ECDH Shared Secret Derivation ════════════════════ */
 
 /** @brief Two parties derive the same 32-byte shared secret. */
 static void testDeriveECDHSharedSecret(void) {
@@ -852,7 +852,7 @@ static void testDeriveECDHSharedSecretSelfKey(void) {
     EVP_PKEY_free(selfPub);
 }
 
-/* ═══════════════════════  10. HKDF-SHA256 (deriveAESKey)  ═════════════ */
+/* ═════════════════════ 10. HKDF-SHA256 (deriveAESKey) ═════════════════════ */
 
 /** @brief deriveAESKey succeeds and produces a non-zero key. */
 static void testDeriveAESKeyBasic(void) {
@@ -985,7 +985,7 @@ static void testDeriveAESKeyLengthSensitivity(void) {
     ASSERT_TRUE(memcmp(keyShort.key, keyLong.key, AES_GCM_KEY_LEN) != 0);
 }
 
-/* ═══════════════════  11. Full Integration (ECDH→HKDF→AES-GCM)  ══════ */
+/* ════════════════ 11. Full Integration (ECDH→HKDF→AES-GCM) ════════════════ */
 
 /**
  * @brief Helper: perform ECDH between two parties and derive an AES key.
@@ -1331,7 +1331,7 @@ static void testFullFlowMultipleMessages(void) {
     EVP_PKEY_free(bob);
 }
 
-/* ═══════════════════════  12. Base32  ═══════════════════════════════════ */
+/* ═══════════════════════════════ 12. Base32 ═══════════════════════════════ */
 
 enum {
     B32AlphabetLen = 32,
@@ -1420,11 +1420,13 @@ static void testBase32EncodeRfcVectors(void) {
     ASSERT_STR_EQ(out, "MY");
     free(out);
 
-    ASSERT_INT_EQ(base32Encode(b32TestFo, sizeof(b32TestFo), &out), CRYPTO_SUCC);
+    ASSERT_INT_EQ(base32Encode(b32TestFo, sizeof(b32TestFo), &out),
+                  CRYPTO_SUCC);
     ASSERT_STR_EQ(out, "MZXQ");
     free(out);
 
-    ASSERT_INT_EQ(base32Encode(b32TestFoo, sizeof(b32TestFoo), &out), CRYPTO_SUCC);
+    ASSERT_INT_EQ(base32Encode(b32TestFoo, sizeof(b32TestFoo), &out),
+                  CRYPTO_SUCC);
     ASSERT_STR_EQ(out, "MZXW6");
     free(out);
 
@@ -1562,8 +1564,8 @@ static void testBase32EncodeDecodeRoundtrip(void) {
         Len255 = 255,
         Len256 = 256
     };
-    size_t lengths[] = {Len0, Len1, Len2,  Len3,  Len4, Len5, Len6, Len7,
-                        Len8, Len16, Len32, Len64, Len255, Len256};
+    size_t lengths[] = {Len0, Len1, Len2,  Len3,  Len4,  Len5,   Len6,
+                        Len7, Len8, Len16, Len32, Len64, Len255, Len256};
     size_t numLengths = sizeof(lengths) / sizeof(lengths[0]);
 
     for (size_t i = 0; i < numLengths; i++) {
@@ -1727,8 +1729,13 @@ static void testBase32DecodeCorruptPadFourChar(void) {
      * Valid last char is a multiple of 16 (pad=0000).
      * "AAAA" encodes 2 zero bytes (pad=0000, dataBit=0) → valid.
      * Alter the last char so the low 4 bits are non-zero. */
-    enum { FourChars = 4, PadMask4 = 0x0F, Buf4Len = FourChars + 1,
-           LastIdx4 = FourChars - 1, NulIdx4 = FourChars };
+    enum {
+        FourChars = 4,
+        PadMask4 = 0x0F,
+        Buf4Len = FourChars + 1,
+        LastIdx4 = FourChars - 1,
+        NulIdx4 = FourChars
+    };
     uint8_t *data = NULL;
     size_t dataLen = 0;
 
@@ -1768,8 +1775,13 @@ static void testBase32DecodeCorruptPadSevenChar(void) {
     /* 7 chars = 35 bits, 4 bytes + 3 pad bits.
      * "AAAAAAA" encodes 4 zero bytes (pad=000) → valid.
      * Alter the last char so the low 3 bits are non-zero. */
-    enum { SevenChars = 7, PadMask7 = 0x07, Buf7Len = SevenChars + 1,
-           LastIdx7 = SevenChars - 1, NulIdx7 = SevenChars };
+    enum {
+        SevenChars = 7,
+        PadMask7 = 0x07,
+        Buf7Len = SevenChars + 1,
+        LastIdx7 = SevenChars - 1,
+        NulIdx7 = SevenChars
+    };
     uint8_t *data = NULL;
     size_t dataLen = 0;
 
@@ -1814,7 +1826,7 @@ static void testBase32DecodeInvalidCharLastPosition(void) {
     ASSERT_INT_EQ(base32Decode("AAA@", &data, &dataLen), CRYPTO_FAIL);
 }
 
-/* ═══════════════════════  13. TOTP (RFC 6238)  ══════════════════════════ */
+/* ══════════════════════════ 13. TOTP (RFC 6238) ═══════════════════════════ */
 
 enum {
     TotpStepSec = 30,
@@ -1841,10 +1853,9 @@ enum {
 };
 
 /** @brief RFC 6238 test secret: "12345678901234567890" (20 ASCII bytes). */
-static const uint8_t totpTestRawSecret[] = {
-    '1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
-    '1', '2', '3', '4', '5', '6', '7', '8', '9', '0'
-};
+static const uint8_t totpTestRawSecret[] = {'1', '2', '3', '4', '5', '6', '7',
+                                            '8', '9', '0', '1', '2', '3', '4',
+                                            '5', '6', '7', '8', '9', '0'};
 
 /**
  * @brief Compute a TOTP code for a specific time step.
@@ -1949,8 +1960,8 @@ static void testTOTPVerifyCorrectCode(void) {
         CRYPTO_SUCC);
 
     int64_t timeStep = getCurrentTimestamp() / TotpStepSec;
-    int expectedCode = computeTOTPCode(timeStep, totpTestRawSecret,
-                                       sizeof(totpTestRawSecret));
+    int expectedCode =
+        computeTOTPCode(timeStep, totpTestRawSecret, sizeof(totpTestRawSecret));
     ASSERT_INT_EQ(verifyTOTPCode(secret, &expectedCode), CRYPTO_SUCC);
     free(secret);
 }
@@ -1973,8 +1984,8 @@ static void testTOTPVerifyAdjacentWindow(void) {
         CRYPTO_SUCC);
 
     int64_t nextStep = (getCurrentTimestamp() / TotpStepSec) + 1;
-    int nextCode = computeTOTPCode(nextStep, totpTestRawSecret,
-                                   sizeof(totpTestRawSecret));
+    int nextCode =
+        computeTOTPCode(nextStep, totpTestRawSecret, sizeof(totpTestRawSecret));
     ASSERT_INT_EQ(verifyTOTPCode(secret, &nextCode), CRYPTO_SUCC);
     free(secret);
 }
@@ -2009,16 +2020,12 @@ static void testGenerateTOTPCodeShortKey(void) {
 }
 
 /** @brief Raw 15-byte test secret (one below TOTP_MIN_KEY_LEN). */
-static const uint8_t totpRawKey15[] = {
-    '1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
-    '1', '2', '3', '4', '5'
-};
+static const uint8_t totpRawKey15[] = {'1', '2', '3', '4', '5', '6', '7', '8',
+                                       '9', '0', '1', '2', '3', '4', '5'};
 
 /** @brief Raw 16-byte test secret (exactly TOTP_MIN_KEY_LEN). */
-static const uint8_t totpRawKey16[] = {
-    '1', '2', '3', '4', '5', '6', '7', '8', '9', '0',
-    '1', '2', '3', '4', '5', '6'
-};
+static const uint8_t totpRawKey16[] = {'1', '2', '3', '4', '5', '6', '7', '8',
+                                       '9', '0', '1', '2', '3', '4', '5', '6'};
 
 static void testTOTPVerifyPreviousWindow(void) {
     char *secret = NULL;
@@ -2027,17 +2034,16 @@ static void testTOTPVerifyPreviousWindow(void) {
         CRYPTO_SUCC);
 
     int64_t prevStep = (getCurrentTimestamp() / TotpStepSec) - 1;
-    int prevCode = computeTOTPCode(prevStep, totpTestRawSecret,
-                                   sizeof(totpTestRawSecret));
+    int prevCode =
+        computeTOTPCode(prevStep, totpTestRawSecret, sizeof(totpTestRawSecret));
     ASSERT_INT_EQ(verifyTOTPCode(secret, &prevCode), CRYPTO_SUCC);
     free(secret);
 }
 
 static void testTOTPVerifyKeyLenFifteen(void) {
     char *secret = NULL;
-    ASSERT_INT_EQ(
-        base32Encode(totpRawKey15, sizeof(totpRawKey15), &secret),
-        CRYPTO_SUCC);
+    ASSERT_INT_EQ(base32Encode(totpRawKey15, sizeof(totpRawKey15), &secret),
+                  CRYPTO_SUCC);
 
     int code = TotpTestWrongCode;
     ASSERT_INT_EQ(verifyTOTPCode(secret, &code), CRYPTO_FAIL);
@@ -2046,13 +2052,12 @@ static void testTOTPVerifyKeyLenFifteen(void) {
 
 static void testTOTPVerifyKeyLenSixteen(void) {
     char *secret = NULL;
-    ASSERT_INT_EQ(
-        base32Encode(totpRawKey16, sizeof(totpRawKey16), &secret),
-        CRYPTO_SUCC);
+    ASSERT_INT_EQ(base32Encode(totpRawKey16, sizeof(totpRawKey16), &secret),
+                  CRYPTO_SUCC);
 
     int64_t timeStep = getCurrentTimestamp() / TotpStepSec;
-    int expectedCode = computeTOTPCode(timeStep, totpRawKey16,
-                                       sizeof(totpRawKey16));
+    int expectedCode =
+        computeTOTPCode(timeStep, totpRawKey16, sizeof(totpRawKey16));
     ASSERT_INT_EQ(verifyTOTPCode(secret, &expectedCode), CRYPTO_SUCC);
     free(secret);
 }
@@ -2073,8 +2078,8 @@ static void testTOTPVerifyCodeBoundaryMax(void) {
         CRYPTO_SUCC);
 
     int64_t timeStep = getCurrentTimestamp() / TotpStepSec;
-    int expectedCode = computeTOTPCode(timeStep, totpTestRawSecret,
-                                       sizeof(totpTestRawSecret));
+    int expectedCode =
+        computeTOTPCode(timeStep, totpTestRawSecret, sizeof(totpTestRawSecret));
     /* The expected code is necessarily in [0, TotpCodeRange-1]
      * by the modulo operation.  Test that it verifies. */
     ASSERT_TRUE(expectedCode >= 0 && expectedCode < TotpCodeRange);
@@ -2095,9 +2100,8 @@ static void testTOTPVerifyCodeNegative(void) {
 
 static void testGenerateTOTPCodeKeyLenBoundary(void) {
     char *secret = NULL;
-    ASSERT_INT_EQ(
-        base32Encode(totpRawKey16, sizeof(totpRawKey16), &secret),
-        CRYPTO_SUCC);
+    ASSERT_INT_EQ(base32Encode(totpRawKey16, sizeof(totpRawKey16), &secret),
+                  CRYPTO_SUCC);
 
     int code = generateTOTPCode(secret);
     ASSERT_TRUE(code >= 0 && code < TotpCodeRange);
@@ -2105,12 +2109,9 @@ static void testGenerateTOTPCodeKeyLenBoundary(void) {
     free(secret);
 }
 
-/* ═══════════════════════  14. TOTP Key URI  ════════════════════════════ */
+/* ════════════════════════════ 14. TOTP Key URI ════════════════════════════ */
 
-enum {
-    TOTPURITestCode = 123456,
-    TOTPURIBufSmall = 256
-};
+enum { TOTPURITestCode = 123456, TOTPURIBufSmall = 256 };
 
 /** @brief Known Base32 secret for URI tests. */
 static const char totpURITestSecret[] = "JBSWY3DPEHPK3PXP";
@@ -2141,8 +2142,7 @@ static void testTOTPGenerateEmptySecret(void) {
 
 static void testTOTPGenerateEmptyUsername(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "", &uri),
-                  CRYPTO_FAIL);
+    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "", &uri), CRYPTO_FAIL);
     ASSERT_TRUE(uri == NULL);
 }
 
@@ -2177,9 +2177,8 @@ static void testTOTPGenerateURISchemePrefix(void) {
 
 static void testTOTPGenerateURLEncodeSpecialChars(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(
-        generateOTPAuthURI(totpURITestSecret, "alice@test", &uri),
-        CRYPTO_SUCC);
+    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "alice@test", &uri),
+                  CRYPTO_SUCC);
     ASSERT_TRUE(uri != NULL);
 
     /* '@' must be percent-encoded as %40 in the user portion of the label */
@@ -2198,23 +2197,20 @@ static void testTOTPGenerateInvalidSecretChars(void) {
 
 static void testTOTPGenerateInvalidSecretAmpersand(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(generateOTPAuthURI("MZX&W6YTB", "alice", &uri),
-                  CRYPTO_FAIL);
+    ASSERT_INT_EQ(generateOTPAuthURI("MZX&W6YTB", "alice", &uri), CRYPTO_FAIL);
     ASSERT_TRUE(uri == NULL);
 }
 
 static void testTOTPGenerateInvalidSecretQuestion(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(generateOTPAuthURI("MZXW6?YTB", "alice", &uri),
-                  CRYPTO_FAIL);
+    ASSERT_INT_EQ(generateOTPAuthURI("MZXW6?YTB", "alice", &uri), CRYPTO_FAIL);
     ASSERT_TRUE(uri == NULL);
 }
 
 static void testTOTPGenerateURLEncodeSpace(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(
-        generateOTPAuthURI(totpURITestSecret, "al ice", &uri),
-        CRYPTO_SUCC);
+    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "al ice", &uri),
+                  CRYPTO_SUCC);
     ASSERT_TRUE(uri != NULL);
 
     /* Label portion after totp/ must have space encoded as %20 */
@@ -2227,9 +2223,8 @@ static void testTOTPGenerateURLEncodeSpace(void) {
 
 static void testTOTPGenerateURLEncodeColon(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(
-        generateOTPAuthURI(totpURITestSecret, "al:ice", &uri),
-        CRYPTO_SUCC);
+    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "al:ice", &uri),
+                  CRYPTO_SUCC);
     ASSERT_TRUE(uri != NULL);
 
     /* Colon in username must be %3A to avoid breaking the label separator */
@@ -2240,9 +2235,8 @@ static void testTOTPGenerateURLEncodeColon(void) {
 
 static void testTOTPGenerateURLEncodeMultipleReserved(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(
-        generateOTPAuthURI(totpURITestSecret, "a@b:c d", &uri),
-        CRYPTO_SUCC);
+    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "a@b:c d", &uri),
+                  CRYPTO_SUCC);
     ASSERT_TRUE(uri != NULL);
 
     /* '@' → %40, ':' → %3A, ' ' → %20 */
@@ -2251,7 +2245,218 @@ static void testTOTPGenerateURLEncodeMultipleReserved(void) {
     free(uri);
 }
 
-/* ═══════════════════════  main  ════════════════════════════════════════ */
+/* ═══════════════ 15. Password Hashing (hashPassword / verifyPassword) ══════ */
+
+enum {
+    HashTestPwLen = 16,
+    HashResultLen = HASH_SALT_LEN * 2 + 1 + HASH_SHA256_LEN * 2 + 1,
+    HashPwShortLen = 3
+};
+
+/** @brief hashPassword with NULL returns NULL. */
+static void testHashPasswordNull(void) {
+    ASSERT_TRUE(hashPassword(NULL) == NULL);
+}
+
+/** @brief hashPassword with empty string returns NULL. */
+static void testHashPasswordEmpty(void) {
+    ASSERT_TRUE(hashPassword("") == NULL);
+}
+
+/** @brief hashPassword basic success — produces correctly formatted string. */
+static void testHashPasswordBasic(void) {
+    char *hash = hashPassword("mySecurePassword123");
+    ASSERT_TRUE(hash != NULL);
+
+    /* Must contain exactly one ':' separator */
+    char *colon = strchr(hash, ':');
+    ASSERT_TRUE(colon != NULL);
+    ASSERT_TRUE(strchr(colon + 1, ':') == NULL);
+
+    /* Format: 32 hex salt : 64 hex hash */
+    ASSERT_UINT_EQ(strlen(hash), (size_t)HashResultLen - 1);
+
+    free(hash);
+}
+
+/** @brief hashPassword generates different salts each call. */
+static void testHashPasswordNonDeterministic(void) {
+    char *h1 = hashPassword("samepassword");
+    char *h2 = hashPassword("samepassword");
+    ASSERT_TRUE(h1 != NULL);
+    ASSERT_TRUE(h2 != NULL);
+
+    /* Two calls with the same password must produce different hashes. */
+    ASSERT_TRUE(strcmp(h1, h2) != 0);
+
+    free(h1);
+    free(h2);
+}
+
+/** @brief verifyPassword with NULL password returns CRYPTO_FAIL. */
+static void testVerifyPasswordNullPassword(void) {
+    ASSERT_INT_EQ(verifyPassword(NULL, "aaaa:bbbb"), CRYPTO_FAIL);
+}
+
+/** @brief verifyPassword with NULL storedHash returns CRYPTO_FAIL. */
+static void testVerifyPasswordNullHash(void) {
+    ASSERT_INT_EQ(verifyPassword("password", NULL), CRYPTO_FAIL);
+}
+
+/** @brief verifyPassword with empty password returns CRYPTO_FAIL. */
+static void testVerifyPasswordEmptyPassword(void) {
+    ASSERT_INT_EQ(verifyPassword("", "aaaa:bbbb"), CRYPTO_FAIL);
+}
+
+/** @brief verifyPassword basic success: hash then verify. */
+static void testVerifyPasswordCorrect(void) {
+    const char *pw = "testPassword123!";
+    char *hash = hashPassword(pw);
+    ASSERT_TRUE(hash != NULL);
+
+    ASSERT_INT_EQ(verifyPassword(pw, hash), CRYPTO_SUCC);
+
+    free(hash);
+}
+
+/** @brief verifyPassword with wrong password fails. */
+static void testVerifyPasswordWrongPassword(void) {
+    const char *pw = "correctPassword";
+    char *hash = hashPassword(pw);
+    ASSERT_TRUE(hash != NULL);
+
+    ASSERT_INT_EQ(verifyPassword("wrongPassword", hash), CRYPTO_FAIL);
+    /* Verify original still works */
+    ASSERT_INT_EQ(verifyPassword(pw, hash), CRYPTO_SUCC);
+
+    free(hash);
+}
+
+/** @brief verifyPassword: case sensitivity test. */
+static void testVerifyPasswordCaseSensitive(void) {
+    char *hash = hashPassword("Secret123");
+    ASSERT_TRUE(hash != NULL);
+
+    ASSERT_INT_EQ(verifyPassword("secret123", hash), CRYPTO_FAIL);
+    ASSERT_INT_EQ(verifyPassword("SECRET123", hash), CRYPTO_FAIL);
+    ASSERT_INT_EQ(verifyPassword("Secret123", hash), CRYPTO_SUCC);
+
+    free(hash);
+}
+
+/** @brief verifyPassword: one-bit difference in password fails. */
+static void testVerifyPasswordOneBitDiff(void) {
+    char *hash = hashPassword("Password1");
+    ASSERT_TRUE(hash != NULL);
+
+    ASSERT_INT_EQ(verifyPassword("Password2", hash), CRYPTO_FAIL);
+    /* Trailing space */
+    ASSERT_INT_EQ(verifyPassword("Password1 ", hash), CRYPTO_FAIL);
+    /* Leading space */
+    ASSERT_INT_EQ(verifyPassword(" Password1", hash), CRYPTO_FAIL);
+
+    free(hash);
+}
+
+/** @brief verifyPassword with corrupt hash (missing colon) fails. */
+static void testVerifyPasswordNoColon(void) {
+    ASSERT_INT_EQ(
+        verifyPassword("pw", "0123456789abcdef0123456789abcdef"
+                             "0123456789abcdef0123456789abcdef"
+                             "0123456789abcdef0123456789abcdef"),
+        CRYPTO_FAIL);
+}
+
+/** @brief verifyPassword with truncated hash (short) fails. */
+static void testVerifyPasswordTruncatedHash(void) {
+    ASSERT_INT_EQ(verifyPassword("pw", "ab:cd"), CRYPTO_FAIL);
+}
+
+/** @brief verifyPassword with corrupt salt (non-hex chars) fails. */
+static void testVerifyPasswordCorruptSalt(void) {
+    enum { SaltHexLen = HASH_SALT_LEN * 2, HashHexLen = HASH_SHA256_LEN * 2 };
+    /* 64 hex chars + ':' + 64 hex chars, but salt portion has 'g' */
+    char corrupt[HashResultLen];
+    memset(corrupt, 'a', (size_t)SaltHexLen);
+    corrupt[SaltHexLen] = ':';
+    /* Put 'g' as first char of salt to make it invalid hex */
+    corrupt[0] = 'g';
+    memset(corrupt + SaltHexLen + 1, 'b', (size_t)HashHexLen);
+    corrupt[HashResultLen - 1] = '\0';
+
+    ASSERT_INT_EQ(verifyPassword("pw", corrupt), CRYPTO_FAIL);
+}
+
+/** @brief verifyPassword with corrupt hash (non-hex chars) fails. */
+static void testVerifyPasswordCorruptHash(void) {
+    enum { SaltHexLen = HASH_SALT_LEN * 2, HashHexLen = HASH_SHA256_LEN * 2 };
+    char corrupt[HashResultLen];
+    memset(corrupt, 'a', (size_t)SaltHexLen);
+    corrupt[SaltHexLen] = ':';
+    memset(corrupt + SaltHexLen + 1, 'b', (size_t)HashHexLen);
+    /* Put 'g' in the hash portion */
+    corrupt[SaltHexLen + 1] = 'g';
+    corrupt[HashResultLen - 1] = '\0';
+
+    ASSERT_INT_EQ(verifyPassword("pw", corrupt), CRYPTO_FAIL);
+}
+
+/** @brief verifyPassword with extra text after valid hash fails. */
+static void testVerifyPasswordExtraText(void) {
+    enum { ExtraBufSlack = 10 };
+    const char *pw = "mypw";
+    char *hash = hashPassword(pw);
+    ASSERT_TRUE(hash != NULL);
+
+    /* Append garbage after the valid hash */
+    char corrupt[HashResultLen + ExtraBufSlack];
+    snprintf(corrupt, sizeof(corrupt), "%sEXTRA", hash);
+    ASSERT_INT_EQ(verifyPassword(pw, corrupt), CRYPTO_FAIL);
+
+    free(hash);
+}
+
+/** @brief Two users with same password get different hashes, both verify. */
+static void testPasswordHashSamePasswordDifferentHashes(void) {
+    char *h1 = hashPassword("sharedPassword");
+    char *h2 = hashPassword("sharedPassword");
+    ASSERT_TRUE(h1 != NULL);
+    ASSERT_TRUE(h2 != NULL);
+    ASSERT_TRUE(strcmp(h1, h2) != 0);
+
+    ASSERT_INT_EQ(verifyPassword("sharedPassword", h1), CRYPTO_SUCC);
+    ASSERT_INT_EQ(verifyPassword("sharedPassword", h2), CRYPTO_SUCC);
+
+    /* h1 cannot be verified with wrong password */
+    ASSERT_INT_EQ(verifyPassword("different", h1), CRYPTO_FAIL);
+
+    free(h1);
+    free(h2);
+}
+
+/** @brief hashPassword with 1-char password works. */
+static void testHashPasswordOneChar(void) {
+    char *hash = hashPassword("x");
+    ASSERT_TRUE(hash != NULL);
+    ASSERT_INT_EQ(verifyPassword("x", hash), CRYPTO_SUCC);
+    ASSERT_INT_EQ(verifyPassword("y", hash), CRYPTO_FAIL);
+    free(hash);
+}
+
+/** @brief hashPassword with long password works. */
+static void testHashPasswordLong(void) {
+    enum { LongLen = 512 };
+    char longPw[LongLen + 1];
+    memset(longPw, 'P', LongLen);
+    longPw[LongLen] = '\0';
+
+    char *hash = hashPassword(longPw);
+    ASSERT_TRUE(hash != NULL);
+    ASSERT_INT_EQ(verifyPassword(longPw, hash), CRYPTO_SUCC);
+    free(hash);
+}
+
+/* ══════════════════════════════════ main ══════════════════════════════════ */
 
 /**
  * @brief Entry point for the crypto test suite.
@@ -2415,6 +2620,27 @@ int main(void) {
     RUN_TEST(testTOTPGenerateURLEncodeSpace);
     RUN_TEST(testTOTPGenerateURLEncodeColon);
     RUN_TEST(testTOTPGenerateURLEncodeMultipleReserved);
+
+    /* 15. Password Hashing (hashPassword / verifyPassword) */
+    RUN_TEST(testHashPasswordNull);
+    RUN_TEST(testHashPasswordEmpty);
+    RUN_TEST(testHashPasswordBasic);
+    RUN_TEST(testHashPasswordNonDeterministic);
+    RUN_TEST(testVerifyPasswordNullPassword);
+    RUN_TEST(testVerifyPasswordNullHash);
+    RUN_TEST(testVerifyPasswordEmptyPassword);
+    RUN_TEST(testVerifyPasswordCorrect);
+    RUN_TEST(testVerifyPasswordWrongPassword);
+    RUN_TEST(testVerifyPasswordCaseSensitive);
+    RUN_TEST(testVerifyPasswordOneBitDiff);
+    RUN_TEST(testVerifyPasswordNoColon);
+    RUN_TEST(testVerifyPasswordTruncatedHash);
+    RUN_TEST(testVerifyPasswordCorruptSalt);
+    RUN_TEST(testVerifyPasswordCorruptHash);
+    RUN_TEST(testVerifyPasswordExtraText);
+    RUN_TEST(testPasswordHashSamePasswordDifferentHashes);
+    RUN_TEST(testHashPasswordOneChar);
+    RUN_TEST(testHashPasswordLong);
 
     return TEST_REPORT();
 }

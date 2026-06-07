@@ -30,7 +30,7 @@
 #include <string.h>
 #include <unistd.h>
 
-/* ───────────────────────── internal constants ──────────────────────────── */
+/* ─────────────────────────── internal constants ─────────────────────────── */
 
 /** @brief Size of the AAD used for AES-GCM packet encryption. */
 #define AAD_LEN (sizeof(uint64_t))
@@ -38,7 +38,7 @@
 /** @brief Number of bits to shift payloadLength when building the AAD. */
 #define AAD_PAYLOAD_SHIFT 32
 
-/* ──────────────────── AAD helper ───────────────────────────────────────── */
+/* ─────────────────────────────── AAD helper ─────────────────────────────── */
 
 /**
  * @brief Build the AAD value for AES-GCM packet encryption.
@@ -55,7 +55,7 @@ static uint64_t buildAAD(uint32_t payloadLength, uint32_t sequenceID) {
            (uint64_t)sequenceID;
 }
 
-/* ─────────────────── socket helpers ────────────────────────────────────── */
+/* ───────────────────────────── socket helpers ───────────────────────────── */
 
 /**
  * @brief Open a TCP socket.
@@ -136,7 +136,7 @@ static int recvAll(SocketFD socketFD, void *data, size_t totalLen) {
     return PROTOCOL_SUCC;
 }
 
-/* ────────────────────── public API: sockets ─────────────────────────────── */
+/* ────────────────────────── public API: sockets ─────────────────────────── */
 
 SocketFD serverSetup(uint16_t port) {
     struct sockaddr_in sockAddr;
@@ -229,7 +229,7 @@ void socketClose(SocketFD *socketFD) {
     *socketFD = NULL_SOCKETFD;
 }
 
-/* ──────────────────── public API: packet lifecycle ──────────────────────── */
+/* ────────────────────── public API: packet lifecycle ────────────────────── */
 
 /* payloadLength sits between MessageType/PacketType (enums) and
  * seqID/dataLen (unsigned integers); even with reordering, the remaining
@@ -284,7 +284,7 @@ void packetClear(Packet *packet) {
     packet->payload = NULL;
 }
 
-/* ──────────────── public API: serialize / deserialize ───────────────────── */
+/* ────────────────── public API: serialize / deserialize ─────────────────── */
 
 int packetSerialize(const Packet *packet, uint8_t *buffer, size_t bufferSize,
                     size_t *serializedSize) {
@@ -374,7 +374,7 @@ int packetDeserialize(const uint8_t *buffer, size_t bufferSize,
     return PROTOCOL_SUCC;
 }
 
-/* ──────────────── public API: AES-256-GCM encrypt / decrypt ────────────── */
+/* ─────────────── public API: AES-256-GCM encrypt / decrypt ──────────────── */
 
 int packetAESEncrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
     if (packet == NULL || key == NULL) {
@@ -393,7 +393,8 @@ int packetAESEncrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
     }
 
     if (packet->header.payloadLength > 0 && packet->payload == NULL) {
-        LOG_ERROR("Cannot encrypt: payload is NULL with positive payloadLength");
+        LOG_ERROR(
+            "Cannot encrypt: payload is NULL with positive payloadLength");
         return PROTOCOL_FAIL;
     }
 
@@ -414,10 +415,11 @@ int packetAESEncrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
 
     /* 3. Prepare plaintext buffer (references existing payload, no copy). */
     static const uint8_t emptyPayload;
-    AESGCMBuffer plaintext = {
-        .data = (packet->payload != NULL) ? (uint8_t *)packet->payload
+    AESGCMBuffer plaintext = {.data = (packet->payload != NULL)
+                                          ? (uint8_t *)packet->payload
                                           : (uint8_t *)&emptyPayload,
-        .capacity = plaintextLen, .len = plaintextLen};
+                              .capacity = plaintextLen,
+                              .len = plaintextLen};
 
     /* 4. Allocate ciphertext output buffer. */
     AESGCMCipher cipher;
@@ -554,7 +556,7 @@ int packetAESDecrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
     return PROTOCOL_SUCC;
 }
 
-/* ──────────────────── public API: send / recv ──────────────────────────── */
+/* ──────────────────────── public API: send / recv ───────────────────────── */
 
 int packetSend(Packet *packet, SocketFD socketFD) {
     if (packet == NULL || packet->payload == NULL) {
@@ -622,6 +624,60 @@ int packetRecv(Packet *dest, SocketFD socketFD) {
         free(dest->payload);
         dest->payload = NULL;
         return PROTOCOL_FAIL;
+    }
+
+    return PROTOCOL_SUCC;
+}
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+int packetSendEncrypted(SocketFD fd, MessageType mt, uint32_t *seqID,
+                        uint8_t key[AES_GCM_KEY_LEN], const void *data,
+                        size_t dataLen) {
+    if (seqID == NULL || key == NULL) {
+        return PROTOCOL_FAIL;
+    }
+
+    Packet pkt;
+    memset(&pkt, 0, sizeof(pkt));
+
+    if (packetInit(&pkt, mt, *seqID, PlaintextPacket, data, dataLen) !=
+        PROTOCOL_SUCC) {
+        return PROTOCOL_FAIL;
+    }
+
+    if (packetAESEncrypt(&pkt, key) != PROTOCOL_SUCC) {
+        packetClear(&pkt);
+        return PROTOCOL_FAIL;
+    }
+
+    (*seqID)++;
+
+    int ret = packetSend(&pkt, fd);
+    packetClear(&pkt);
+    return ret;
+}
+
+int packetRecvEncrypted(SocketFD fd, Packet *out,
+                        uint8_t key[AES_GCM_KEY_LEN]) {
+    if (out == NULL || key == NULL) {
+        return PROTOCOL_FAIL;
+    }
+
+    if (packetRecv(out, fd) != PROTOCOL_SUCC) {
+        return PROTOCOL_FAIL;
+    }
+
+    if (out->header.packetType != AES256GCMPacket) {
+        LOG_WARN("packetRecvEncrypted: received non-encrypted packet (type=%d)",
+                 (int)out->header.packetType);
+        packetClear(out);
+        return PROTOCOL_FAIL;
+    }
+
+    int ret = packetAESDecrypt(out, key);
+    if (ret != PROTOCOL_SUCC) {
+        packetClear(out);
+        return ret;
     }
 
     return PROTOCOL_SUCC;

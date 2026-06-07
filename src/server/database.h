@@ -1,10 +1,11 @@
 /**
  * @file database.h
- * @brief Database abstraction layer for PacPlay server (SQLite3).
+ * @brief Database abstraction layer for PacPlay server (SQLite3/SQLCipher).
  *
- * Provides initialization, teardown, and CRUD operations for the user
- * database and chat history database. Each database is stored as a
- * separate SQLite3 file under the "db/" directory.
+ * Provides initialization, teardown, and CRUD operations for user,
+ * chat history, game (room), and server key-value databases. Each
+ * database is stored as a separate encrypted SQLCipher file under the
+ * "db/" directory.
  *
  * @date 2026-05-24
  * @copyright GPLv3 License
@@ -36,7 +37,7 @@
 
 #include "server.h"
 
-/* ──────────────────────── constants ────────────────────────────────────── */
+/* ─────────────────────────────── constants ──────────────────────────────── */
 
 /** @brief File path for the user database. */
 #define USER_DB_PATH "./db/user.db"
@@ -53,17 +54,17 @@
 /** @brief Directory containing all database files. */
 #define DB_DIRECTORY "./db"
 
-/* ──────────────────────── return codes ─────────────────────────────────── */
+/* ────────────────────────────── return codes ────────────────────────────── */
 
 #define DB_SUCC (0)
 #define DB_FAIL (-1)
 
-/* ──────────────────────── types ────────────────────────────────────────── */
+/* ───────────────────────────────── types ────────────────────────────────── */
 
 /** @brief Identifies which database to open. */
 typedef enum { UserDB = 1, ChatHistoryDB, GameDB, ServerDB } DBType;
 
-/* ──────────────────────── room statement cache ────────────────────────── */
+/* ────────────────────────── room statement cache ────────────────────────── */
 
 /** @brief Number of hash buckets for the room statement cache. */
 #define ROOM_STMT_BUCKETS 32
@@ -94,7 +95,7 @@ typedef struct {
     RoomStmtEntry *buckets[ROOM_STMT_BUCKETS];
 } RoomStmtCache;
 
-/* ──────────────────────── database handle ─────────────────────────────── */
+/* ──────────────────────────── database handle ───────────────────────────── */
 
 /**
  * @brief Database handle wrapping sqlite3 and cached prepared statements.
@@ -110,11 +111,14 @@ typedef struct DB {
     sqlite3_stmt *stmtInsert; /**< Cached INSERT statement (UserDB / GameDB). */
     sqlite3_stmt *stmtDelete; /**< Cached DELETE statement (UserDB / GameDB). */
     sqlite3_stmt *stmtSelect; /**< Cached SELECT statement (UserDB / GameDB). */
-    sqlite3_stmt *stmtRoomExists; /**< cached SELECT 1 FROM rooms WHERE roomId=? (GameDB). */
-    sqlite3_stmt *stmtUidCheck; /**< Cached SELECT 1 FROM users WHERE uid=? (UserDB). */
+    sqlite3_stmt *stmtRoomExists; /**< cached SELECT 1 FROM rooms WHERE roomId=?
+                                     (GameDB). */
+    sqlite3_stmt
+        *stmtUidCheck; /**< Cached SELECT 1 FROM users WHERE uid=? (UserDB). */
     sqlite3_stmt *stmtSetTotpSecret; /**< Cached UPDATE totp_secret (UserDB). */
     sqlite3_stmt *stmtGetTOTPSecret; /**< Cached SELECT totp_secret (UserDB). */
-    sqlite3_stmt *stmtGetCDBKey;   /**< Cached SELECT cdbkey WHERE uid=? (UserDB). */
+    sqlite3_stmt
+        *stmtGetCDBKey; /**< Cached SELECT cdbkey WHERE uid=? (UserDB). */
     /* ChatHistoryDB cached statements */
     sqlite3_stmt *stmtSeq; /**< Global msg sequence INSERT (ChatHistoryDB). */
     RoomStmtCache *roomCache; /**< Per-room statement cache (ChatHistoryDB). */
@@ -122,11 +126,12 @@ typedef struct DB {
     sqlite3_stmt *stmtSetKey; /**< Cached INSERT OR REPLACE (ServerDB). */
     sqlite3_stmt *stmtGetKey; /**< Cached SELECT key_value (ServerDB). */
     /* Key material held in memory for the lifetime of the handle */
-    uint8_t dekKey[AES_GCM_KEY_LEN]; /**< DEK for TOTP secret envelope encryption. */
+    uint8_t dekKey[AES_GCM_KEY_LEN];  /**< DEK for TOTP secret envelope
+                                         encryption. */
     uint8_t dbEncKey[DB_ENC_KEY_LEN]; /**< Per-database encryption key. */
 } DB;
 
-/* ──────────────────────── lifecycle ────────────────────────────────────── */
+/* ─────────────────────────────── lifecycle ──────────────────────────────── */
 
 /**
  * @brief Open (and optionally create) a database of the specified type.
@@ -189,7 +194,7 @@ void dbSetDekKey(DB *database, const uint8_t *dekKey);
  */
 void dbSetDbEncKey(DB *database, const uint8_t *key);
 
-/* ──────────────────────── user operations ──────────────────────────────── */
+/* ──────────────────────────── user operations ───────────────────────────── */
 
 /**
  * @brief Insert a new user record into the user database.
@@ -277,7 +282,7 @@ int setTOTPSecret(DB *database, User *user, const char *secret);
  */
 int getCDBKey(DB *database, uint32_t uid, uint8_t outKey[DB_ENC_KEY_LEN]);
 
-/* ──────────────────────── server key operations ────────────────────────── */
+/* ───────────────────────── server key operations ────────────────────────── */
 
 /**
  * @brief Store a key-value pair into the server database.
@@ -320,7 +325,7 @@ int setServerKey(DB *database, const char *keyName, const uint8_t *value,
 int getServerKey(DB *database, const char *keyName, uint8_t **outValue,
                  size_t *outLen);
 
-/* ──────────────────────── chat history operations ─────────────────────── */
+/* ──────────────────────── chat history operations ───────────────────────── */
 
 /**
  * @brief Store a chat message into a room's table.
@@ -353,8 +358,7 @@ int storeChat(DB *database, uint32_t roomId, Chat *chat);
  * @param out       Output structure. Must not be NULL.
  * @return @c DB_SUCC on success, @c DB_FAIL if not found or on error.
  */
-int queryChatByMsgId(DB *database, uint32_t roomId, uint64_t msgId,
-                     Chat *out);
+int queryChatByMsgId(DB *database, uint32_t roomId, uint64_t msgId, Chat *out);
 
 /**
  * @brief Query chat messages within a time range, optionally filtered by uid.
@@ -411,7 +415,7 @@ int queryChatByTimeRange(DB *database, uint32_t roomId, uint32_t uid,
 int queryChatByUserAllRooms(DB *database, uint32_t uid, time_t startTime,
                             time_t endTime, Chat **out, size_t *count);
 
-/* ──────────────────────── game (room) operations ─────────────────────── */
+/* ───────────────────────── game (room) operations ───────────────────────── */
 
 /**
  * @brief Create a new game room record.

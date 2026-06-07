@@ -43,7 +43,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ──────────── OpenSSL error-logging helper ──────────────────────────────── */
+/* ────────────────────── OpenSSL error-logging helper ────────────────────── */
 
 #define LOG_ERROR_SSL(msg)                                                     \
     do {                                                                       \
@@ -53,7 +53,7 @@
                   errCode);                                                    \
     } while (false)
 
-/* ──────────────────────── AESGCMBuffer helpers ─────────────────────────── */
+/* ────────────────────────── AESGCMBuffer helpers ────────────────────────── */
 
 int aesGCMBufferInit(AESGCMBuffer *buf, size_t capacity) {
     if (buf == NULL) {
@@ -78,7 +78,7 @@ void aesGCMBufferDeinit(AESGCMBuffer *buf) {
     buf->data = NULL;
 }
 
-/* ───────────────────── AES-256-GCM encrypt / decrypt ───────────────────── */
+/* ───────────────────── AES-256-GCM encrypt / decrypt ────────────────────── */
 
 int encryptAESGCM(const AESGCMBuffer *plaintext, const AESGCMBuffer *aad,
                   const AESGCMKey *key, AESGCMCipher *output) {
@@ -251,7 +251,7 @@ cleanup:
     return ret;
 }
 
-/* ───────────────────── ECDH (X25519) ───────────────────────────────────── */
+/* ───────────────────────────── ECDH (X25519) ────────────────────────────── */
 
 EVP_PKEY *genECDHKeypair(void) {
     EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new_id(EVP_PKEY_X25519, NULL);
@@ -381,7 +381,7 @@ cleanup:
     return ret;
 }
 
-/* ───────────────────── HKDF-SHA256 Key Derivation ──────────────────────── */
+/* ─────────────────────── HKDF-SHA256 Key Derivation ─────────────────────── */
 
 int deriveAESKey(const uint8_t *sharedSecret, size_t secretLen,
                  AESGCMKey *outKey) {
@@ -442,7 +442,7 @@ int deriveAESKey(const uint8_t *sharedSecret, size_t secretLen,
     return CRYPTO_SUCC;
 }
 
-/* ──────────────────────── Password Hashing ─────────────────────────────── */
+/* ──────────────────────────── Password Hashing ──────────────────────────── */
 
 /**
  * @brief Convert a byte array to a lowercase hex string.
@@ -458,25 +458,6 @@ static void bytesToHex(const uint8_t *bytes, size_t len, char *out) {
         out[i * 2 + 1] = hexDigits[bytes[i] & NibbleMask];
     }
     out[len * 2] = '\0';
-}
-
-/**
- * @brief Parse a single hex character to its nibble value.
- *
- * @return The 4-bit value (0-15), or -1 if the character is invalid hex.
- */
-static int hexCharToNibble(char c) {
-    enum { HexBaseValue = 10 };
-    if (c >= '0' && c <= '9') {
-        return c - '0';
-    }
-    if (c >= 'a' && c <= 'f') {
-        return c - 'a' + HexBaseValue;
-    }
-    if (c >= 'A' && c <= 'F') {
-        return c - 'A' + HexBaseValue;
-    }
-    return -1;
 }
 
 /**
@@ -669,7 +650,7 @@ int verifyPassword(const char *password, const char *storedHash) {
     return (match == 0) ? CRYPTO_SUCC : CRYPTO_FAIL;
 }
 
-/* ──────────────────────── Base32 (RFC 4648) ────────────────────────────── */
+/* ─────────────────────────── Base32 (RFC 4648) ──────────────────────────── */
 
 /** @brief RFC 4648 Base32 alphabet (uppercase A-Z + digits 2-7). */
 static const char base32Alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -742,8 +723,7 @@ int base32Encode(const uint8_t *data, size_t len, char **outStr) {
         bits += B32BitsPerByte;
         while (bits >= B32BitsPerChar) {
             bits -= B32BitsPerChar;
-            output[pos++] =
-                base32Alphabet[(acc >> bits) & B32CharMask];
+            output[pos++] = base32Alphabet[(acc >> bits) & B32CharMask];
         }
     }
 
@@ -830,7 +810,7 @@ int base32Decode(const char *encoded, uint8_t **outData, size_t *outLen) {
     return CRYPTO_SUCC;
 }
 
-/* ──────────────────────── TOTP (RFC 6238)  ──────────────────────────────── */
+/* ──────────────────────────── TOTP (RFC 6238) ───────────────────────────── */
 
 int verifyTOTPCode(const char *secret, int *code) {
     if (secret == NULL || code == NULL) {
@@ -847,8 +827,8 @@ int verifyTOTPCode(const char *secret, int *code) {
     }
 
     if (keyLen < TOTP_MIN_KEY_LEN) {
-        LOG_ERROR("verifyTOTPCode: decoded key too short (%zu < %d)",
-                  keyLen, TOTP_MIN_KEY_LEN);
+        LOG_ERROR("verifyTOTPCode: decoded key too short (%zu < %d)", keyLen,
+                  TOTP_MIN_KEY_LEN);
         OPENSSL_cleanse(key, keyLen);
         free(key);
         return CRYPTO_FAIL;
@@ -869,8 +849,8 @@ int verifyTOTPCode(const char *secret, int *code) {
     int64_t baseStep = (int64_t)(getCurrentTimestamp() / TOTP_STEP_SECONDS);
     int result = CRYPTO_FAIL;
 
-    for (int64_t step = baseStep - TOTP_WINDOW;
-         step <= baseStep + TOTP_WINDOW; step++) {
+    for (int64_t step = baseStep - TOTP_WINDOW; step <= baseStep + TOTP_WINDOW;
+         step++) {
         uint8_t counter[CounterSizeBytes];
         uint64_t c = (uint64_t)step;
         for (int i = CounterSizeBytes - 1; i >= 0; i--) {
@@ -1008,9 +988,8 @@ int generateOTPAuthURI(const char *secret, const char *username,
      * otpauth://totp/{issuer}:{user}?secret={secret}&issuer={issuer}
      *   &algorithm=SHA1&digits=6&period=30 */
     size_t uriLen = strlen("otpauth://totp/") + strlen(encIssuer) +
-                    (size_t)1 /* ':' */ + strlen(encUser) +
-                    strlen("?secret=") + strlen(secret) +
-                    strlen("&issuer=") + strlen(encIssuer) +
+                    (size_t)1 /* ':' */ + strlen(encUser) + strlen("?secret=") +
+                    strlen(secret) + strlen("&issuer=") + strlen(encIssuer) +
                     strlen("&algorithm=SHA1") + strlen("&digits=6") +
                     strlen("&period=30") + (size_t)1 /* '\0' */;
 
@@ -1034,7 +1013,7 @@ int generateOTPAuthURI(const char *secret, const char *username,
     return CRYPTO_SUCC;
 }
 
-/* ──────────────────────── utility ──────────────────────────────────────── */
+/* ──────────────────────────────── utility ───────────────────────────────── */
 
 int cryptoRandomBytes(uint8_t *buf, int len) {
     if (buf == NULL || len <= 0) {

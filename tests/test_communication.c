@@ -29,6 +29,10 @@
 #include "protocol.h"
 #include "test_utils.h"
 
+#include "client/client.h"
+#include "client/communication.h"
+#include "server/communication.h"
+
 #include <openssl/crypto.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,7 +50,7 @@ int clientExchangeAESKey(SocketFD socketFD, AESGCMKey *outKey);
 int serverExchangeAESKey(SocketFD clientFD, Packet *reqPacket,
                          AESGCMKey *outKey);
 
-/* ────────────── test-local constants ────────────────────────────────────── */
+/* ────────────────────────── test-local constants ────────────────────────── */
 
 /** Indices into a socketpair result array. */
 enum { SockA = 0, SockB = 1, SockLen = 2 };
@@ -66,7 +70,7 @@ enum { AesKeyLen = 32 };
 /** Test plaintext for encrypt/decrypt roundtrip. */
 static const char testMessage[] = "Key exchange verification payload.";
 
-/* ────────────── helpers ────────────────────────────────────────────────── */
+/* ──────────────────────────────── helpers ───────────────────────────────── */
 
 /**
  * @brief Create a connected pair of local sockets (socketpair).
@@ -124,14 +128,14 @@ static KeyExchangePacketPayload makeKeyPayload(uint8_t fillByte) {
     return p;
 }
 
-/* ═══════════════   A1. Constants  ═════════════════════════════════════════ */
+/* ═════════════════════════════ A1. Constants ══════════════════════════════ */
 
 static void testCommReturnCodes(void) {
     ASSERT_INT_EQ(CommSucc, 0);
     ASSERT_INT_EQ(CommFail, -1);
 }
 
-/* ═══════════════   A2. clientExchangeAESKey — error paths  ══════════════ */
+/* ═════════════════ A2. clientExchangeAESKey — error paths ═════════════════ */
 
 /** @brief NULL outKey is rejected immediately. */
 static void testClientExchangeNullOutKey(void) {
@@ -144,7 +148,7 @@ static void testClientExchangeInvalidSocket(void) {
     ASSERT_INT_EQ(clientExchangeAESKey(NULL_SOCKETFD, &key), CommFail);
 }
 
-/* ═══════════════   A3. serverExchangeAESKey — NULL / basic  ═════════════ */
+/* ════════════════ A3. serverExchangeAESKey — NULL / basic ═════════════════ */
 
 static void testServerNullReqPacket(void) {
     AESGCMKey key;
@@ -168,7 +172,7 @@ static void testServerNullPayload(void) {
     packetClear(&req);
 }
 
-/* ═══════════════   A4. serverExchangeAESKey — wrong messageType  ═════════ */
+/* ══════════════ A4. serverExchangeAESKey — wrong messageType ══════════════ */
 
 static void testServerMsgTypeLoginReq(void) {
     KeyExchangePacketPayload kp = makeKeyPayload(FillByteA);
@@ -215,7 +219,7 @@ static void testServerMsgTypeKeyExResp(void) {
     packetClear(&req);
 }
 
-/* ═══════════════   A5. serverExchangeAESKey — wrong packetType  ═════════ */
+/* ══════════════ A5. serverExchangeAESKey — wrong packetType ═══════════════ */
 
 static void testServerPktTypeAES256GCM(void) {
     KeyExchangePacketPayload kp = makeKeyPayload(FillByteA);
@@ -237,7 +241,7 @@ static void testServerPktTypeZero(void) {
     packetClear(&req);
 }
 
-/* ═══════════   A6. serverExchangeAESKey — wrong payloadLength  ═══════════ */
+/* ═════════════ A6. serverExchangeAESKey — wrong payloadLength ═════════════ */
 
 static void testServerPayloadLenZero(void) {
     Packet req = makeRawPacket(PACKET_MAGIC, MsgKeyExchangeReq, PlaintextPacket,
@@ -300,7 +304,7 @@ static void testServerPayloadLenMax(void) {
     free(buf);
 }
 
-/* ══════════════   B.  Roundtrip & invariants (fork-based)  ═══════════════ */
+/* ═════════════════ B. Roundtrip & invariants (fork-based) ═════════════════ */
 
 /**
  * @brief Fork a child that runs clientExchangeAESKey; the parent runs
@@ -332,7 +336,8 @@ static int doFullRoundtrip(AESGCMKey *clientKey, AESGCMKey *serverKey) {
     }
 
     if (pid == 0) {
-        /* ── child: client ──────────────────────────────────────────── */
+        /* ───────────────────────────── child: client
+         * ────────────────────────────── */
         close(pair[SockB]);
         close(keyPipe[0]);
 
@@ -352,7 +357,8 @@ static int doFullRoundtrip(AESGCMKey *clientKey, AESGCMKey *serverKey) {
         _exit((w == sizeof(cKey)) ? 0 : 2);
     }
 
-    /* ── parent: server ─────────────────────────────────────────────── */
+    /* ───────────────────────────── parent: server
+     * ───────────────────────────── */
     close(pair[SockA]);
     close(keyPipe[1]);
 
@@ -500,7 +506,7 @@ static void testDerivedKeyEncryptDecrypt(void) {
     OPENSSL_cleanse(&serverKey, sizeof(serverKey));
 }
 
-/* ═══════════════   B2. client-side rejection helpers (fork)  ═════════════ */
+/* ════════════════ B2. client-side rejection helpers (fork) ════════════════ */
 
 /**
  * @brief Fork a child running clientExchangeAESKey; the parent sends a
@@ -529,7 +535,8 @@ static int runClientWithFakeResp(MessageType respMsgType,
     }
 
     if (pid == 0) {
-        /* ── child: client ────────────────────────────────────────── */
+        /* ───────────────────────────── child: client
+         * ────────────────────────────── */
         close(pair[SockB]);
         AESGCMKey key;
         int ret = clientExchangeAESKey(pair[SockA], &key);
@@ -537,7 +544,8 @@ static int runClientWithFakeResp(MessageType respMsgType,
         _exit(ret == CommSucc ? 0 : 1);
     }
 
-    /* ── parent: fake server ─────────────────────────────────────────── */
+    /* ────────────────────────── parent: fake server
+     * ─────────────────────────── */
     close(pair[SockA]);
 
     /* Discard the child's MsgKeyExchangeReq. */
@@ -566,7 +574,7 @@ static int runClientWithFakeResp(MessageType respMsgType,
     return -1;
 }
 
-/* ────── client rejects wrong response messageType ──────────────────────── */
+/* ─────────────── client rejects wrong response messageType ──────────────── */
 
 static void testClientRejectsRespMsgTypeChat(void) {
     uint8_t dummyPub[Payload32];
@@ -592,7 +600,7 @@ static void testClientRejectsRespMsgTypeLoginReq(void) {
                   1);
 }
 
-/* ────── client rejects wrong response packetType ───────────────────────── */
+/* ──────────────── client rejects wrong response packetType ──────────────── */
 
 static void testClientRejectsRespPktTypeAES256(void) {
     uint8_t dummyPub[Payload32];
@@ -602,7 +610,7 @@ static void testClientRejectsRespPktTypeAES256(void) {
                   1);
 }
 
-/* ────── client rejects wrong response payloadLength ────────────────────── */
+/* ────────────── client rejects wrong response payloadLength ─────────────── */
 
 static void testClientRejectsRespPayloadLenZero(void) {
     ASSERT_INT_EQ(
@@ -642,7 +650,7 @@ static void testClientRejectsRespPayloadLenDouble(void) {
                   1);
 }
 
-/* ══════════════   B3.  Memory safety  ════════════════════════════════════ */
+/* ═══════════════════════════ B3. Memory safety ════════════════════════════ */
 
 /** @brief packetClear is idempotent — double-call must not crash. */
 static void testDoublePacketClearSafe(void) {
@@ -705,7 +713,231 @@ static void testDoublePacketClearAfterExchange(void) {
     ASSERT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
-/* ═══════════════   main  ══════════════════════════════════════════════════ */
+/* ═══════════════════ B4. clientRecvStatusResponse tests ═══════════════════ */
+
+/** @brief clientRecvStatusResponse with NULL client returns -1. */
+static void testClientRecvStatusNull(void) {
+    ASSERT_INT_EQ(clientRecvStatusResponse(NULL, MsgLoginResp), -1);
+}
+
+/** @brief clientRecvStatusResponse: server with no response (closed connection)
+ *  returns -1. */
+static void testClientRecvStatusClosedConnection(void) {
+    SocketFD pair[SockLen];
+    ASSERT_INT_EQ(makePair(pair), 0);
+
+    Client client;
+    memset(&client, 0, sizeof(client));
+    client.fd = pair[SockA];
+
+    /* Close server side immediately */
+    close(pair[SockB]);
+
+    ASSERT_INT_EQ(clientRecvStatusResponse(&client, MsgLoginResp), -1);
+
+    close(pair[SockA]);
+}
+
+/** @brief clientRecvStatusResponse: expected message type with status 0. */
+static void testClientRecvStatusSuccess(void) {
+    SocketFD pair[SockLen];
+    ASSERT_INT_EQ(makePair(pair), 0);
+
+    pid_t pid = fork();
+    ASSERT_TRUE(pid >= 0);
+
+    if (pid == 0) {
+        close(pair[SockB]);
+        AESGCMKey cKey;
+        int ret = clientExchangeAESKey(pair[SockA], &cKey);
+        if (ret != CommSucc) {
+            _exit(1);
+        }
+
+        Client client;
+        memset(&client, 0, sizeof(client));
+        client.fd = pair[SockA];
+        memcpy(client.aesKey.key, cKey.key, AES_GCM_KEY_LEN);
+        client.seqID = 1;
+
+        int status = clientRecvStatusResponse(&client, MsgLoginResp);
+        close(pair[SockA]);
+        _exit((status == 0) ? 0 : 1);
+    }
+
+    close(pair[SockA]);
+    Packet req;
+    memset(&req, 0, sizeof(req));
+    ASSERT_INT_EQ(packetRecv(&req, pair[SockB]), PROTOCOL_SUCC);
+    AESGCMKey sKey;
+    ASSERT_INT_EQ(serverExchangeAESKey(pair[SockB], &req, &sKey), CommSucc);
+    packetClear(&req);
+
+    /* Send status 0 */
+    uint32_t seq = 0;
+    uint8_t statusOk = 0;
+    ASSERT_INT_EQ(packetSendEncrypted(pair[SockB], MsgLoginResp, &seq,
+                                      sKey.key, &statusOk, sizeof(statusOk)),
+                  PROTOCOL_SUCC);
+
+    close(pair[SockB]);
+    OPENSSL_cleanse(&sKey, sizeof(sKey));
+
+    int status;
+    waitpid(pid, &status, 0);
+    ASSERT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
+/** @brief clientRecvStatusResponse: expected message type with status 1. */
+static void testClientRecvStatusFailure(void) {
+    SocketFD pair[SockLen];
+    ASSERT_INT_EQ(makePair(pair), 0);
+
+    pid_t pid = fork();
+    ASSERT_TRUE(pid >= 0);
+
+    if (pid == 0) {
+        close(pair[SockB]);
+        AESGCMKey cKey;
+        int ret = clientExchangeAESKey(pair[SockA], &cKey);
+        if (ret != CommSucc) {
+            _exit(1);
+        }
+
+        Client client;
+        memset(&client, 0, sizeof(client));
+        client.fd = pair[SockA];
+        memcpy(client.aesKey.key, cKey.key, AES_GCM_KEY_LEN);
+        client.seqID = 1;
+
+        int status = clientRecvStatusResponse(&client, MsgCreateRoomResp);
+        close(pair[SockA]);
+        _exit((status == 1) ? 0 : 1);
+    }
+
+    close(pair[SockA]);
+    Packet req;
+    memset(&req, 0, sizeof(req));
+    ASSERT_INT_EQ(packetRecv(&req, pair[SockB]), PROTOCOL_SUCC);
+    AESGCMKey sKey;
+    ASSERT_INT_EQ(serverExchangeAESKey(pair[SockB], &req, &sKey), CommSucc);
+    packetClear(&req);
+
+    uint32_t seq = 0;
+    uint8_t statusFail = 1;
+    ASSERT_INT_EQ(packetSendEncrypted(pair[SockB], MsgCreateRoomResp, &seq,
+                                      sKey.key, &statusFail, sizeof(statusFail)),
+                  PROTOCOL_SUCC);
+
+    close(pair[SockB]);
+    OPENSSL_cleanse(&sKey, sizeof(sKey));
+
+    int status;
+    waitpid(pid, &status, 0);
+    ASSERT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
+/** @brief clientRecvStatusResponse: wrong message type on wire returns -1. */
+static void testClientRecvStatusWrongMsgType(void) {
+    SocketFD pair[SockLen];
+    ASSERT_INT_EQ(makePair(pair), 0);
+
+    pid_t pid = fork();
+    ASSERT_TRUE(pid >= 0);
+
+    if (pid == 0) {
+        close(pair[SockB]);
+        AESGCMKey cKey;
+        int ret = clientExchangeAESKey(pair[SockA], &cKey);
+        if (ret != CommSucc) {
+            _exit(1);
+        }
+
+        Client client;
+        memset(&client, 0, sizeof(client));
+        client.fd = pair[SockA];
+        memcpy(client.aesKey.key, cKey.key, AES_GCM_KEY_LEN);
+        client.seqID = 1;
+
+        /* Expect MsgLoginResp but server sends MsgChat */
+        int status = clientRecvStatusResponse(&client, MsgLoginResp);
+        close(pair[SockA]);
+        _exit((status == -1) ? 0 : 1);
+    }
+
+    close(pair[SockA]);
+    Packet req;
+    memset(&req, 0, sizeof(req));
+    ASSERT_INT_EQ(packetRecv(&req, pair[SockB]), PROTOCOL_SUCC);
+    AESGCMKey sKey;
+    ASSERT_INT_EQ(serverExchangeAESKey(pair[SockB], &req, &sKey), CommSucc);
+    packetClear(&req);
+
+    /* Send MsgChat with a single byte (wrong type) */
+    uint32_t seq = 0;
+    uint8_t dummy = 0;
+    ASSERT_INT_EQ(packetSendEncrypted(pair[SockB], MsgChat, &seq, sKey.key,
+                                      &dummy, sizeof(dummy)),
+                  PROTOCOL_SUCC);
+
+    close(pair[SockB]);
+    OPENSSL_cleanse(&sKey, sizeof(sKey));
+
+    int status;
+    waitpid(pid, &status, 0);
+    ASSERT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
+/** @brief clientRecvStatusResponse: zero-payload response returns -1. */
+static void testClientRecvStatusZeroPayload(void) {
+    SocketFD pair[SockLen];
+    ASSERT_INT_EQ(makePair(pair), 0);
+
+    pid_t pid = fork();
+    ASSERT_TRUE(pid >= 0);
+
+    if (pid == 0) {
+        close(pair[SockB]);
+        AESGCMKey cKey;
+        int ret = clientExchangeAESKey(pair[SockA], &cKey);
+        if (ret != CommSucc) {
+            _exit(1);
+        }
+
+        Client client;
+        memset(&client, 0, sizeof(client));
+        client.fd = pair[SockA];
+        memcpy(client.aesKey.key, cKey.key, AES_GCM_KEY_LEN);
+        client.seqID = 1;
+
+        int status = clientRecvStatusResponse(&client, MsgLoginResp);
+        close(pair[SockA]);
+        _exit((status == -1) ? 0 : 1);
+    }
+
+    close(pair[SockA]);
+    Packet req;
+    memset(&req, 0, sizeof(req));
+    ASSERT_INT_EQ(packetRecv(&req, pair[SockB]), PROTOCOL_SUCC);
+    AESGCMKey sKey;
+    ASSERT_INT_EQ(serverExchangeAESKey(pair[SockB], &req, &sKey), CommSucc);
+    packetClear(&req);
+
+    /* Send MsgLoginResp with zero-length payload */
+    uint32_t seq = 0;
+    ASSERT_INT_EQ(packetSendEncrypted(pair[SockB], MsgLoginResp, &seq,
+                                      sKey.key, NULL, 0),
+                  PROTOCOL_SUCC);
+
+    close(pair[SockB]);
+    OPENSSL_cleanse(&sKey, sizeof(sKey));
+
+    int status;
+    waitpid(pid, &status, 0);
+    ASSERT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
+/* ══════════════════════════════════ main ══════════════════════════════════ */
 
 int main(void) {
     printf("test_communication:\n");
@@ -754,6 +986,14 @@ int main(void) {
 
     RUN_TEST(testDoublePacketClearSafe);
     RUN_TEST(testDoublePacketClearAfterExchange);
+
+    /* clientRecvStatusResponse edge cases */
+    RUN_TEST(testClientRecvStatusNull);
+    RUN_TEST(testClientRecvStatusClosedConnection);
+    RUN_TEST(testClientRecvStatusSuccess);
+    RUN_TEST(testClientRecvStatusFailure);
+    RUN_TEST(testClientRecvStatusWrongMsgType);
+    RUN_TEST(testClientRecvStatusZeroPayload);
 
     return TEST_REPORT();
 }

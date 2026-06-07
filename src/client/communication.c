@@ -25,16 +25,18 @@
 #include "communication.h"
 #include "log.h"
 
+#include "client.h"
+
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <string.h>
 
-/* ─────────────────── public API ─────────────────────────────────────────── */
+/* ─────────────────────────────── public API ─────────────────────────────── */
 
 int clientExchangeAESKey(SocketFD socketFD, AESGCMKey *outKey) {
     if (outKey == NULL) {
         LOG_ERROR("clientExchangeAESKey: NULL outKey");
-        return COMM_FAIL;
+        return PROTOCOL_FAIL;
     }
 
     EVP_PKEY *myKeypair = NULL;
@@ -45,7 +47,7 @@ int clientExchangeAESKey(SocketFD socketFD, AESGCMKey *outKey) {
     KeyExchangePacketPayload keyPayload;
     Packet txPacket;
     Packet rxPacket;
-    int ret = COMM_FAIL;
+    int ret = PROTOCOL_FAIL;
 
     /* packetInit requires payload == NULL on entry. */
     memset(&txPacket, 0, sizeof(txPacket));
@@ -80,7 +82,8 @@ int clientExchangeAESKey(SocketFD socketFD, AESGCMKey *outKey) {
         goto cleanup;
     }
 
-    /* ──── zero-trust validation of network-received data ──────────────── */
+    /* ───────────── zero-trust validation of network-received data
+     * ───────────── */
 
     if (rxPacket.header.messageType != MsgKeyExchangeResp) {
         LOG_ERROR("clientExchangeAESKey: unexpected message type %d (expected "
@@ -136,7 +139,7 @@ int clientExchangeAESKey(SocketFD socketFD, AESGCMKey *outKey) {
         goto cleanup;
     }
 
-    ret = COMM_SUCC;
+    ret = PROTOCOL_SUCC;
 
 cleanup:
     /* Securely wipe all sensitive material. */
@@ -150,4 +153,50 @@ cleanup:
     packetClear(&rxPacket);
 
     return ret;
+}
+
+int clientSendEncryptedPacket(Client *client, MessageType mt, const void *data,
+                              size_t dataLen) {
+    if (client == NULL) {
+        return PROTOCOL_FAIL;
+    }
+    return packetSendEncrypted(client->fd, mt, &client->seqID,
+                               client->aesKey.key, data, dataLen);
+}
+
+int clientRecvEncryptedPacket(Client *client, Packet *out) {
+    if (client == NULL) {
+        return PROTOCOL_FAIL;
+    }
+    return packetRecvEncrypted(client->fd, out, client->aesKey.key);
+}
+
+int clientRecvStatusResponse(Client *client, MessageType expectedMt) {
+    Packet pkt;
+    memset(&pkt, 0, sizeof(pkt));
+
+    if (client == NULL) {
+        return -1;
+    }
+
+    if (clientRecvEncryptedPacket(client, &pkt) != PROTOCOL_SUCC) {
+        return -1;
+    }
+
+    if (pkt.header.messageType != expectedMt) {
+        LOG_WARN("clientRecvStatusResponse: unexpected message type %d "
+                 "(expected %d)",
+                 (int)pkt.header.messageType, (int)expectedMt);
+        packetClear(&pkt);
+        return -1;
+    }
+
+    if (pkt.header.payloadLength < sizeof(uint8_t)) {
+        packetClear(&pkt);
+        return -1;
+    }
+
+    int status = (int)pkt.payload[0];
+    packetClear(&pkt);
+    return status;
 }

@@ -39,13 +39,13 @@
 #include <openssl/kdf.h>
 #include <openssl/rand.h>
 
-/* ──────────────────────── return codes ──────────────────────────────────── */
+/* ────────────────────────────── return codes ────────────────────────────── */
 
 #define CRYPTO_SUCC (0)
 #define CRYPTO_FAIL (-1)
 #define CRYPTO_AUTH_FAIL (-2)
 
-/* ──────────────────────── AES-256-GCM constants ────────────────────────── */
+/* ───────────────────────── AES-256-GCM constants ────────────────────────── */
 
 /** @brief AES-256 symmetric key size in bytes. */
 #define AES_GCM_KEY_LEN 32
@@ -56,7 +56,7 @@
 /** @brief GCM authentication tag size in bytes. */
 #define AES_GCM_TAG_LEN 16
 
-/* ──────────────────────── Password Hashing constants ───────────────────── */
+/* ─────────────────────── Password Hashing constants ─────────────────────── */
 
 /** @brief Salt length in bytes for password hashing (128-bit). */
 #define HASH_SALT_LEN 16
@@ -64,7 +64,7 @@
 /** @brief SHA-256 digest length in bytes. */
 #define HASH_SHA256_LEN 32
 
-/* ──────────────────────── ECDH(X25519) constants ────────────────────────── */
+/* ───────────────────────── ECDH(X25519) constants ───────────────────────── */
 
 #define ECDH_SHARED_SECRET_SIZE 32
 
@@ -74,7 +74,7 @@
 
 #define HKDF_INFO_AES_KEY "PacPlay-AESKey"
 
-/* ──────────────────────── types ─────────────────────────────────────────── */
+/* ───────────────────────────────── types ────────────────────────────────── */
 
 /** @brief AES-256-GCM key material: symmetric key + per-message nonce. */
 typedef struct {
@@ -95,7 +95,7 @@ typedef struct {
     uint8_t tag[AES_GCM_TAG_LEN];
 } AESGCMCipher;
 
-/* ──────────────────────── buffer helpers ────────────────────────────────── */
+/* ───────────────────────────── buffer helpers ───────────────────────────── */
 
 /**
  * @brief Allocate an AESGCMBuffer with the given capacity.
@@ -113,7 +113,7 @@ int aesGCMBufferInit(AESGCMBuffer *buf, size_t capacity);
  */
 void aesGCMBufferDeinit(AESGCMBuffer *buf);
 
-/* ──────────────────────── AES-256-GCM API ──────────────────────────────── */
+/* ──────────────────────────── AES-256-GCM API ───────────────────────────── */
 
 /**
  * @brief Encrypt plaintext using AES-256-GCM.
@@ -145,7 +145,7 @@ int encryptAESGCM(const AESGCMBuffer *plaintext, const AESGCMBuffer *aad,
 int decryptAESGCM(const AESGCMCipher *cipher, const AESGCMBuffer *aad,
                   const AESGCMKey *key, AESGCMBuffer *plaintext);
 
-/* ──────────────────────── ECDH (X25519) API ────────────────────────────── */
+/* ─────────────────────────── ECDH (X25519) API ──────────────────────────── */
 
 /**
  * @brief Generate an X25519 ECDH key pair.
@@ -207,7 +207,7 @@ EVP_PKEY *importECDHPeerPublicKey(const uint8_t pub[ECDH_PUBLIC_KEY_SIZE]);
 int deriveECDHSharedSecret(EVP_PKEY *localKey, EVP_PKEY *peerKey,
                            uint8_t secret[ECDH_SHARED_SECRET_SIZE]);
 
-/* ──────────────────────── HKDF-SHA256 API ──────────────────────────────── */
+/* ──────────────────────────── HKDF-SHA256 API ───────────────────────────── */
 
 /** @brief HKDF info string identifying the AES-256 key derivation context. */
 
@@ -233,7 +233,7 @@ int deriveECDHSharedSecret(EVP_PKEY *localKey, EVP_PKEY *peerKey,
 int deriveAESKey(const uint8_t *sharedSecret, size_t secretLen,
                  AESGCMKey *outKey);
 
-/* ──────────────────────── Password Hashing ─────────────────────────────── */
+/* ──────────────────────────── Password Hashing ──────────────────────────── */
 
 /**
  * @brief Hash a password with a randomly generated salt using SHA-256.
@@ -270,7 +270,7 @@ char *hashPassword(const char *password);
  */
 int verifyPassword(const char *password, const char *storedHash);
 
-/* ──────────────────────  Base32 (RFC 4648) API  ────────────────────────── */
+/* ───────────────────────── Base32 (RFC 4648) API ────────────────────────── */
 
 /**
  * @brief Encode raw binary data to a Base32 (RFC 4648) string.
@@ -313,7 +313,7 @@ int base32Encode(const uint8_t *data, size_t len, char **outStr);
  */
 int base32Decode(const char *encoded, uint8_t **outData, size_t *outLen);
 
-/* ──────────────────────── TOTP (RFC 6238) constants ─────────────────────── */
+/* ─────────────────────── TOTP (RFC 6238) constants ──────────────────────── */
 
 /** @brief TOTP time step in seconds (standard 30 s). */
 #define TOTP_STEP_SECONDS 30
@@ -330,10 +330,11 @@ int base32Decode(const char *encoded, uint8_t **outData, size_t *outLen);
 /** @brief Modulus for 6-digit code extraction (10^TOTP_DIGITS). */
 #define TOTP_CODE_RANGE 1000000
 
-/** @brief Minimum TOTP shared secret length in bytes (RFC 4226: >= 128 bits). */
+/** @brief Minimum TOTP shared secret length in bytes (RFC 4226: >= 128 bits).
+ */
 #define TOTP_MIN_KEY_LEN 16
 
-/* ──────────────────────── TOTP API ──────────────────────────────── */
+/* ──────────────────────────────── TOTP API ──────────────────────────────── */
 
 /**
  * @brief Verify a user-provided TOTP code against a shared secret.
@@ -386,10 +387,9 @@ int verifyTOTPCode(const char *secret, int *code);
  * @return @c CRYPTO_SUCC on success, @c CRYPTO_FAIL on invalid input
  *         or allocation failure.
  */
-int generateOTPAuthURI(const char *secret, const char *username,
-                       char **outURI);
+int generateOTPAuthURI(const char *secret, const char *username, char **outURI);
 
-/* ──────────────────────── utility ──────────────────────────────────────── */
+/* ──────────────────────────────── utility ───────────────────────────────── */
 
 /**
  * @brief Fill a buffer with cryptographically secure random bytes.

@@ -1,6 +1,7 @@
 /**
  * @file communication.h
- * @brief Server-side communication helpers (key exchange, session management).
+ * @brief Server-side communication helpers (key exchange, encrypted packet
+ * I/O).
  *
  * @date 2026-05-20
  * @copyright GPLv3 License
@@ -27,9 +28,7 @@
 
 #include "crypto.h"
 #include "protocol.h"
-
-#define COMM_SUCC (0)
-#define COMM_FAIL (-1)
+#include "server.h"
 
 /**
  * @brief Complete the server side of an ECDH+HKDF key exchange.
@@ -56,9 +55,47 @@
  *                  non-NULL payload.  Its payload is zeroed on return.
  * @param outKey    Output parameter receiving the derived AES-256 key
  *                  material.  Must not be NULL.
- * @return @c COMM_SUCC on success, @c COMM_FAIL on failure.
+ * @return @c PROTOCOL_SUCC on success, @c PROTOCOL_FAIL on failure.
  */
 int serverExchangeAESKey(SocketFD clientFD, Packet *reqPacket,
                          AESGCMKey *outKey);
+
+/**
+ * @brief Build, encrypt, and send a packet on a client session.
+ *
+ * Convenience wrapper around @c packetSendEncrypted that reads the
+ * socket, AES key, and sequence counter from @p cs.
+ *
+ * @param cs       Client session (must have completed key exchange).
+ * @param mt       Application-layer message type.
+ * @param data     Payload bytes (may be NULL if dataLen is 0).
+ * @param dataLen  Length of @p data in bytes.
+ * @return @c SERVER_SUCC on success, @c SERVER_FAIL on failure.
+ */
+int serverSendEncryptedPacket(ClientSession *cs, MessageType mt,
+                              const void *data, size_t dataLen);
+
+/**
+ * @brief Receive and decrypt one AES-256-GCM packet from a client session.
+ *
+ * Convenience wrapper around @c packetRecvEncrypted.
+ *
+ * @param cs   Client session.
+ * @param out  Destination packet (payload must be NULL on entry).
+ * @return @c SERVER_SUCC on success, @c SERVER_FAIL on failure.
+ */
+int serverRecvEncryptedPacket(ClientSession *cs, Packet *out);
+
+/**
+ * @brief Send a single-byte status response on a client session.
+ *
+ * Encrypts and sends @p status as the payload of @p mt.
+ *
+ * @param cs      Client session.
+ * @param mt      Response message type.
+ * @param status  Status byte (e.g. 0 = success, 1 = failure).
+ * @return @c SERVER_SUCC on success, @c SERVER_FAIL on failure.
+ */
+int serverSendStatusResponse(ClientSession *cs, MessageType mt, uint8_t status);
 
 #endif /* SERVER_COMMUNICATION_H */

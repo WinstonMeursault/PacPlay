@@ -54,11 +54,16 @@ dkms.conf
 # debug information files
 *.dwo
 
+# AI AGENT & MCP
+AGENTS.md
+.ckb/
+.depwire/
+.reflex/
+
 .vscode/
 .cache/
 commit_draft.md
 compile_commands.json
-AGENTS.md
 build/
 bin/
 db/
