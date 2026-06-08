@@ -181,6 +181,46 @@ static int testsFailed = 0; /**< Number of tests that failed so far. */
     } while (0)
 
 /**
+ * @brief Assert that a pointer is NULL.
+ *
+ * @param ptr The pointer expression to test.
+ *
+ * On failure prints the expression to stderr, increments testsFailed,
+ * and returns from the calling function.
+ */
+#define ASSERT_NULL(ptr)                                                       \
+    do {                                                                       \
+        if ((ptr) != NULL) {                                                   \
+            fprintf(stderr,                                                    \
+                    TEST_COLOR_RED                                             \
+                    "  FAIL %s:%d: %s is not NULL" TEST_COLOR_RESET "\n",      \
+                    __FILE__, __LINE__, #ptr);                                 \
+            testsFailed++;                                                     \
+            return;                                                            \
+        }                                                                      \
+    } while (0)
+
+/**
+ * @brief Assert that a pointer is not NULL.
+ *
+ * @param ptr The pointer expression to test.
+ *
+ * On failure prints the expression to stderr, increments testsFailed,
+ * and returns from the calling function.
+ */
+#define ASSERT_NOT_NULL(ptr)                                                   \
+    do {                                                                       \
+        if ((ptr) == NULL) {                                                   \
+            fprintf(stderr,                                                    \
+                    TEST_COLOR_RED                                             \
+                    "  FAIL %s:%d: %s is NULL" TEST_COLOR_RESET "\n",          \
+                    __FILE__, __LINE__, #ptr);                                 \
+            testsFailed++;                                                     \
+            return;                                                            \
+        }                                                                      \
+    } while (0)
+
+/**
  * @brief Execute a single test function and record the result.
  *
  * @param fn A @c void(void) test function to invoke.

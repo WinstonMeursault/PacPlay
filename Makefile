@@ -6,7 +6,7 @@ MAKEFLAGS += -j $(shell nproc)
 ## Compiler and compilation flags
 CC := clang
 CFLAGS := -Wall -Wextra -Werror -g -Wno-unused-command-line-argument
-LDLIBS := -lssl -lcrypto -lsqlcipher
+LDLIBS := -lssl -lcrypto -lsqlcipher -lncursesw -lpthread
 ## Compiler flags for auto-generating dependency files (modern approach, replaces the old sed method)
 DEPFLAGS = -MMD -MP -MF $(@:%.o=%.d)
 
@@ -161,7 +161,7 @@ test: $(TEST_BIN)
 		echo -e '$(C_RED)'"$$sPass"'/'"$$total"' suites passed ('"$$totalPass"'/'"$$allPts"' points), '"$$failCount"' failed.$(C_RESET)'; \
 		exit 1; \
 	fi; \
-	echo -e '$(C_GREEN)All '"$$sPass"'/'"$$total"' test suites passed ('"$$totalPass"'/'"$$allPts"' points).$(C_RESET)'
+	echo -e '\n$(C_GREEN)All '"$$sPass"'/'"$$total"' test suites passed ('"$$totalPass"'/'"$$allPts"' points).$(C_RESET)\n'
 
 # Compile test source files
 $(BUILD_DIR)/tests/%.o: $(TEST_DIR)/%.c

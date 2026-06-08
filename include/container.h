@@ -29,6 +29,12 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
+#if defined(__GNUC__) || defined(__clang__)
+#define FUNC_UNUSED __attribute__((unused))
+#else
+#define FUNC_UNUSED
+#endif
+
 typedef enum { ContainerSucc = 0, ContainerFail = -1 } ContainerRes;
 
 #define QUEUE_DEFAULT_CAPACITY 8
@@ -91,7 +97,7 @@ typedef enum { ContainerSucc = 0, ContainerFail = -1 } ContainerRes;
         size_t head;     /**< Index of the front element (FIFO dequeue). */    \
         size_t tail; /**< Index one past the last element (FIFO enqueue). */   \
     } Queue##T;                                                                \
-    static inline bool queue##T##IsEmpty(const Queue##T *self) {               \
+    FUNC_UNUSED static inline bool queue##T##IsEmpty(const Queue##T *self) {   \
         return self->head == self->tail;                                       \
     }                                                                          \
     /**                                                                        \
@@ -106,7 +112,7 @@ typedef enum { ContainerSucc = 0, ContainerFail = -1 } ContainerRes;
      * @note Elements are copied via struct assignment (shallow copy).         \
      * @return @c ContainerSucc on success, @c ContainerFail on OOM.           \
      */                                                                        \
-    static inline ContainerRes queue##T##Reserve(Queue##T *self) {             \
+    FUNC_UNUSED static inline ContainerRes queue##T##Reserve(Queue##T *self) { \
         Queue##T before = *self;                                               \
         self->buf = malloc(sizeof(T) * self->capacity * 2);                    \
         if (self->buf == NULL) {                                               \
@@ -126,8 +132,8 @@ typedef enum { ContainerSucc = 0, ContainerFail = -1 } ContainerRes;
         free(before.buf);                                                      \
         return ContainerSucc;                                                  \
     }                                                                          \
-    static inline ContainerRes queue##T##Init(Queue##T *self,                  \
-                                              size_t capacity) {               \
+    FUNC_UNUSED static inline ContainerRes queue##T##Init(Queue##T *self,      \
+                                                          size_t capacity) {   \
         if (capacity == USE_DEFAULT_CAPACITY) {                                \
             capacity = QUEUE_DEFAULT_CAPACITY;                                 \
         }                                                                      \
@@ -142,14 +148,14 @@ typedef enum { ContainerSucc = 0, ContainerFail = -1 } ContainerRes;
         self->tail = 0;                                                        \
         return ContainerSucc;                                                  \
     }                                                                          \
-    static inline void queue##T##Deinit(Queue##T *self) {                      \
+    FUNC_UNUSED static inline void queue##T##Deinit(Queue##T *self) {          \
         if (self == NULL) {                                                    \
             return;                                                            \
         }                                                                      \
         free(self->buf);                                                       \
         self->buf = NULL;                                                      \
     }                                                                          \
-    static inline ContainerRes queue##T##Front(                                \
+    FUNC_UNUSED static inline ContainerRes queue##T##Front(                    \
         Queue##T *self, T *result) { /*NOLINT(bugprone-macro-parentheses)*/    \
         if (!queue##T##IsEmpty(self)) {                                        \
             *result = self->buf[self->head];                                   \
@@ -157,7 +163,8 @@ typedef enum { ContainerSucc = 0, ContainerFail = -1 } ContainerRes;
         }                                                                      \
         return ContainerFail;                                                  \
     }                                                                          \
-    static inline ContainerRes queue##T##Push(Queue##T *self, T data) {        \
+    FUNC_UNUSED static inline ContainerRes queue##T##Push(Queue##T *self,      \
+                                                          T data) {            \
         self->buf[self->tail] = data;                                          \
         self->tail = (self->tail + 1) % self->capacity;                        \
         if (self->tail == self->head) {                                        \
@@ -165,7 +172,7 @@ typedef enum { ContainerSucc = 0, ContainerFail = -1 } ContainerRes;
         }                                                                      \
         return ContainerSucc;                                                  \
     }                                                                          \
-    static inline ContainerRes queue##T##Pop(Queue##T *self) {                 \
+    FUNC_UNUSED static inline ContainerRes queue##T##Pop(Queue##T *self) {     \
         if (queue##T##IsEmpty(self)) {                                         \
             return ContainerFail;                                              \
         }                                                                      \
@@ -235,7 +242,7 @@ typedef enum { ContainerSucc = 0, ContainerFail = -1 } ContainerRes;
         size_t capacity; /**< Number of allocated element slots. */            \
         size_t size;     /**< Number of elements currently stored. */          \
     } Array##T;                                                                \
-    static inline ContainerRes array##T##Reserve(Array##T *self) {             \
+    FUNC_UNUSED static inline ContainerRes array##T##Reserve(Array##T *self) { \
         T *new = /*NOLINT(bugprone-macro-parentheses)*/                        \
             realloc(self->buf, self->capacity * 2 * sizeof(T));                \
         if (new == NULL) {                                                     \
@@ -247,8 +254,8 @@ typedef enum { ContainerSucc = 0, ContainerFail = -1 } ContainerRes;
         self->buf = new;                                                       \
         return ContainerSucc;                                                  \
     }                                                                          \
-    static inline ContainerRes array##T##Init(Array##T *self,                  \
-                                              size_t capacity) {               \
+    FUNC_UNUSED static inline ContainerRes array##T##Init(Array##T *self,      \
+                                                          size_t capacity) {   \
         if (capacity == USE_DEFAULT_CAPACITY) {                                \
             capacity = ARRAY_DEFAULT_CAPACITY;                                 \
         }                                                                      \
@@ -262,14 +269,23 @@ typedef enum { ContainerSucc = 0, ContainerFail = -1 } ContainerRes;
         }                                                                      \
         return ContainerSucc;                                                  \
     }                                                                          \
-    static inline void array##T##Deinit(Array##T *self) {                      \
+    FUNC_UNUSED static inline void array##T##Deinit(Array##T *self) {          \
         if (self == NULL) {                                                    \
             return;                                                            \
         }                                                                      \
         free(self->buf);                                                       \
         self->buf = NULL;                                                      \
     }                                                                          \
-    static inline ContainerRes array##T##PushBack(Array##T *self, T data) {    \
+    FUNC_UNUSED static inline ContainerRes array##T##Index(                    \
+        Array##T *self, size_t index, T **dest) {                              \
+        if (index >= self->size) {                                             \
+            return ContainerFail;                                              \
+        }                                                                      \
+        *dest = &self->buf[index];                                             \
+        return ContainerSucc;                                                  \
+    }                                                                          \
+    FUNC_UNUSED static inline ContainerRes array##T##PushBack(Array##T *self,  \
+                                                              T data) {        \
         if (self->size >= self->capacity) {                                    \
             ContainerRes res = array##T##Reserve(self);                        \
             if (res != ContainerSucc) {                                        \
@@ -280,22 +296,22 @@ typedef enum { ContainerSucc = 0, ContainerFail = -1 } ContainerRes;
         ++self->size;                                                          \
         return ContainerSucc;                                                  \
     }                                                                          \
-    static inline ContainerRes array##T##PopBack(Array##T *self) {             \
+    FUNC_UNUSED static inline ContainerRes array##T##PopBack(Array##T *self) { \
         if (self->size == 0) {                                                 \
             return ContainerFail;                                              \
         }                                                                      \
         --self->size;                                                          \
         return ContainerSucc;                                                  \
     }                                                                          \
-    static inline ContainerRes array##T##Set(Array##T *self, size_t index,     \
-                                             T data) {                         \
+    FUNC_UNUSED static inline ContainerRes array##T##Set(                      \
+        Array##T *self, size_t index, T data) {                                \
         if (index >= self->size) {                                             \
             return ContainerFail;                                              \
         }                                                                      \
         self->buf[index] = data;                                               \
         return ContainerSucc;                                                  \
     }                                                                          \
-    static inline ContainerRes array##T##Get(                                  \
+    FUNC_UNUSED static inline ContainerRes array##T##Get(                      \
         Array##T *self, size_t index,                                          \
         T *dest) { /*NOLINT(bugprone-macro-parentheses)*/                      \
         if (index >= self->size) {                                             \
@@ -304,7 +320,7 @@ typedef enum { ContainerSucc = 0, ContainerFail = -1 } ContainerRes;
         *dest = self->buf[index];                                              \
         return ContainerSucc;                                                  \
     }                                                                          \
-    static inline size_t array##T##Size(const Array##T *self) {                \
+    FUNC_UNUSED static inline size_t array##T##Size(const Array##T *self) {    \
         return self->size;                                                     \
     }
 

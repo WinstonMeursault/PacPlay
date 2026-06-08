@@ -11,7 +11,7 @@ PacPlay 的 API 按编译边界分为三层：
 
 | 层 | 目录 | 可见性 |
 |---|------|--------|
-| 公共层 | `include/` + `src/common/` | 服务端和客户端共享。头文件在 `include/`，实现在 `src/common/` |
+| 公共层 | `include/` + `src/common/`（含 `include/tui/` + `src/common/tui/`） | 服务端和客户端共享。头文件在 `include/`，实现在 `src/common/` |
 | 服务端层 | `src/server/` | 仅供服务端链接。内部头文件在 `src/server/` 下 |
 | 客户端层 | `src/client/` | 仅供客户端链接。内部头文件在 `src/client/` 下 |
 
@@ -20,7 +20,7 @@ PacPlay 的 API 按编译边界分为三层：
 ### 0.2 编译与运行前置依赖
 
 - **编译器**：`clang`（默认 GNU17 方言）
-- **链接库**：`libssl` + `libcrypto`（OpenSSL 3.x）、`libsqlcipher`
+- **链接库**：`libssl` + `libcrypto`（OpenSSL 3.x）、`libsqlcipher`、`libncursesw`（TUI 框架终端渲染）、`libpthread`（TUI 消息队列互斥锁）
 - **静态分析**：`clang-tidy` + `run-clang-tidy`（`clang-tools` 包）
 - **构建**：`make all`（自动执行分析 + 编译）
 - **测试**：`make test`（编译并运行所有测试套件）
@@ -37,6 +37,7 @@ PacPlay 的 API 按编译边界分为三层：
 - **想理解网络协议**：先读 [1.2 Protocol](#12-protocol-通信协议)，再读 [4.3-4.6](#第四部分端到端协议与典型业务流程) 端到端流程
 - **想理解认证**：先读 [1.1 Crypto](#11-crypto-密码学模块) 的密码/TOTP，再读 [2.2 Server Auth](#22-server-auth-认证模块) 和 [3.1 Client](#31-client-客户端主模块)
 - **想理解数据库**：先读 [2.7 Server Database](#27-server-database-服务端数据库模块)，再读 [3.6 Client Database](#36-client-database-客户端数据库模块)
+- **想理解终端 UI**：先读 [1.7 TUI](#17-tui-终端-ui-框架) 的消息系统、控件类型和事件循环
 - **想调用 API**：直接看 [第五部分：可运行示例](#第五部分可运行示例)
 - **想知道函数释放规则**：查 [6.2 内存所有权表](#62-内存所有权表)
 
@@ -604,7 +605,25 @@ sequenceDiagram
 
 提供泛型环形缓冲区（QueueT）与泛型动态数组（ArrayT）。所有函数均为 `static inline`，通过 `QUEUE_DEFINE(T)` 或 `ARRAY_DEFINE(T)` 在编译期生成，无需单独的 `.c` 实现文件。
 
-#### 1.4.1 泛型环形缓冲区（QueueT）
+#### 1.4.1 常量与宏
+
+| 宏 | 值 | 说明 |
+|----|-----|------|
+| `QUEUE_DEFAULT_CAPACITY` | `8` | Queue 默认初始容量（`Init()` 参数为 `USE_DEFAULT_CAPACITY(0)` 时使用） |
+| `ARRAY_DEFAULT_CAPACITY` | `8` | Array 默认初始容量（`Init()` 参数为 `USE_DEFAULT_CAPACITY(0)` 时使用） |
+| `USE_DEFAULT_CAPACITY` | `0` | `Init()` 哨兵值，传入后回退至对应容器的默认容量 |
+
+#### 1.4.2 类型定义
+
+**ContainerRes**
+
+```c
+typedef enum { ContainerSucc = 0, ContainerFail = -1 } ContainerRes;
+```
+
+所有容器函数的返回类型。`ContainerSucc`（0）表示成功，`ContainerFail`（-1）表示失败（越界、分配失败、空容器访问等）。
+
+#### 1.4.3 泛型环形缓冲区（QueueT）
 
 通过 `QUEUE_DEFINE(T)` 单步预处理器宏为任意数据类型生成类型安全的循环队列实现。
 
@@ -619,7 +638,7 @@ sequenceDiagram
 
 | 函数 | 签名 | 说明 |
 |------|------|------|
-| `queueTInit` | `ContainerRes queueTInit(QueueT *self, size_t capacity)` | 分配堆内存，初始化队列 |
+| `queueTInit` | `ContainerRes queueTInit(QueueT *self, size_t capacity)` | 分配堆内存，初始化队列。`capacity=USE_DEFAULT_CAPACITY(0)` 时取默认值 8 |
 | `queueTDeinit` | `void queueTDeinit(QueueT *self)` | 释放 buf，NULL 安全 |
 | `queueTFront` | `ContainerRes queueTFront(QueueT *self, T *result)` | 拷贝队首至 `*result` |
 | `queueTPush` | `ContainerRes queueTPush(QueueT *self, T data)` | 写入队尾，满时自动扩容 |
@@ -628,7 +647,7 @@ sequenceDiagram
 
 **注意**：`queueTPop` 不返回被弹出元素的值。需先 `Front` 后 `Pop`。
 
-#### 1.4.2 泛型动态数组（ArrayT）
+#### 1.4.4 泛型动态数组（ArrayT）
 
 通过 `ARRAY_DEFINE(T)` 为任意数据类型生成类型安全的动态数组实现，支持 O(1) 随机访问。
 
@@ -643,21 +662,22 @@ sequenceDiagram
 
 | 函数 | 签名 | 说明 |
 |------|------|------|
-| `arrayTInit` | `ContainerRes arrayTInit(ArrayT *self, size_t capacity)` | 分配堆内存，初始化数组 |
+| `arrayTInit` | `ContainerRes arrayTInit(ArrayT *self, size_t capacity)` | 分配堆内存，初始化数组。`capacity=USE_DEFAULT_CAPACITY(0)` 时取默认值 8 |
 | `arrayTDeinit` | `void arrayTDeinit(ArrayT *self)` | 释放 buf，NULL 安全 |
 | `arrayTSet` | `ContainerRes arrayTSet(ArrayT *self, size_t index, T data)` | 写 `buf[index]`，`index >= size` 拒绝 |
-| `arrayTGet` | `ContainerRes arrayTGet(ArrayT *self, size_t index, T *dest)` | 读 `buf[index]` 至 `*dest` |
+| `arrayTGet` | `ContainerRes arrayTGet(ArrayT *self, size_t index, T *dest)` | 读 `buf[index]` 至 `*dest`（值拷贝） |
+| `arrayTIndex` | `ContainerRes arrayTIndex(ArrayT *self, size_t index, T **dest)` | 返回 `buf[index]` 的指针引用至 `*dest`（非值拷贝），O(1)。`index >= size` 拒绝 |
 | `arrayTPushBack` | `ContainerRes arrayTPushBack(ArrayT *self, T data)` | 追加至尾部，满时自动扩容（2x） |
 | `arrayTPopBack` | `ContainerRes arrayTPopBack(ArrayT *self)` | size 递减，不返回值 |
 | `arrayTSize` | `size_t arrayTSize(const ArrayT *self)` | 返回当前元素个数 |
 
-#### 1.4.3 队列与数组的对比
+#### 1.4.5 队列与数组的对比
 
 | 特性 | QueueT（环形缓冲区） | ArrayT（动态数组） |
 |------|---------------------|-------------------|
 | 存储结构 | 环形，head/tail 双指针 | 连续存储，按索引直接访问 |
 | 扩容方式 | malloc 新缓冲 + 逐元素拷贝 | realloc（可原地扩展） |
-| 随机访问 | 不支持 | 支持 O(1) `Set`/`Get` |
+| 随机访问 | 不支持 | 支持 O(1) `Set`/`Get`/`Index`（指针引用） |
 | 适用场景 | FIFO 消息队列、生产者-消费者 | 动态集合、随机存取缓存 |
 
 ---
@@ -728,6 +748,272 @@ size_t readPasswordMasked(char *buf, size_t bufsize);
 **`void dbFinalize(sqlite3_stmt **stmt)`**
 
 Finalize 非 NULL 缓存的 prepared statement 并将其置为 NULL。NULL 输入安全。
+---
+
+### 1.7 TUI 终端 UI 框架
+
+**接口**：`include/tui/tuiapp.h`、`include/tui/control.h`、`include/tui/tuimsg.h`、`include/tui/ncurses_wrapper.h`
+**实现**：`src/common/tui/tuiapp.c`、`src/common/tui/control.c`
+
+基于 ncurses 宽字符库（`libncursesw`）的保留模式终端 GUI 框架，提供消息驱动的事件循环、控件继承体系和页面导航机制。TUI 模块位于 `src/common/` 下，编译时双方独立链接，供服务端管理面板与客户端交互界面共用。当前框架已完整实现，但 `client.c` / `server.c` 尚未集成 API。
+
+#### 1.7.1 常量与宏
+
+| 宏 | 值 | 说明 |
+|----|-----|------|
+| `BTN_LABEL_MAXLEN` | `20` | 按钮标签文本最大字符数（含 NUL） |
+| `INPUTBOX_BUF_MAX_LEN` | `128` | 输入框内部缓冲区最大字符数 |
+| `LABEL_TEXT_MAXLEN` | `128` | 标签文本最大字符数 |
+| `NCURSES_WIDECHAR` | `1` | 启用 ncurses 宽字符支持（`ncurses_wrapper.h` 内部定义） |
+
+#### 1.7.2 消息系统
+
+**接口**：`include/tui/tuimsg.h`
+
+TUI 框架采用消息传递架构，所有用户输入和系统事件均封装为 `TuiMsg` 结构体，经线程安全的消息队列统一分发至各控件的虚表回调。
+
+**MsgType**
+
+```c
+typedef enum {
+    MsgCursorPrev = 1, MsgCursorNext,   // Tab / Shift-Tab 焦点导航
+    MsgFocusEnter, MsgFocusLeave,       // 控件焦点获得 / 失去
+    MsgInput,                            // 键盘输入（arg1.input 含字符码）
+    MsgResize,                           // 终端尺寸变更
+    MsgFetch,                            // 容器请求子控件指针（arg1.fetchRecv 回调）
+    MsgRefresh                           // 触发控件重绘
+} MsgType;
+```
+
+枚举值自 1 起连续递增，仅用于进程内消息分发，不涉及网络传输。
+
+**MsgArg**
+
+```c
+typedef union {
+    size_t index;                                    // 导航 / 索引参数
+    int input;                                       // 输入字符码（MsgInput 专用）
+    void (*fetchRecv)(void *self, void *child);      // MsgFetch 回调
+} MsgArg;
+```
+
+**TuiMsg**
+
+```c
+typedef struct {
+    MsgType type;
+    MsgArg arg1;
+    MsgArg arg2;
+} TuiMsg;
+```
+
+消息队列通过 `QUEUE_DEFINE(TuiMsg)` 实例化为 `QueueTuiMsg`。
+
+#### 1.7.3 控件类型
+
+**接口**：`include/tui/control.h`
+
+控件体系采用 C 语言手动虚表多态：所有控件共享 `Control` 基类，派生类型通过首字段嵌入 `Control` 实现向上转型。
+
+**ControlVTable** — 控件虚表
+
+```c
+struct ControlVTable {
+    void (*destruct)(void *self);                      // 析构回调：释放控件私有资源
+    void (*draw)(void *self);                          // 绘制回调：渲染至 ncurses 窗口
+    void (*msgHandler)(void *self, TuiMsg msg);        // 消息处理回调
+};
+```
+
+**ControlCommonMsgHandlers** — 通用消息回调
+
+```c
+struct ControlCommonMsgHandlers {
+    void (*resize)(void *self);    // 终端尺寸变更时的重布局回调
+    void (*refresh)(void *self);   // 触发控件刷新（#undef refresh 避免宏冲突）
+};
+```
+
+**Control** — 基类控件
+
+```c
+struct Control {
+    ControlVTable vtable;                       // 虚表
+    WINDOW *windowHandler;                      // ncurses 窗口句柄
+    ControlCommonHandlers commonMsgHandlers;    // resize / refresh 回调
+    size_t index;         // 控件注册索引（自 1 起，0 为根节点保留）
+    bool isPage;          // 是否为页面（顶层容器，控制可见性与页面切换）
+    int x, y;             // 控件在父窗口内的相对坐标
+    int width, height;    // 控件尺寸
+    bool focusable;       // 是否可获取焦点
+    bool focused;         // 当前是否持有焦点
+    bool isContainer;     // 是否可包含子控件
+    size_t childCount;    // 已注册子控件数量
+    bool takeOverInput;   // 是否拦截键盘输入（聚焦时不向上冒泡）
+    bool visible;         // 是否可见（不可见时跳过渲染和焦点导航）
+};
+```
+
+`ControlPage` 为 `Control` 的类型别名（`isPage = true`），作为页面树的根节点。
+
+**GridLayoutMethod**
+
+```c
+typedef enum { LayoutVertical = 1, LayoutHorizontal } GridLayoutMethod;
+```
+
+**ControlButton** — 按钮
+
+```c
+struct ControlButton {
+    Control base;                                // 基类
+    char *text;                                  // 标签文本（≤ BTN_LABEL_MAXLEN）
+    void (*onClick)(ControlButton *self);        // 点击回调
+};
+```
+
+**ControlGrid** — 网格布局容器
+
+```c
+struct ControlGrid {
+    Control base;                    // 基类（isContainer = true）
+    GridLayoutMethod layoutMethod;   // 垂直或水平流式布局方向
+    struct {
+        size_t vertical;
+        size_t horizontal;
+    } margin;                        // 子控件间距（行/列方向）
+    size_t layoutCounter;            // 已布局子控件计数
+    size_t layoutAccCol;             // 累计列宽（水平布局用）
+    size_t layoutAccRow;             // 累计行高（垂直布局用）
+};
+```
+
+子控件加入后按布局方向自动排列；终端 resize 时触发重新布局。
+
+**ControlLabel** — 标签
+
+```c
+struct ControlLabel {
+    Control base;      // 基类
+    char *text;        // 显示文本（≤ LABEL_TEXT_MAXLEN）
+};
+```
+
+**ControlInputBox** — 输入框
+
+```c
+struct ControlInputBox {
+    Control base;                      // 基类（takeOverInput = true）
+    char *buf;                         // 内部缓冲区（≤ INPUTBOX_BUF_MAX_LEN）
+    size_t curLen;                     // 当前已输入字符数
+    size_t viewBegin;                  // 可视区域起始偏移（水平滚动）
+    size_t curLoc;                     // 光标位置（字符索引）
+    void (*submit)(ControlInputBox *self);  // 回车提交回调
+};
+```
+
+支持退格删除、光标移动和水平滚动。Enter（`\n`）、`\r`、小键盘 Enter（`KEY_ENTER`）均触发 `submit` 回调并释放输入焦点（`takeOverInput = false`）；Esc（`\e`）仅释放焦点不提交。
+
+#### 1.7.4 应用生命周期 API
+
+**接口**：`include/tui/tuiapp.h`
+
+| 函数 | 说明 | 前置条件 |
+|------|------|----------|
+| `void tuiAppInit(void)` | 初始化 ncurses（`initscr`、cbreak、noecho、keypad、`curs_set(0)`）、消息队列和控件注册表 | 仅可调用一次，失败时 `endwin()` 后退出 |
+| `void tuiAppControlRegister(Control *entry, Control *parent)` | 将控件注册到全局控件树的指定父节点下。`parent=NULL` 注册为根节点的直接子节点 | `tuiAppInit` 已调用；注册顺序决定 DFS 渲染顺序 |
+| `void tuiAppStart(ControlPage *orgPage)` | 以 `orgPage` 为初始页面启动事件循环（阻塞）。循环捕获键盘输入与 SIGWINCH 信号，封装为 `TuiMsg` 统一分发 | 控件树已构建完成 |
+| `void tuiAppStop(void)` | 退出事件循环，释放 ncurses 环境（`endwin`） | 仅事件循环内有效；线程安全 |
+| `void tuiAppChangePage(ControlPage *entry)` | 切换当前页面。销毁旧页面树的所有 ncurses 窗口，实例化新页面树，重建导航链。`entry=NULL` 回到 `stdscr` | 仅事件循环内调用 |
+| `void tuiAppPushMessage(TuiMsg msg)` | 将消息推入全局消息队列 | 线程安全（`pthread_mutex_t` 保护） |
+| `void tuiAppRefresh(void)` | 立即触发全量重绘（推送 `MsgRefresh`） | 可在任意上下文调用 |
+
+#### 1.7.5 控件构造函数
+
+**接口**：`include/tui/control.h`
+
+所有构造函数的 `draw`、`resize`、`refresh` 参数均可传入对应类型的默认实现（见 §1.7.7），也可传入自定义函数指针。`onClick`（按钮）和 `submit`（输入框）为**必须**提供的业务回调。
+
+| 函数 | 签名 | 关键参数 |
+|------|------|----------|
+| `controlPageConstruct` | `void controlPageConstruct(ControlPage *self)` | 设置 `isPage=true`、`isContainer=true`、`visible=false`（切换至页面后自动设为 true） |
+| `controlButtonConstruct` | `void controlButtonConstruct(ControlButton *self, int height, int width, int y, int x, const char *text, void (*draw)(...), void (*onClick)(...), void (*resize)(...), void (*refresh)(...))` | `text` 为按钮显示文字，`focusable=true` |
+| `controlGridConstruct` | `void controlGridConstruct(ControlGrid *self, int height, int width, int y, int x, GridLayoutMethod layoutMethod, size_t hmargin, size_t vmargin, void (*draw)(...), void (*resize)(...), void (*refresh)(...))` | `isContainer=true`、`focusable=false`，`layoutMethod` 决定子控件排列方向 |
+| `controlLabelConstruct` | `void controlLabelConstruct(ControlLabel *self, const char *text, int y, int x, void (*draw)(...), void (*resize)(...), void (*refresh)(...))` | `text` 为显示内容，`focusable=false` |
+| `controlInputBoxConstruct` | `void controlInputBoxConstruct(ControlInputBox *self, int width, int y, int x, void (*draw)(...), void (*resize)(...), void (*submit)(...), void (*refresh)(...))` | `focusable=true`、`takeOverInput=false`（获得焦点时自动设为 true）。`submit` 为回车提交回调。`width < 3` 时自动钳位为 3 |
+
+**内存分配**：`text`（Button / Label）通过内部 `strdup` 分配，`buf`（InputBox）通过内部 `malloc` 分配，均在 `controlDeinstantiate` → `vtable.destruct` 中释放。调用者不负责释放这些资源。
+
+#### 1.7.6 控件生命周期函数
+
+**接口**：`include/tui/control.h`
+
+| 函数 | 说明 | 释放责任 |
+|------|------|----------|
+| `void controlInstantiate(Control *self, Control *parent)` | 创建 ncurses `WINDOW`（`derwin` / `newwin`），调用 `tuiAppControlRegister` 注册进控件树，向父节点转发 `MsgFocusEnter` / `MsgFocusLeave` | `controlDeinstantiate(self)` |
+| `void controlDeinstantiate(Control *self)` | 销毁 ncurses 窗口（`delwin`），从注册表移除，调用 `vtable.destruct` 释放私有资源（`strdup` 的 text、`malloc` 的 buf 等） | 不可重复调用 |
+
+#### 1.7.7 默认绘制函数
+
+**接口**：`include/tui/control.h`
+
+所有默认绘制函数签名为 `void (*)(void *self)`，通过虚表 `draw` 指针间接调用，内部强制转换为对应控件类型。
+
+| 函数 | 说明 |
+|------|------|
+| `controlButtonDraw(void *self)` | 居中绘制标签文本。获取焦点时反色显示 |
+| `controlGridDraw(void *self)` | 绘制网格边框（`wborder`）。子控件数为 0 时显示 `"No items"` 占位文本 |
+| `controlLabelDraw(void *self)` | 在控件窗口左上角绘制标签文本 |
+| `controlInputBoxDraw(void *self)` | 绘制输入框边框，展示 `buf` 中 `viewBegin` 起始的可见段，在 `curLoc` 位置显示块状光标 |
+
+#### 1.7.8 架构与消息流
+
+**控件继承树**
+
+```mermaid
+flowchart TD
+    Control[Control 基类] --> Button[ControlButton 按钮]
+    Control --> Grid[ControlGrid 网格布局]
+    Control --> Label[ControlLabel 标签]
+    Control --> InputBox[ControlInputBox 输入框]
+    Control --> Page[ControlPage 页面]
+    Page -.->|"isPage=true"| Control
+    Grid -.->|"isContainer=true"| Control
+```
+
+**消息流与渲染循环**
+
+```mermaid
+flowchart TD
+    subgraph 输入源
+        KBD["键盘输入 wgetch"] --> Parse[解析为 TuiMsg]
+        SIGWINCH["终端 resize SIGWINCH"] --> Parse
+    end
+    Parse --> Queue["QueueTuiMsg<br/>pthread_mutex 保护"]
+    Queue --> Dispatch["出队 → 分发给根页面 msgHandler"]
+    Dispatch --> Tree["LCRS 控件树递归分发"]
+    Tree --> Render["DFS 深度优先渲染<br/>调用各控件 vtable.draw"]
+    Render --> Screen[ncurses 物理屏幕]
+    
+    subgraph 焦点管理
+        Tab["Tab / Shift-Tab"] --> NavChain["navChainCache<br/>可见 + focusable 控件线性表"]
+        NavChain --> Focus[焦点切换 → MsgFocusEnter / MsgFocusLeave]
+        Focus --> Tree
+    end
+```
+
+**运行模型**：
+
+1. **注册阶段**：`tuiAppControlRegister()` 将控件以 LCRS（左孩子右兄弟）树结构注册，`index` 自 1 递增分配，0 为根节点保留
+2. **事件循环**：`tuiAppStart()` 进入阻塞循环，`wgetch(stdscr)` 捕获键盘输入，`SIGWINCH` 信号触发 resize 消息
+3. **消息分发**：所有事件封装为 `TuiMsg` 推入 `QueueTuiMsg`（`pthread_mutex_t` 保护出入队），主循环逐条出队并分发给当前根页面的 `vtable.msgHandler`
+4. **DFS 渲染**：页面 `msgHandler` 深度优先递归控件树，调用各控件的 `vtable.draw` 将内容写入 ncurses 窗口缓冲区
+5. **焦点导航**：Tab / Shift-Tab 遍历 `navChainCache`（仅包含 `visible=true` 且 `focusable=true` 的控件），循环切换焦点
+6. **页面切换**：`tuiAppChangePage()` 销毁旧页面树的所有窗口和私有资源，实例化新页面树，重建导航链并触发全量重绘
+
+**线程安全**：消息队列的入队/出队操作通过 `pthread_mutex_t` 保护，允许其他线程通过 `tuiAppPushMessage()` 安全投递消息。其他全局状态（控件注册表、事件循环）不具备线程安全性。
+
+**当前集成状态**：TUI 框架已完整编译于服务端与客户端二进制中（Makefile 自动链接 `-lncursesw -lpthread`），但 `client.c` 和 `server.c` 尚未调用其 API。框架可通过独立链接的测试程序或 TUI 专用入口直接使用。
 
 ---
 
@@ -1523,15 +1809,6 @@ if (listGames(client, &records, &count) == CLIENT_DB_SUCC) {
 
 ---
 
-### 3.7 Client / Server TUI 模块
-
-**接口**：`src/client/tui.h`、`src/server/tui.h`
-**实现**：`src/client/tui.c`、`src/server/tui.c`
-
-当前 TUI 头文件为**空边界头**（仅 include guard），无公开 API。相应的 `.c` 文件为占位实现，供后续终端 UI 开发使用。
-
----
-
 ## 第四部分：端到端协议与典型业务流程
 
 ### 4.1 首次服务端启动流程
@@ -2179,7 +2456,7 @@ clang -Iinclude -Isrc -Wall -Wextra -Werror -g \
 
 ### 6.3 项目整体依赖架构
 
-PacPlay 按编译边界分为三层——公共层、服务端层、客户端层。公共层（`include/` + `src/common/`）提供两边共用的密码学、协议、日志、容器和数据库辅助，并支撑上层模块。服务端和客户端各拥有独立的通信、认证、房间、聊天和数据库模块，两边模块结构镜像但实现独立编译。`★ log.c` 是 vendored 第三方日志库（rxi/log.c），被全项目所有 `.c` 文件链接使用，图中省略逐条连线以保持清晰。数据库层按类型进一步拆分为独立文件，由 `server.c` 仅通过 `database/common.c` 做生命周期管理。
+PacPlay 按编译边界分为三层——公共层、服务端层、客户端层。公共层（`include/` + `src/common/`）提供两边共用的密码学、协议、日志、容器、TUI 终端框架和数据库辅助，并支撑上层模块。服务端和客户端各拥有独立的通信、认证、房间、聊天和数据库模块，两边模块结构镜像但实现独立编译。`★ log.c` 是 vendored 第三方日志库（rxi/log.c），被全项目所有 `.c` 文件链接使用，图中省略逐条连线以保持清晰。数据库层按类型进一步拆分为独立文件，由 `server.c` 仅通过 `database/common.c` 做生命周期管理。
 
 ```mermaid
 graph TD
@@ -2189,6 +2466,7 @@ graph TD
         db["db.c<br/>SQLite prepared statement 辅助"]
         utils["utils.c<br/>跨平台 mkdir / hex / 密码读入"]
         container["container.h<br/>泛型 QueueT / ArrayT"]
+        tui["tui/<br/>tuiapp.c / control.c<br/>TUI 终端 GUI 框架"]
         log["★ log.c<br/>vendored rxi/log.c"]
     end
 
@@ -2214,6 +2492,8 @@ graph TD
     subgraph external["外部依赖"]
         ssl["libssl + libcrypto<br/>OpenSSL 3.x"]
         sqlcipher["libsqlcipher<br/>SQLCipher"]
+        ncurses["libncursesw<br/>ncurses 宽字符库"]
+        pthread["libpthread<br/>POSIX 线程"]
     end
 
     %% 公共层内部依赖
@@ -2222,6 +2502,9 @@ graph TD
     utils --> crypto
     crypto --> ssl
     db --> sqlcipher
+    tui --> container
+    tui --> ncurses
+    tui --> pthread
 
     %% 服务端模块依赖
     sMain --> sComm
@@ -2260,6 +2543,7 @@ graph TD
 - `★ log.c` 被图中所有模块链接使用，省略逐个连线以保持可读性
 - 服务端 `database/` 子树在 [2.7](#27-server-database-服务端数据库模块) 中有完整展开图
 - `container.h` 为 header-only 模板库，通过预处理器宏生成类型安全的泛型队列与数组
+- `tui/` 为终端 GUI 框架，依赖 `container.h` 的泛型队列/数组管理消息队列和控件注册表
 
 ### 6.4 维护注意事项
 
@@ -2314,9 +2598,14 @@ make test
 ./bin/tests/test_client_database
 ./bin/tests/test_container
 ./bin/tests/test_communication
+./bin/tests/test_client_chat
+./bin/tests/test_tui_control
+./bin/tests/test_utils
 ```
 
-**测试框架**：自定义轻量宏框架（`tests/test_utils.h`），提供 `ASSERT_INT_EQ`、`ASSERT_UINT_EQ`、`ASSERT_TRUE`、`ASSERT_FALSE`、`ASSERT_MEM_EQ`、`ASSERT_STR_EQ`、`RUN_TEST`、`TEST_REPORT`。
+**测试框架**：自定义轻量宏框架（`tests/test_utils.h`），提供 `ASSERT_INT_EQ`、`ASSERT_UINT_EQ`、`ASSERT_TRUE`、`ASSERT_FALSE`、`ASSERT_MEM_EQ`、`ASSERT_STR_EQ`、`ASSERT_NULL`、`ASSERT_NOT_NULL`、`RUN_TEST`、`TEST_REPORT`。
+
+**TUI 测试覆盖**：`tests/test_tui_control.c` 覆盖控件构造、vtable 正确性及 InputBox 文本操作逻辑（19 用例），不依赖 ncurses 终端。应用级测试（`tuiAppInit` 等）因需终端交互暂未覆盖。
 
 **新增测试文件后**：须执行 `make json` 更新 `compile_commands.json`，确保 `clang-tidy` 能分析新文件。
 
@@ -2343,3 +2632,14 @@ clientLogin() 或 clientRegister()
        └─ clientChatLoop()
 clientDisconnect()    → clientCloseDB() → OPENSSL_cleanse → socketClose()
 ```
+
+**可选 TUI 初始化流程**（当前未集成到客户端/服务端主流程中）：
+```
+tuiAppInit()           → 初始化 ncurses 环境 + 消息队列
+  ├─ controlPageConstruct()              → 创建页面根节点
+  ├─ controlGridConstruct()              → 创建布局容器
+  ├─ controlButtonConstruct() / controlLabelConstruct() / controlInputBoxConstruct()
+  │                                       → 创建子控件
+  ├─ controlInstantiate(ctrl, parent)    → 为各控件创建 ncurses 窗口并注册到控件树
+  └─ tuiAppStart(page)                   → 启动事件循环（阻塞，等待 wgetch / SIGWINCH）
+tuiAppStop()           → 退出循环 → endwin

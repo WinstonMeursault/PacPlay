@@ -1081,8 +1081,72 @@ static void testArrayPacketInterleavedPushPop(void) {
     arrayPacketDeinit(&a);
 }
 
+static void testArrayPacketIndexValid(void) {
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+
+    Packet pkt = makeTestPacket(MsgChat, SeqA);
+    ASSERT_INT_EQ(arrayPacketPushBack(&a, pkt), ContainerSucc);
+
+    Packet *ptr = NULL;
+    ASSERT_INT_EQ(arrayPacketIndex(&a, 0, &ptr), ContainerSucc);
+    ASSERT_NOT_NULL(ptr);
+    ASSERT_UINT_EQ(ptr->header.sequenceID, SeqA);
+    ASSERT_UINT_EQ(ptr->header.magic, PACKET_MAGIC);
+
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketIndexEmpty(void) {
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+
+    Packet *ptr = NULL;
+    ASSERT_INT_EQ(arrayPacketIndex(&a, 0, &ptr), ContainerFail);
+
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketIndexOOB(void) {
+    enum { NumPush = 2 };
+
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+    arrayPacketPushBack(&a, makeTestPacket(MsgChat, SeqA));
+    arrayPacketPushBack(&a, makeTestPacket(MsgChat, SeqB));
+
+    Packet *ptr = (Packet *)(uintptr_t)SentinelSeq;
+    ASSERT_INT_EQ(arrayPacketIndex(&a, NumPush, &ptr), ContainerFail);
+    ASSERT_INT_EQ(arrayPacketIndex(&a, SIZE_MAX, &ptr), ContainerFail);
+
+    /* Verify OOB did not modify ptr. */
+    ASSERT_TRUE(ptr == (Packet *)(uintptr_t)SentinelSeq);
+
+    arrayPacketDeinit(&a);
+}
+
+static void testArrayPacketIndexMutate(void) {
+    ArrayPacket a;
+    memset(&a, 0, sizeof(a));
+    arrayPacketInit(&a, TestCap);
+    arrayPacketPushBack(&a, makeTestPacket(MsgChat, SeqA));
+
+    Packet *ptr = NULL;
+    ASSERT_INT_EQ(arrayPacketIndex(&a, 0, &ptr), ContainerSucc);
+    ptr->header.sequenceID = IntBogus;
+
+    Packet got;
+    ASSERT_INT_EQ(arrayPacketGet(&a, 0, &got), ContainerSucc);
+    ASSERT_UINT_EQ(got.header.sequenceID, IntBogus);
+
+    arrayPacketDeinit(&a);
+}
+
 /* ════════════════════════════════════════════════════════════════════════
-   ArrayInt tests
+   ArrayInt Index tests
    ════════════════════════════════════════════════════════════════════════ */
 
 static void testArrayIntInitValid(void) {
@@ -1376,6 +1440,66 @@ static void testArrayIntPostDeinitSizeZero(void) {
     ASSERT_INT_EQ(arrayIntSet(&a, 0, (Int)IntBogus), ContainerFail);
 }
 
+static void testArrayIntIndexValid(void) {
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    arrayIntInit(&a, TestCap);
+    arrayIntPushBack(&a, (Int)IntValA);
+
+    Int *ptr = NULL;
+    ASSERT_INT_EQ(arrayIntIndex(&a, 0, &ptr), ContainerSucc);
+    ASSERT_NOT_NULL(ptr);
+    ASSERT_INT_EQ(*ptr, (Int)IntValA);
+
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntIndexEmpty(void) {
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    arrayIntInit(&a, TestCap);
+
+    Int *ptr = NULL;
+    ASSERT_INT_EQ(arrayIntIndex(&a, 0, &ptr), ContainerFail);
+
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntIndexOOB(void) {
+    enum { NumPush = 2 };
+
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    arrayIntInit(&a, TestCap);
+    arrayIntPushBack(&a, (Int)IntValA);
+    arrayIntPushBack(&a, (Int)IntValB);
+
+    Int *ptr = (Int *)(uintptr_t)SentinelSeq;
+    ASSERT_INT_EQ(arrayIntIndex(&a, NumPush, &ptr), ContainerFail);
+    ASSERT_INT_EQ(arrayIntIndex(&a, SIZE_MAX, &ptr), ContainerFail);
+
+    ASSERT_TRUE(ptr == (Int *)(uintptr_t)SentinelSeq);
+
+    arrayIntDeinit(&a);
+}
+
+static void testArrayIntIndexMutate(void) {
+    ArrayInt a;
+    memset(&a, 0, sizeof(a));
+    arrayIntInit(&a, TestCap);
+    arrayIntPushBack(&a, (Int)IntValA);
+
+    Int *ptr = NULL;
+    ASSERT_INT_EQ(arrayIntIndex(&a, 0, &ptr), ContainerSucc);
+    *ptr = (Int)IntValC;
+
+    Int val;
+    ASSERT_INT_EQ(arrayIntGet(&a, 0, &val), ContainerSucc);
+    ASSERT_INT_EQ(val, (Int)IntValC);
+
+    arrayIntDeinit(&a);
+}
+
 /* ════════════════════════════════════════════════════════════════════════
    main
    ════════════════════════════════════════════════════════════════════════ */
@@ -1440,6 +1564,10 @@ int main(void) {
     RUN_TEST(testArrayPacketAdversarialIndexBounds);
     RUN_TEST(testArrayPacketNonPayloadRoundTrip);
     RUN_TEST(testArrayPacketInterleavedPushPop);
+    RUN_TEST(testArrayPacketIndexValid);
+    RUN_TEST(testArrayPacketIndexEmpty);
+    RUN_TEST(testArrayPacketIndexOOB);
+    RUN_TEST(testArrayPacketIndexMutate);
 
     /* ArrayInt */
     RUN_TEST(testArrayIntInitValid);
@@ -1457,6 +1585,10 @@ int main(void) {
     RUN_TEST(testArrayIntAdversarialIndexBounds);
     RUN_TEST(testArrayIntInterleavedPushPop);
     RUN_TEST(testArrayIntPostDeinitSizeZero);
+    RUN_TEST(testArrayIntIndexValid);
+    RUN_TEST(testArrayIntIndexEmpty);
+    RUN_TEST(testArrayIntIndexOOB);
+    RUN_TEST(testArrayIntIndexMutate);
 
     return TEST_REPORT();
 }

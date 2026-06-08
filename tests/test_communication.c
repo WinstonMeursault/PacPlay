@@ -937,6 +937,170 @@ static void testClientRecvStatusZeroPayload(void) {
     ASSERT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 }
 
+/* ═══════════════════════ serverSendEncryptedPacket ═══════════════════════ */
+
+static void testServerSendEncryptedNullCS(void) {
+    int ret = serverSendEncryptedPacket(NULL, MsgChat, "x", 1);
+    ASSERT_INT_EQ(ret, SERVER_FAIL);
+}
+
+static void testServerSendEncryptedRoundtrip(void) {
+    int pair[SockLen];
+    makePair(pair);
+
+    ClientSession cs = {0};
+    cs.fd = pair[SockA];
+    cryptoRandomBytes(cs.aesKey.key, AesKeyLen);
+    cs.seqID = 0;
+
+    const char *msg = "test";
+    int ret = serverSendEncryptedPacket(&cs, MsgChat, msg, strlen(msg));
+    ASSERT_INT_EQ(ret, SERVER_SUCC);
+
+    Packet rx = {0};
+    ASSERT_INT_EQ(packetRecvEncrypted(pair[SockB], &rx, cs.aesKey.key),
+                  PROTOCOL_SUCC);
+    ASSERT_UINT_EQ(rx.header.messageType, (uint32_t)MsgChat);
+    ASSERT_UINT_EQ(rx.header.payloadLength, (uint32_t)strlen(msg));
+
+    packetClear(&rx);
+    socketClose(&pair[SockA]);
+    socketClose(&pair[SockB]);
+    OPENSSL_cleanse(&cs.aesKey, sizeof(cs.aesKey));
+}
+
+/* ═══════════════════════ serverRecvEncryptedPacket ═══════════════════════ */
+
+static void testServerRecvEncryptedNullCS(void) {
+    Packet out = {0};
+    int ret = serverRecvEncryptedPacket(NULL, &out);
+    ASSERT_INT_EQ(ret, SERVER_FAIL);
+}
+
+static void testServerRecvEncryptedNullOut(void) {
+    int pair[SockLen];
+    makePair(pair);
+
+    ClientSession cs = {0};
+    cs.fd = pair[SockA];
+    cryptoRandomBytes(cs.aesKey.key, AesKeyLen);
+    cs.seqID = 0;
+
+    int ret = serverRecvEncryptedPacket(&cs, NULL);
+    ASSERT_INT_EQ(ret, SERVER_FAIL);
+
+    socketClose(&pair[SockA]);
+    socketClose(&pair[SockB]);
+    OPENSSL_cleanse(&cs.aesKey, sizeof(cs.aesKey));
+}
+
+/* ═══════════════════════ serverSendStatusResponse ════════════════════════ */
+
+static void testServerSendStatusSuccess(void) {
+    int pair[SockLen];
+    makePair(pair);
+
+    ClientSession cs = {0};
+    cs.fd = pair[SockA];
+    cryptoRandomBytes(cs.aesKey.key, AesKeyLen);
+    cs.seqID = 0;
+
+    int ret = serverSendStatusResponse(&cs, MsgLoginResp, 0);
+    ASSERT_INT_EQ(ret, SERVER_SUCC);
+
+    Packet rx = {0};
+    ASSERT_INT_EQ(packetRecvEncrypted(pair[SockB], &rx, cs.aesKey.key),
+                  PROTOCOL_SUCC);
+    ASSERT_UINT_EQ(rx.header.payloadLength, 1);
+    ASSERT_TRUE(rx.payload[0] == 0);
+
+    packetClear(&rx);
+    socketClose(&pair[SockA]);
+    socketClose(&pair[SockB]);
+    OPENSSL_cleanse(&cs.aesKey, sizeof(cs.aesKey));
+}
+
+static void testServerSendStatusFailure(void) {
+    int pair[SockLen];
+    makePair(pair);
+
+    ClientSession cs = {0};
+    cs.fd = pair[SockA];
+    cryptoRandomBytes(cs.aesKey.key, AesKeyLen);
+    cs.seqID = 0;
+
+    int ret = serverSendStatusResponse(&cs, MsgLoginResp, 1);
+    ASSERT_INT_EQ(ret, SERVER_SUCC);
+
+    Packet rx = {0};
+    ASSERT_INT_EQ(packetRecvEncrypted(pair[SockB], &rx, cs.aesKey.key),
+                  PROTOCOL_SUCC);
+    ASSERT_UINT_EQ(rx.header.payloadLength, 1);
+    ASSERT_TRUE(rx.payload[0] == 1);
+
+    packetClear(&rx);
+    socketClose(&pair[SockA]);
+    socketClose(&pair[SockB]);
+    OPENSSL_cleanse(&cs.aesKey, sizeof(cs.aesKey));
+}
+
+/* ═══════════════════════ clientSendEncryptedPacket ═══════════════════════ */
+
+static void testClientSendEncryptedNull(void) {
+    int ret = clientSendEncryptedPacket(NULL, MsgChat, "x", 1);
+    ASSERT_INT_EQ(ret, PROTOCOL_FAIL);
+}
+
+static void testClientSendEncryptedRoundtrip(void) {
+    int pair[SockLen];
+    makePair(pair);
+
+    Client client = {0};
+    client.fd = pair[SockA];
+    cryptoRandomBytes(client.aesKey.key, AesKeyLen);
+    client.seqID = 0;
+
+    const char *msg = "roundtrip";
+    int ret = clientSendEncryptedPacket(&client, MsgChat, msg, strlen(msg));
+    ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
+
+    Packet rx = {0};
+    ASSERT_INT_EQ(packetRecvEncrypted(pair[SockB], &rx, client.aesKey.key),
+                  PROTOCOL_SUCC);
+    ASSERT_UINT_EQ(rx.header.messageType, (uint32_t)MsgChat);
+    ASSERT_UINT_EQ(rx.header.payloadLength, (uint32_t)strlen(msg));
+
+    packetClear(&rx);
+    socketClose(&pair[SockA]);
+    socketClose(&pair[SockB]);
+    OPENSSL_cleanse(&client.aesKey, sizeof(client.aesKey));
+}
+
+/* ═══════════════════════ clientRecvEncryptedPacket ═══════════════════════ */
+
+static void testClientRecvEncryptedNullClient(void) {
+    Packet out = {0};
+    int ret = clientRecvEncryptedPacket(NULL, &out);
+    ASSERT_INT_EQ(ret, PROTOCOL_FAIL);
+}
+
+static void testClientRecvEncryptedNullOut(void) {
+    int pair[SockLen];
+    makePair(pair);
+
+    Client client = {0};
+    client.fd = pair[SockA];
+    cryptoRandomBytes(client.aesKey.key, AesKeyLen);
+    client.seqID = 0;
+
+    int ret = clientRecvEncryptedPacket(&client, NULL);
+    ASSERT_INT_EQ(ret, PROTOCOL_FAIL);
+
+    socketClose(&pair[SockA]);
+    socketClose(&pair[SockB]);
+    OPENSSL_cleanse(&client.aesKey, sizeof(client.aesKey));
+}
+
 /* ══════════════════════════════════ main ══════════════════════════════════ */
 
 int main(void) {
@@ -994,6 +1158,22 @@ int main(void) {
     RUN_TEST(testClientRecvStatusFailure);
     RUN_TEST(testClientRecvStatusWrongMsgType);
     RUN_TEST(testClientRecvStatusZeroPayload);
+
+    /* serverSendEncryptedPacket / serverRecvEncryptedPacket */
+    RUN_TEST(testServerSendEncryptedNullCS);
+    RUN_TEST(testServerSendEncryptedRoundtrip);
+    RUN_TEST(testServerRecvEncryptedNullCS);
+    RUN_TEST(testServerRecvEncryptedNullOut);
+
+    /* serverSendStatusResponse */
+    RUN_TEST(testServerSendStatusSuccess);
+    RUN_TEST(testServerSendStatusFailure);
+
+    /* clientSendEncryptedPacket / clientRecvEncryptedPacket */
+    RUN_TEST(testClientSendEncryptedNull);
+    RUN_TEST(testClientSendEncryptedRoundtrip);
+    RUN_TEST(testClientRecvEncryptedNullClient);
+    RUN_TEST(testClientRecvEncryptedNullOut);
 
     return TEST_REPORT();
 }

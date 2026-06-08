@@ -3017,15 +3017,10 @@ static void testServerInitKeysFirstRun(void) {
 
     ASSERT_FALSE(srv.freshKeysGenerated);
 
-    /* Supply an empty stdin so getchar() returns EOF without blocking */
-    FILE *savedStdin = stdin;
-    stdin = fopen("/dev/null", "r");
-    ASSERT_TRUE(stdin != NULL);
+    /* Redirect fd 0 to /dev/null so getchar() returns EOF immediately. */
+    freopen("/dev/null", "r", stdin);
 
     int ret = serverInitKeys(&srv);
-
-    fclose(stdin);
-    stdin = savedStdin;
 
     ASSERT_INT_EQ(ret, SERVER_SUCC);
     ASSERT_TRUE(srv.freshKeysGenerated);
@@ -3410,17 +3405,14 @@ static void testServerInitKeysSubsequentRun(void) {
         }
         mkHex[HexMkLen] = '\0';
 
-        /* Pipe MK into stdin */
-        FILE *pipeIn = fopen("/tmp/pp_mk_input.txt", "w+");
-        ASSERT_TRUE(pipeIn != NULL);
-        fprintf(pipeIn, "%s\n\n", mkHex);
-        fseek(pipeIn, 0, SEEK_SET);
+        /* Feed MK hex via temp file; freopen redirects both fd 0 and FILE*. */
+        FILE *tmp = fopen("/tmp/pp_mk_input.txt", "w");
+        ASSERT_TRUE(tmp != NULL);
+        fprintf(tmp, "%s\n\n", mkHex);
+        fclose(tmp);
 
-        FILE *savedStdin = stdin;
-        stdin = pipeIn;
+        freopen("/tmp/pp_mk_input.txt", "r", stdin);
         int ret = serverInitKeys(&srv);
-        fclose(pipeIn);
-        stdin = savedStdin;
         remove("/tmp/pp_mk_input.txt");
 
         ASSERT_INT_EQ(ret, SERVER_SUCC);
@@ -3437,6 +3429,91 @@ static void testServerInitKeysSubsequentRun(void) {
         dbClose(serverDB);
     }
     removeDBFiles();
+}
+
+/* ═══════════════════════════ DBKeyReq tests ══════════════════════════════ */
+
+static void testDBKeyReqHappyPath(void) {
+    uint8_t dek[AES_GCM_KEY_LEN];
+    cryptoRandomBytes(dek, sizeof(dek));
+
+    DB *userDB = dbInit(UserDB, NULL);
+    ASSERT_NOT_NULL(userDB);
+    dbSetDekKey(userDB, dek);
+
+    User u;
+    memset(&u, 0, sizeof(u));
+    memcpy(u.username, "dbkeytest", strlen("dbkeytest") + 1);
+    memcpy(u.nickname, "DBKeyTest", strlen("DBKeyTest") + 1);
+    u.password = strdup("testpass");
+    ASSERT_INT_EQ(createUser(userDB, &u), DB_SUCC);
+    free(u.password);
+
+    /* Get expected CDBKey for later verification. */
+    uint8_t expectedKey[DB_ENC_KEY_LEN];
+    ASSERT_INT_EQ(getCDBKey(userDB, u.uid, expectedKey), DB_SUCC);
+
+    SocketFD sv[2];
+    ASSERT_INT_EQ(makeSocketPair(sv), 0);
+
+    dbClose(userDB); /* child will reopen */
+
+    pid_t child = fork();
+    if (child == 0) {
+        socketClose(&sv[0]);
+        DB *srvDB = dbInit(UserDB, NULL);
+        dbSetDekKey(srvDB, dek);
+
+        AESGCMKey srvKey;
+        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
+
+        Packet pkt;
+        memset(&pkt, 0, sizeof(pkt));
+        ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
+        ASSERT_INT_EQ(pkt.header.messageType, MsgDBKeyReq);
+
+        /* Send CDBKey response. */
+        uint8_t cdbk[DB_ENC_KEY_LEN];
+        ASSERT_INT_EQ(getCDBKey(srvDB, u.uid, cdbk), DB_SUCC);
+        uint32_t srvSeq = 0;
+        ASSERT_INT_EQ(
+            sendEnc(sv[1], &srvKey, &srvSeq, MsgDBKeyResp, cdbk, sizeof(cdbk)),
+            PROTOCOL_SUCC);
+        OPENSSL_cleanse(cdbk, sizeof(cdbk));
+
+        packetClear(&pkt);
+        OPENSSL_cleanse(&srvKey, sizeof(srvKey));
+        dbClose(srvDB);
+        socketClose(&sv[1]);
+        _exit(0);
+    }
+
+    socketClose(&sv[1]);
+    AESGCMKey cliKey;
+    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
+
+    /* Send MsgDBKeyReq (empty payload). */
+    uint32_t cliSeq = 0;
+    ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &cliSeq, MsgDBKeyReq, NULL, 0),
+                  PROTOCOL_SUCC);
+
+    /* Receive MsgDBKeyResp. */
+    Packet rpkt;
+    memset(&rpkt, 0, sizeof(rpkt));
+    ASSERT_INT_EQ(recvDec(sv[0], &cliKey, &rpkt), 0);
+    ASSERT_INT_EQ(rpkt.header.messageType, MsgDBKeyResp);
+    ASSERT_UINT_EQ(rpkt.header.payloadLength, (uint32_t)DB_ENC_KEY_LEN);
+    ASSERT_NOT_NULL(rpkt.payload);
+
+    /* Verify it matches the expected key. */
+    ASSERT_MEM_EQ(rpkt.payload, expectedKey, DB_ENC_KEY_LEN);
+
+    OPENSSL_cleanse(expectedKey, sizeof(expectedKey));
+    OPENSSL_cleanse(&cliKey, sizeof(cliKey));
+    packetClear(&rpkt);
+    socketClose(&sv[0]);
+    waitpid(child, NULL, 0);
+    OPENSSL_cleanse(dek, sizeof(dek));
 }
 
 /* ══════════════════════════════════ Main ══════════════════════════════════ */
@@ -3508,6 +3585,9 @@ int main(void) {
     RUN_TEST(testServerInitKeysFirstRun);
     RUN_TEST(testServerInitKeysSubsequentRun);
     RUN_TEST(testFreshKeysGeneratedFlag);
+
+    /* —— DBKeyReq —— */
+    RUN_TEST(testDBKeyReqHappyPath);
 
     removeDBFiles();
 

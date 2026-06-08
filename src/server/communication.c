@@ -148,12 +148,18 @@ cleanup:
 
 int serverSendEncryptedPacket(ClientSession *cs, MessageType mt,
                               const void *data, size_t dataLen) {
+    if (cs == NULL) {
+        return SERVER_FAIL;
+    }
     int ret = packetSendEncrypted(cs->fd, mt, &cs->seqID, cs->aesKey.key, data,
                                   dataLen);
     return (ret == PROTOCOL_SUCC) ? SERVER_SUCC : SERVER_FAIL;
 }
 
 int serverRecvEncryptedPacket(ClientSession *cs, Packet *out) {
+    if (cs == NULL || out == NULL) {
+        return SERVER_FAIL;
+    }
     int ret = packetRecvEncrypted(cs->fd, out, cs->aesKey.key);
     return (ret == PROTOCOL_SUCC) ? SERVER_SUCC : SERVER_FAIL;
 }

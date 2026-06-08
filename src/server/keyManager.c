@@ -239,6 +239,7 @@ int serverInitKeys(Server *s) {
         printf("%02x", mkKey[i]);
     printf("\n========================================\n");
     printf("Press Enter after you have saved the key...");
+    fflush(stdout);
     (void)getchar();
     printf("\033[2J\033[H");
     fflush(stdout);
