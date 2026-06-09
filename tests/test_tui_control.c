@@ -148,7 +148,7 @@ static void testControlGridConstruct(void) {
 
     controlGridConstruct(&grid, TestHeight, TestWidth, TestY, TestX,
                          LayoutVertical, TestHmargin, TestVmargin,
-                         NULL, dummyCbGrid, dummyCbGrid);
+                         NULL, dummyCbGrid, dummyCbGrid, NULL);
 
     ASSERT_FALSE(grid.base.focusable);
     ASSERT_TRUE(grid.base.isContainer);
