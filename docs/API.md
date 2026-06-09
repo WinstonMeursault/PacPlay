@@ -885,6 +885,7 @@ struct ControlGrid {
     size_t layoutCounter;            // 已布局子控件计数
     size_t layoutAccCol;             // 累计列宽（水平布局用）
     size_t layoutAccRow;             // 累计行高（垂直布局用）
+    void (*layout)(void *self, void *child) // 布局方式（若为 NULL 则使用默认布局方式）
 };
 ```
 
@@ -938,7 +939,7 @@ struct ControlInputBox {
 |------|------|----------|
 | `controlPageConstruct` | `void controlPageConstruct(ControlPage *self)` | 设置 `isPage=true`、`isContainer=true`、`visible=false`（切换至页面后自动设为 true） |
 | `controlButtonConstruct` | `void controlButtonConstruct(ControlButton *self, int height, int width, int y, int x, const char *text, void (*draw)(...), void (*onClick)(...), void (*resize)(...), void (*refresh)(...))` | `text` 为按钮显示文字，`focusable=true` |
-| `controlGridConstruct` | `void controlGridConstruct(ControlGrid *self, int height, int width, int y, int x, GridLayoutMethod layoutMethod, size_t hmargin, size_t vmargin, void (*draw)(...), void (*resize)(...), void (*refresh)(...))` | `isContainer=true`、`focusable=false`，`layoutMethod` 决定子控件排列方向 |
+| `controlGridConstruct` | `void controlGridConstruct(ControlGrid *self, int height, int width, int y, int x, GridLayoutMethod layoutMethod, size_t hmargin, size_t vmargin, void (*draw)(...), void (*resize)(...), void (*refresh)(...), void(*layout)(...))` | `isContainer=true`、`focusable=false`，`layoutMethod` 决定子控件排列方向 |
 | `controlLabelConstruct` | `void controlLabelConstruct(ControlLabel *self, const char *text, int y, int x, void (*draw)(...), void (*resize)(...), void (*refresh)(...))` | `text` 为显示内容，`focusable=false` |
 | `controlInputBoxConstruct` | `void controlInputBoxConstruct(ControlInputBox *self, int width, int y, int x, void (*draw)(...), void (*resize)(...), void (*submit)(...), void (*refresh)(...))` | `focusable=true`、`takeOverInput=false`（获得焦点时自动设为 true）。`submit` 为回车提交回调。`width < 3` 时自动钳位为 3 |
 

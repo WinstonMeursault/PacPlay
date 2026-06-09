@@ -30,9 +30,11 @@
 #include <string.h>
 #include <wchar.h>
 
-static void customBox(WINDOW *handler, const wchar_t *lsRaw, const wchar_t *rsRaw,
-                      const wchar_t *tsRaw, const wchar_t *bsRaw, const wchar_t *tlRaw,
-                      const wchar_t *trRaw, const wchar_t *blRaw, const wchar_t *brRaw);
+static void customBox(WINDOW *handler, const wchar_t *lsRaw,
+                      const wchar_t *rsRaw, const wchar_t *tsRaw,
+                      const wchar_t *bsRaw, const wchar_t *tlRaw,
+                      const wchar_t *trRaw, const wchar_t *blRaw,
+                      const wchar_t *brRaw);
 #define DOUBLE_BOX(handler)                                                    \
     customBox((handler), L"║", L"║", L"═", L"═", L"╔", L"╗", L"╚", L"╝")
 
@@ -60,10 +62,10 @@ const static ControlVTable defaultBtnVtable = {
     .destruct = controlButtonDestruct,
     .draw = controlButtonDraw,
     .msgHandler = controlButtonMsgHandler};
-const static ControlVTable defaultGridVtable = {
-    .destruct = NULL,
-    .draw = controlGridDraw,
-    .msgHandler = controlGridMsgHandler};
+const static ControlVTable defaultGridVtable = {.destruct = NULL,
+                                                .draw = controlGridDraw,
+                                                .msgHandler =
+                                                    controlGridMsgHandler};
 const static ControlVTable defaultLabelVtable = {
     .destruct = controlLabelDestruct,
     .draw = controlLabelDraw,
@@ -73,9 +75,11 @@ const static ControlVTable defaultInputBoxVtable = {
     .draw = controlInputBoxDraw,
     .msgHandler = controlInputBoxMsgHandler};
 
-static void customBox(WINDOW *handler, const wchar_t *lsRaw, const wchar_t *rsRaw,
-                      const wchar_t *tsRaw, const wchar_t *bsRaw, const wchar_t *tlRaw,
-                      const wchar_t *trRaw, const wchar_t *blRaw, const wchar_t *brRaw) {
+static void customBox(WINDOW *handler, const wchar_t *lsRaw,
+                      const wchar_t *rsRaw, const wchar_t *tsRaw,
+                      const wchar_t *bsRaw, const wchar_t *tlRaw,
+                      const wchar_t *trRaw, const wchar_t *blRaw,
+                      const wchar_t *brRaw) {
     cchar_t ls, rs, ts, bs, tl, tr, bl, br;
     setcchar(&ls, lsRaw, A_NORMAL, 0, NULL);
     setcchar(&rs, rsRaw, A_NORMAL, 0, NULL);
@@ -142,10 +146,10 @@ static void controlPageMsgHandler(void *self, TuiMsg msg) {
     switch (msg.type) {
     case MsgResize:
     case MsgRefresh:
-        tuiAppPushMessage((TuiMsg){
-            .type = MsgFetch,
-            .arg1 = {.index = page->index},
-            .arg2 = {.fetchRecv = controlPageRefreshChild}});
+        tuiAppPushMessage(
+            (TuiMsg){.type = MsgFetch,
+                     .arg1 = {.index = page->index},
+                     .arg2 = {.fetchRecv = controlPageRefreshChild}});
         break;
     default:
         break;
@@ -236,7 +240,8 @@ void controlGridConstruct(ControlGrid *self, int height, int width, int y,
                           int x, GridLayoutMethod layoutMethod, size_t hmargin,
                           size_t vmargin, void (*draw)(ControlGrid *),
                           void (*resize)(ControlGrid *self),
-                          void (*refresh)(ControlGrid *self)) {
+                          void (*refresh)(ControlGrid *self),
+                          void (*layout)(void *, void *)) {
     controlConstruct((Control *)self, height, width, y, x, false, true);
     self->base.vtable = defaultGridVtable;
     self->layoutMethod = layoutMethod;
@@ -250,6 +255,11 @@ void controlGridConstruct(ControlGrid *self, int height, int width, int y,
     }
     self->base.commonMsgHandlers.resize = (void (*)(void *))resize;
     self->base.commonMsgHandlers.refresh = (void (*)(void *))refresh;
+    if (layout != NULL) {
+        self->layout = layout;
+    } else {
+        self->layout = controlGridLayout;
+    }
 }
 
 void controlGridDraw(void *self) {
@@ -273,10 +283,10 @@ static void controlGridMsgHandler(void *self, TuiMsg msg) {
         if (grid->base.commonMsgHandlers.resize != NULL) {
             grid->base.commonMsgHandlers.resize(grid);
         }
-        tuiAppPushMessage((TuiMsg){
-            .type = MsgFetch,
-            .arg1 = {.index = grid->base.index},
-            .arg2 = {.fetchRecv = controlGridLayout}});
+        tuiAppPushMessage(
+            (TuiMsg){.type = MsgFetch,
+                     .arg1 = {.index = grid->base.index},
+                     .arg2 = {.fetchRecv = ((ControlGrid *)self)->layout}});
         break;
     default:
         break;
@@ -389,7 +399,8 @@ void controlInputBoxConstruct(ControlInputBox *self, int width, int y, int x,
                   InputBoxMinWidth);
         width = InputBoxMinWidth;
     }
-    controlConstruct((Control *)self, InputBoxMinWidth, width, y, x, true, false);
+    controlConstruct((Control *)self, InputBoxMinWidth, width, y, x, true,
+                     false);
     self->base.vtable = defaultInputBoxVtable;
     if (draw != NULL) {
         self->base.vtable.draw = (void (*)(void *))draw;
@@ -431,7 +442,7 @@ void controlInputBoxDraw(void *self) {
             if (i == box->curLoc) {
                 mvwaddch(box->base.windowHandler, 1, curX,
                          (i == box->curLen ? ' ' : box->buf[i]) |
-                              (box->base.focused ? A_REVERSE : 0));
+                             (box->base.focused ? A_REVERSE : 0));
             } else if (i < box->curLen) {
                 mvwaddch(box->base.windowHandler, 1, curX, box->buf[i]);
             }
@@ -507,8 +518,7 @@ static void controlInputBoxMsgHandler(void *self, TuiMsg msg) {
                 }
             } else if (msg.arg1.input == KEY_DC) {
                 if (box->curLoc < box->curLen) {
-                    memmove(box->buf + box->curLoc,
-                            box->buf + box->curLoc + 1,
+                    memmove(box->buf + box->curLoc, box->buf + box->curLoc + 1,
                             box->curLen - box->curLoc - 1);
                     --box->curLen;
                 }

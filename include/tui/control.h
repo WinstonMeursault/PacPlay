@@ -78,7 +78,11 @@ struct ControlButton {
     void (*onClick)(ControlButton *self);
 };
 
-typedef enum { LayoutVertical = 1, LayoutHorizontal } GridLayoutMethod;
+typedef enum {
+    LayoutVertical = 1,
+    LayoutHorizontal,
+    LayoutNone
+} GridLayoutMethod;
 
 struct ControlGrid {
     Control base;
@@ -90,6 +94,7 @@ struct ControlGrid {
     size_t layoutCounter;
     size_t layoutAccCol;
     size_t layoutAccRow;
+    void (*layout)(void *self, void *child);
 };
 
 struct ControlLabel {
@@ -123,7 +128,8 @@ void controlGridConstruct(ControlGrid *self, int height, int width, int y,
                           int x, GridLayoutMethod layoutMethod, size_t hmargin,
                           size_t vmargin, void (*draw)(ControlGrid *),
                           void (*resize)(ControlGrid *self),
-                          void (*refresh)(ControlGrid *self));
+                          void (*refresh)(ControlGrid *self),
+                          void (*layout)(void *self, void *child));
 void controlGridDraw(void *self);
 
 void controlLabelConstruct(ControlLabel *self, const char *text, int y, int x,
