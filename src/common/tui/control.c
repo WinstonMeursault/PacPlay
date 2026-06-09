@@ -101,11 +101,8 @@ void controlInstantiate(Control *self, Control *parent) {
         // If parent is a derived structure, it also works. Because the base
         // member is always at the first in derived structure.
         self->windowHandler =
-            subwin(((Control *)parent)->windowHandler, self->height,
+            derwin(((Control *)parent)->windowHandler, self->height,
                    self->width, self->y, self->x);
-    }
-    if (self->windowHandler == NULL) {
-        LOG_ERROR("subwin failed for control at index %zu", self->index);
     }
 }
 
@@ -389,7 +386,7 @@ static void controlLabelMsgHandler(void *self, TuiMsg msg) {
 }
 
 void controlInputBoxConstruct(ControlInputBox *self, int width, int y, int x,
-                              void (*draw)(ControlInputBox *),
+                              bool hideContent, void (*draw)(ControlInputBox *),
                               void (*resize)(ControlInputBox *self),
                               void (*submit)(ControlInputBox *self),
                               void (*refresh)(ControlInputBox *self)) {
@@ -415,6 +412,7 @@ void controlInputBoxConstruct(ControlInputBox *self, int width, int y, int x,
     self->curLen = 0;
     self->viewBegin = 0;
     self->curLoc = 0;
+    self->hideContent = hideContent;
     self->submit = submit;
 }
 
@@ -439,12 +437,13 @@ void controlInputBoxDraw(void *self) {
              i <= box->curLen;
              ++i) {
             int curX = 1 + (int)i - (int)box->viewBegin;
+            char dest = box->hideContent ? '*' : box->buf[i];
             if (i == box->curLoc) {
                 mvwaddch(box->base.windowHandler, 1, curX,
-                         (i == box->curLen ? ' ' : box->buf[i]) |
+                         (i == box->curLen ? ' ' : dest) |
                              (box->base.focused ? A_REVERSE : 0));
             } else if (i < box->curLen) {
-                mvwaddch(box->base.windowHandler, 1, curX, box->buf[i]);
+                mvwaddch(box->base.windowHandler, 1, curX, dest);
             }
         }
     }

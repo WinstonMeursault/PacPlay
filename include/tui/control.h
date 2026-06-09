@@ -108,6 +108,7 @@ struct ControlInputBox {
     size_t curLen;
     size_t viewBegin;
     size_t curLoc;
+    bool hideContent;
     void (*submit)(ControlInputBox *self);
 };
 
@@ -139,7 +140,7 @@ void controlLabelConstruct(ControlLabel *self, const char *text, int y, int x,
 void controlLabelDraw(void *self);
 
 void controlInputBoxConstruct(ControlInputBox *self, int width, int y, int x,
-                              void (*draw)(ControlInputBox *),
+                              bool hideContent, void (*draw)(ControlInputBox *),
                               void (*resize)(ControlInputBox *self),
                               void (*submit)(ControlInputBox *self),
                               void (*refresh)(ControlInputBox *self));

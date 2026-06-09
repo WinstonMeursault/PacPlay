@@ -909,6 +909,7 @@ struct ControlInputBox {
     size_t curLen;                     // 当前已输入字符数
     size_t viewBegin;                  // 可视区域起始偏移（水平滚动）
     size_t curLoc;                     // 光标位置（字符索引）
+    bool hideContent;                  // 是否隐藏输入内容（用符号 '*' 代替）
     void (*submit)(ControlInputBox *self);  // 回车提交回调
 };
 ```
@@ -941,7 +942,7 @@ struct ControlInputBox {
 | `controlButtonConstruct` | `void controlButtonConstruct(ControlButton *self, int height, int width, int y, int x, const char *text, void (*draw)(...), void (*onClick)(...), void (*resize)(...), void (*refresh)(...))` | `text` 为按钮显示文字，`focusable=true` |
 | `controlGridConstruct` | `void controlGridConstruct(ControlGrid *self, int height, int width, int y, int x, GridLayoutMethod layoutMethod, size_t hmargin, size_t vmargin, void (*draw)(...), void (*resize)(...), void (*refresh)(...), void(*layout)(...))` | `isContainer=true`、`focusable=false`，`layoutMethod` 决定子控件排列方向 |
 | `controlLabelConstruct` | `void controlLabelConstruct(ControlLabel *self, const char *text, int y, int x, void (*draw)(...), void (*resize)(...), void (*refresh)(...))` | `text` 为显示内容，`focusable=false` |
-| `controlInputBoxConstruct` | `void controlInputBoxConstruct(ControlInputBox *self, int width, int y, int x, void (*draw)(...), void (*resize)(...), void (*submit)(...), void (*refresh)(...))` | `focusable=true`、`takeOverInput=false`（获得焦点时自动设为 true）。`submit` 为回车提交回调。`width < 3` 时自动钳位为 3 |
+| `controlInputBoxConstruct` | `void controlInputBoxConstruct(ControlInputBox *self, int width, int y, int x, bool hideContent, void (*draw)(...), void (*resize)(...), void (*submit)(...), void (*refresh)(...))` | `focusable=true`、`takeOverInput=false`（获得焦点时自动设为 true）。`submit` 为回车提交回调。`width < 3` 时自动钳位为 3 |
 
 **内存分配**：`text`（Button / Label）通过内部 `strdup` 分配，`buf`（InputBox）通过内部 `malloc` 分配，均在 `controlDeinstantiate` → `vtable.destruct` 中释放。调用者不负责释放这些资源。
 
