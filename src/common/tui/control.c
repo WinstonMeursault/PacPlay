@@ -330,12 +330,15 @@ static void controlGridLayout(void *self, void *child) {
     }
 }
 
-void controlLabelConstruct(ControlLabel *self, const char *text, int y, int x,
+// maxWidth == 0 to use inital text length
+void controlLabelConstruct(ControlLabel *self, const char *text,
+                           size_t maxWidth, int y, int x,
                            void (*draw)(ControlLabel *),
                            void (*resize)(ControlLabel *self),
                            void (*refresh)(ControlLabel *self)) {
     size_t len = strlen(text);
-    controlConstruct((Control *)self, 1, len, y, x, false, false);
+    controlConstruct((Control *)self, 1, (maxWidth == 0 ? len : maxWidth), y, x,
+                     false, false);
     self->base.vtable = defaultLabelVtable;
     if (draw != NULL) {
         self->base.vtable.draw = (void (*)(void *))draw;

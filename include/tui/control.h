@@ -133,8 +133,8 @@ void controlGridConstruct(ControlGrid *self, int height, int width, int y,
                           void (*layout)(void *self, void *child));
 void controlGridDraw(void *self);
 
-void controlLabelConstruct(ControlLabel *self, const char *text, int y, int x,
-                           void (*draw)(ControlLabel *),
+void controlLabelConstruct(ControlLabel *self, const char *text, size_t maxWidth,
+                           int y, int x, void (*draw)(ControlLabel *),
                            void (*resize)(ControlLabel *self),
                            void (*refresh)(ControlLabel *self));
 void controlLabelDraw(void *self);
