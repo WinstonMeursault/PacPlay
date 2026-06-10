@@ -29,6 +29,8 @@
 #define INPUTBOX_BUF_MAX_LEN 128
 #define LABEL_TEXT_MAXLEN 128
 #define TEXTBOX_TEXT_MAXLEN 4096
+#define SCROLLTEXTBOX_TEXT_MAXLEN 65536
+#define SCROLLTEXTBOX_DEFAULT_MAX_LINES 100
 
 #include "ncurses_wrapper.h"
 #include "tuimsg.h"
@@ -43,6 +45,7 @@ typedef struct ControlGrid ControlGrid;
 typedef struct ControlLabel ControlLabel;
 typedef struct ControlInputBox ControlInputBox;
 typedef struct ControlTextBox ControlTextBox;
+typedef struct ControlScrollTextBox ControlScrollTextBox;
 
 struct ControlVTable {
     void (*destruct)(void *self);
@@ -121,6 +124,11 @@ struct ControlTextBox {
     size_t viewBegin;
 };
 
+struct ControlScrollTextBox {
+    ControlTextBox base;
+    size_t maxLines;
+};
+
 void controlInstantiate(Control *self, Control *parent);
 void controlDeinstantiate(Control *self);
 
@@ -161,5 +169,12 @@ void controlTextBoxConstruct(ControlTextBox *self, int height, int width,
                              void (*resize)(ControlTextBox *self),
                              void (*refresh)(ControlTextBox *self));
 void controlTextBoxDraw(void *self);
+
+void controlScrollTextBoxConstruct(ControlScrollTextBox *self, int height,
+                                   int width, int y, int x, size_t maxLines,
+                                   void (*draw)(ControlScrollTextBox *),
+                                   void (*resize)(ControlScrollTextBox *self),
+                                   void (*refresh)(ControlScrollTextBox *self));
+void controlScrollTextBoxAppend(ControlScrollTextBox *self, const char *text);
 
 #endif // CONTROL_H

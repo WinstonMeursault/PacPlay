@@ -86,6 +86,10 @@ const static ControlVTable defaultTextBoxVtable = {
     .destruct = controlTextBoxDestruct,
     .draw = controlTextBoxDraw,
     .msgHandler = controlTextBoxMsgHandler};
+const static ControlVTable defaultScrollTextBoxVtable = {
+    .destruct = controlTextBoxDestruct,
+    .draw = controlTextBoxDraw,
+    .msgHandler = controlTextBoxMsgHandler};
 
 static void customBox(WINDOW *handler, const wchar_t *lsRaw,
                       const wchar_t *rsRaw, const wchar_t *tsRaw,
@@ -800,5 +804,125 @@ static void controlTextBoxMsgHandler(void *self, TuiMsg msg) {
     }
     default:
         break;
+    }
+}
+
+void controlScrollTextBoxConstruct(ControlScrollTextBox *self, int height,
+                                   int width, int y, int x, size_t maxLines,
+                                   void (*draw)(ControlScrollTextBox *),
+                                   void (*resize)(ControlScrollTextBox *self),
+                                   void (*refresh)(ControlScrollTextBox *self)) {
+    enum {
+        ScrollTextBoxMinHeight = 3,
+        ScrollTextBoxMinWidth = 3
+    };
+    if (height < ScrollTextBoxMinHeight) {
+        height = ScrollTextBoxMinHeight;
+    }
+    if (width < ScrollTextBoxMinWidth) {
+        width = ScrollTextBoxMinWidth;
+    }
+    controlConstruct((Control *)self, height, width, y, x, true, false);
+    self->base.base.vtable = defaultScrollTextBoxVtable;
+    if (draw != NULL) {
+        self->base.base.vtable.draw = (void (*)(void *))draw;
+    }
+    self->base.base.commonMsgHandlers.resize = (void (*)(void *))resize;
+    self->base.base.commonMsgHandlers.refresh = (void (*)(void *))refresh;
+    self->base.text = malloc(sizeof(char) * SCROLLTEXTBOX_TEXT_MAXLEN);
+    if (self->base.text == NULL) {
+        LOG_ERROR("malloc failed for scroll text box text");
+        return;
+    }
+    self->base.text[0] = '\0';
+    self->base.textLen = 0;
+    self->base.viewBegin = 0;
+    self->maxLines =
+        (maxLines > 0) ? maxLines : SCROLLTEXTBOX_DEFAULT_MAX_LINES;
+}
+
+void controlScrollTextBoxAppend(ControlScrollTextBox *self, const char *text) {
+    ControlTextBox *box = &self->base;
+    size_t appendLen;
+
+    if (text == NULL || text[0] == '\0') {
+        return;
+    }
+
+    appendLen = strlen(text);
+
+    while (box->textLen + appendLen >= SCROLLTEXTBOX_TEXT_MAXLEN &&
+           box->textLen > 0) {
+        const char *nl = memchr(box->text, '\n', box->textLen);
+        if (nl != NULL) {
+            size_t trimLen = (size_t)(nl - box->text) + 1;
+            size_t remaining = box->textLen - trimLen;
+            memmove(box->text, box->text + trimLen, remaining);
+            box->textLen = remaining;
+            box->text[box->textLen] = '\0';
+        } else {
+            box->textLen = 0;
+            box->text[0] = '\0';
+            break;
+        }
+    }
+
+    {
+        size_t spaceLeft = SCROLLTEXTBOX_TEXT_MAXLEN - box->textLen - 1;
+        if (spaceLeft == 0) {
+            return;
+        }
+        if (appendLen > spaceLeft) {
+            appendLen = spaceLeft;
+        }
+    }
+
+    memcpy(box->text + box->textLen, text, appendLen);
+    box->textLen += appendLen;
+    box->text[box->textLen] = '\0';
+
+    {
+        size_t lineCount = 0;
+        const char *p = box->text;
+        const char *end = box->text + box->textLen;
+        while (p < end) {
+            if (*p == '\n') {
+                lineCount++;
+            }
+            p++;
+        }
+        if (box->textLen > 0 && box->text[box->textLen - 1] != '\n') {
+            lineCount++;
+        }
+
+        while (lineCount > self->maxLines && box->textLen > 0) {
+            const char *nl = memchr(box->text, '\n', box->textLen);
+            if (nl != NULL) {
+                size_t trimLen = (size_t)(nl - box->text) + 1;
+                size_t remaining = box->textLen - trimLen;
+                memmove(box->text, box->text + trimLen, remaining);
+                box->textLen = remaining;
+                box->text[box->textLen] = '\0';
+            } else {
+                box->textLen = 0;
+                box->text[0] = '\0';
+                break;
+            }
+            lineCount--;
+        }
+    }
+
+    if (box->base.windowHandler != NULL) {
+        int availWidth = box->base.width - 2;
+        int visibleLines = box->base.height - 2;
+        if (availWidth >= 1 && visibleLines >= 1) {
+            size_t totalLines =
+                textBoxCountVisualLines(box->text, box->textLen, availWidth);
+            size_t maxView = (totalLines > (size_t)visibleLines)
+                                 ? totalLines - (size_t)visibleLines
+                                 : 0;
+            box->viewBegin = maxView;
+        }
+        controlTextBoxDraw(box);
     }
 }

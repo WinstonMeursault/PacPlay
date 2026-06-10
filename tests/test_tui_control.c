@@ -191,7 +191,7 @@ static void testControlLabelConstruct(void) {
     ControlLabel label;
     memset(&label, 0, sizeof(label));
 
-    controlLabelConstruct(&label, "PacPlay", TestY, TestX,
+    controlLabelConstruct(&label, "PacPlay", DefaultIndex, TestY, TestX,
                           NULL, dummyCbLabel, dummyCbLabel);
 
     ASSERT_FALSE(label.base.focusable);
@@ -705,7 +705,7 @@ static void testControlButtonDestructDoubleSafe(void) {
 static void testControlLabelDestructDoubleSafe(void) {
     ControlLabel label;
     memset(&label, 0, sizeof(label));
-    controlLabelConstruct(&label, "X", TestY, TestX,
+    controlLabelConstruct(&label, "X", DefaultIndex, TestY, TestX,
                           NULL, dummyCbLabel, dummyCbLabel);
     free(label.text);
     label.text = NULL;
@@ -729,6 +729,242 @@ static void testControlTextBoxDestructDoubleSafe(void) {
                             NULL, dummyCbTextBox, dummyCbTextBox);
     free(box.text);
     box.text = NULL;
+}
+
+/* ────────────────── ControlScrollTextBox tests ───────────────────────────── */
+
+enum {
+    ScrollTestWidth = 30,
+    ScrollTestHeight = 5,
+    ScrollTestVisible = 3,
+    ScrollMaxLines = 3,
+    ScrollMaxLinesSmall = 2,
+    ScrollDefaultMax = 100,
+    ScrollMinH = 3,
+    ScrollMinW = 3,
+    ScrollBuf65536 = 65536,
+    ScrollLineChar = '\n'
+};
+
+static void dummyCbScrollBox(ControlScrollTextBox *self) { (void)self; }
+
+static void testScrollTextBoxConstruct(void) {
+    ControlScrollTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
+                                  TestY, TestX, ScrollMaxLines,
+                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+
+    ASSERT_TRUE(box.base.base.focusable);
+    ASSERT_FALSE(box.base.base.isContainer);
+    ASSERT_FALSE(box.base.base.focused);
+    ASSERT_FALSE(box.base.base.isPage);
+    ASSERT_FALSE(box.base.base.takeOverInput);
+    ASSERT_TRUE(box.base.base.visible);
+    ASSERT_INT_EQ(box.base.base.height, ScrollTestHeight);
+    ASSERT_INT_EQ(box.base.base.width, ScrollTestWidth);
+    ASSERT_INT_EQ(box.base.base.y, TestY);
+    ASSERT_INT_EQ(box.base.base.x, TestX);
+    ASSERT_NOT_NULL(box.base.text);
+    ASSERT_UINT_EQ(box.base.textLen, DefaultIndex);
+    ASSERT_UINT_EQ(box.base.viewBegin, DefaultIndex);
+    ASSERT_UINT_EQ(box.maxLines, (size_t)ScrollMaxLines);
+    ASSERT_NOT_NULL(box.base.base.vtable.draw);
+    ASSERT_NOT_NULL(box.base.base.vtable.msgHandler);
+    ASSERT_NOT_NULL(box.base.base.vtable.destruct);
+    ASSERT_NOT_NULL(box.base.base.commonMsgHandlers.resize);
+    ASSERT_NOT_NULL(box.base.base.commonMsgHandlers.refresh);
+    ASSERT_UINT_EQ(box.base.base.index, DefaultIndex);
+    ASSERT_UINT_EQ(box.base.base.childCount, DefaultIndex);
+    ASSERT_NULL(box.base.base.windowHandler);
+
+    free(box.base.text);
+}
+
+static void testScrollTextBoxMinSizeClamp(void) {
+    ControlScrollTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    controlScrollTextBoxConstruct(&box, IntOne, IntOne, TestY, TestX,
+                                  ScrollMaxLines,
+                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+
+    ASSERT_INT_EQ(box.base.base.height, ScrollMinH);
+    ASSERT_INT_EQ(box.base.base.width, ScrollMinW);
+
+    free(box.base.text);
+}
+
+static void testScrollTextBoxMaxLinesZero(void) {
+    ControlScrollTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
+                                  TestY, TestX, IntZero,
+                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+
+    ASSERT_UINT_EQ(box.maxLines, (size_t)ScrollDefaultMax);
+
+    free(box.base.text);
+}
+
+static void testScrollTextBoxAppendEmpty(void) {
+    ControlScrollTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
+                                  TestY, TestX, ScrollMaxLines,
+                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+
+    controlScrollTextBoxAppend(&box, "");
+    ASSERT_UINT_EQ(box.base.textLen, DefaultIndex);
+    ASSERT_STR_EQ(box.base.text, "");
+
+    controlScrollTextBoxAppend(&box, NULL);
+    ASSERT_UINT_EQ(box.base.textLen, DefaultIndex);
+
+    free(box.base.text);
+}
+
+static void testScrollTextBoxAppendSimple(void) {
+    ControlScrollTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
+                                  TestY, TestX, ScrollMaxLines,
+                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+
+    controlScrollTextBoxAppend(&box, "hello");
+    ASSERT_STR_EQ(box.base.text, "hello");
+    ASSERT_UINT_EQ(box.base.textLen, (size_t)((int)strlen("hello")));
+
+    free(box.base.text);
+}
+
+static void testScrollTextBoxAppendAccumulate(void) {
+    ControlScrollTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
+                                  TestY, TestX, ScrollMaxLines,
+                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+
+    controlScrollTextBoxAppend(&box, "hello");
+    controlScrollTextBoxAppend(&box, " world");
+    ASSERT_STR_EQ(box.base.text, "hello world");
+
+    free(box.base.text);
+}
+
+static void testScrollTextBoxAppendNewlines(void) {
+    ControlScrollTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
+                                  TestY, TestX, ScrollMaxLines,
+                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+
+    controlScrollTextBoxAppend(&box, "line1\nline2\nline3");
+    ASSERT_STR_EQ(box.base.text, "line1\nline2\nline3");
+
+    free(box.base.text);
+}
+
+static void testScrollTextBoxAppendExceedMaxLines(void) {
+    ControlScrollTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
+                                  TestY, TestX, ScrollMaxLines,
+                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+
+    controlScrollTextBoxAppend(&box, "a\nb\nc\nd\ne");
+    ASSERT_STR_EQ(box.base.text, "c\nd\ne");
+
+    free(box.base.text);
+}
+
+static void testScrollTextBoxAppendExactMaxLines(void) {
+    ControlScrollTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
+                                  TestY, TestX, ScrollMaxLines,
+                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+
+    controlScrollTextBoxAppend(&box, "a\nb\nc");
+    ASSERT_STR_EQ(box.base.text, "a\nb\nc");
+
+    free(box.base.text);
+}
+
+static void testScrollTextBoxAppendIncrementalTrim(void) {
+    ControlScrollTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
+                                  TestY, TestX, ScrollMaxLinesSmall,
+                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+
+    controlScrollTextBoxAppend(&box, "line1\n");
+    ASSERT_STR_EQ(box.base.text, "line1\n");
+
+    controlScrollTextBoxAppend(&box, "line2\n");
+    ASSERT_STR_EQ(box.base.text, "line1\nline2\n");
+
+    controlScrollTextBoxAppend(&box, "line3");
+    ASSERT_STR_EQ(box.base.text, "line2\nline3");
+
+    free(box.base.text);
+}
+
+static void testScrollTextBoxAppendOnlyNewlines(void) {
+    ControlScrollTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
+                                  TestY, TestX, ScrollMaxLines,
+                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+
+    controlScrollTextBoxAppend(&box, "\n\n\n");
+    ASSERT_UINT_EQ(box.base.textLen, (size_t)ScrollMaxLines);
+    ASSERT_TRUE(box.base.text[0] == ScrollLineChar);
+    ASSERT_TRUE(box.base.text[1] == ScrollLineChar);
+    ASSERT_TRUE(box.base.text[2] == ScrollLineChar);
+
+    free(box.base.text);
+}
+
+static void testScrollTextBoxDestructDoubleSafe(void) {
+    ControlScrollTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
+                                  TestY, TestX, ScrollMaxLines,
+                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+    free(box.base.text);
+    box.base.text = NULL;
+}
+
+static void testScrollTextBoxAppendVeryLongLine(void) {
+    ControlScrollTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
+                                  TestY, TestX, ScrollMaxLinesSmall,
+                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+
+    char longBuf[ScrollBuf65536 + (size_t)IntOne];
+    memset(longBuf, 'X', ScrollBuf65536);
+    longBuf[ScrollBuf65536] = '\0';
+
+    controlScrollTextBoxAppend(&box, longBuf);
+    ASSERT_UINT_EQ(box.base.textLen,
+                   (size_t)(SCROLLTEXTBOX_TEXT_MAXLEN - 1));
+    ASSERT_TRUE(box.base.text[0] == 'X');
+
+    free(box.base.text);
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -793,6 +1029,25 @@ int main(void) {
 
     /* TextBox focus */
     RUN_TEST(testTextBoxFocusToggle);
+
+    /* ScrollTextBox construction */
+    RUN_TEST(testScrollTextBoxConstruct);
+    RUN_TEST(testScrollTextBoxMinSizeClamp);
+    RUN_TEST(testScrollTextBoxMaxLinesZero);
+
+    /* ScrollTextBox append */
+    RUN_TEST(testScrollTextBoxAppendEmpty);
+    RUN_TEST(testScrollTextBoxAppendSimple);
+    RUN_TEST(testScrollTextBoxAppendAccumulate);
+    RUN_TEST(testScrollTextBoxAppendNewlines);
+    RUN_TEST(testScrollTextBoxAppendExceedMaxLines);
+    RUN_TEST(testScrollTextBoxAppendExactMaxLines);
+    RUN_TEST(testScrollTextBoxAppendIncrementalTrim);
+    RUN_TEST(testScrollTextBoxAppendOnlyNewlines);
+    RUN_TEST(testScrollTextBoxAppendVeryLongLine);
+
+    /* ScrollTextBox destruct safety */
+    RUN_TEST(testScrollTextBoxDestructDoubleSafe);
 
     return TEST_REPORT();
 }
