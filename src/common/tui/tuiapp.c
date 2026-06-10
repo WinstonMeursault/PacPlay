@@ -45,28 +45,28 @@
         }                                                                      \
     } while (0)
 
-#define CHECKED_ARRAY_INDEX_GET(arr, idx, ptr)                           \
-    do {                                                                 \
-        if (arrayIndexGet((arr), (idx), (ptr)) != ContainerSucc) {       \
-            LOG_FATAL("BUG: array index out of bounds");                 \
-            abort();                                                     \
-        }                                                                \
+#define CHECKED_ARRAY_INDEX_GET(arr, idx, ptr)                                 \
+    do {                                                                       \
+        if (arrayIndexGet((arr), (idx), (ptr)) != ContainerSucc) {             \
+            LOG_FATAL("BUG: array index out of bounds");                       \
+            abort();                                                           \
+        }                                                                      \
     } while (0)
 
-#define CHECKED_QUEUE_TUI_MSG_FRONT(q, ptr)                           \
-    do {                                                              \
-        if (queueTuiMsgFront((q), (ptr)) != ContainerSucc) {          \
-            LOG_FATAL("BUG: message queue front out of bounds");      \
-            abort();                                                  \
-        }                                                             \
+#define CHECKED_QUEUE_TUI_MSG_FRONT(q, ptr)                                    \
+    do {                                                                       \
+        if (queueTuiMsgFront((q), (ptr)) != ContainerSucc) {                   \
+            LOG_FATAL("BUG: message queue front out of bounds");               \
+            abort();                                                           \
+        }                                                                      \
     } while (0)
 
-#define CHECKED_QUEUE_INDEX_FRONT(q, ptr)                           \
-    do {                                                            \
-        if (queueIndexFront((q), (ptr)) != ContainerSucc) {         \
-            LOG_FATAL("BUG: index queue front out of bounds");      \
-            abort();                                                \
-        }                                                           \
+#define CHECKED_QUEUE_INDEX_FRONT(q, ptr)                                      \
+    do {                                                                       \
+        if (queueIndexFront((q), (ptr)) != ContainerSucc) {                    \
+            LOG_FATAL("BUG: index queue front out of bounds");                 \
+            abort();                                                           \
+        }                                                                      \
     } while (0)
 
 typedef size_t Index;
@@ -154,8 +154,8 @@ void tuiAppPushMessage(TuiMsg msg) {
 }
 
 void tuiAppInit() {
-    if (arrayControlRegEntryInit(&tuiApp.controlRegistry, USE_DEFAULT_CAPACITY) !=
-            ContainerSucc ||
+    if (arrayControlRegEntryInit(&tuiApp.controlRegistry,
+                                 USE_DEFAULT_CAPACITY) != ContainerSucc ||
         arrayIndexInit(&tuiApp.navChainCache, USE_DEFAULT_CAPACITY) !=
             ContainerSucc ||
         queueTuiMsgInit(&tuiApp.msgQueue, USE_DEFAULT_CAPACITY) !=
@@ -237,11 +237,10 @@ void tuiAppControlRegister(Control *entry, Control *parent) {
     if (cursor->child == 0) {
         cursor->child = entry->index;
     } else {
-        CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, cursor->child,
-                                  &cursor);
+        CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, cursor->child, &cursor);
         while (cursor->sibling != 0) {
             CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, cursor->sibling,
-                                      &cursor);
+                                   &cursor);
         }
         cursor->sibling = entry->index;
     }
@@ -303,8 +302,8 @@ static void tuiAppInput() {
                     (TuiMsg){.type = MsgMouse,
                              .arg1 = {.index = target},
                              .arg2 = {.input = (event.bstate & BUTTON4_PRESSED)
-                                                  ? BUTTON4_PRESSED
-                                                  : BUTTON5_PRESSED}});
+                                                   ? BUTTON4_PRESSED
+                                                   : BUTTON5_PRESSED}});
             }
         }
         return;
@@ -312,7 +311,7 @@ static void tuiAppInput() {
 
     ControlRegEntry *cur;
     CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, tuiApp.userCursor.index,
-                              &cur);
+                           &cur);
     if (cur->ptr != NULL && cur->ptr->takeOverInput && ch != KEY_RESIZE) {
         tuiAppPushMessage((TuiMsg){.type = MsgInput, .arg1 = {.input = ch}});
         return;
@@ -341,7 +340,8 @@ static void tuiAppRender() {
     arrayIndexPushBack(&gRenderStk, tuiApp.curRoot);
     while (arrayIndexSize(&gRenderStk) > 0) {
         Index curIndex;
-        CHECKED_ARRAY_INDEX_GET(&gRenderStk, arrayIndexSize(&gRenderStk) - 1, &curIndex);
+        CHECKED_ARRAY_INDEX_GET(&gRenderStk, arrayIndexSize(&gRenderStk) - 1,
+                                &curIndex);
         arrayIndexPopBack(&gRenderStk);
         CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, curIndex, &curEntry);
         if (curIndex != 0 && curEntry->ptr->vtable.draw != NULL &&
@@ -351,7 +351,8 @@ static void tuiAppRender() {
         if (curIndex != tuiApp.curRoot && curEntry->sibling != 0) {
             arrayIndexPushBack(&gRenderStk, curEntry->sibling);
         }
-        if (curEntry->child != 0) {
+        if (curEntry->child != 0 && curEntry->ptr != NULL &&
+            curEntry->ptr->visible) {
             arrayIndexPushBack(&gRenderStk, curEntry->child);
         }
     }
@@ -375,7 +376,7 @@ static void tuiAppMsgHandle() {
         case MsgFocusLeave: {
             ControlRegEntry *cur;
             CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, msg.arg1.index,
-                                      &cur);
+                                   &cur);
             if (cur->ptr != NULL && cur->ptr->vtable.msgHandler != NULL) {
                 cur->ptr->vtable.msgHandler(cur->ptr, msg);
             }
@@ -384,7 +385,7 @@ static void tuiAppMsgHandle() {
         case MsgMouse: {
             ControlRegEntry *cur;
             CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, msg.arg1.index,
-                                      &cur);
+                                   &cur);
             if (cur->ptr != NULL && cur->ptr->vtable.msgHandler != NULL) {
                 cur->ptr->vtable.msgHandler(cur->ptr, msg);
             }
@@ -393,7 +394,7 @@ static void tuiAppMsgHandle() {
         case MsgInput: {
             ControlRegEntry *cur;
             CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry,
-                                      tuiApp.userCursor.index, &cur);
+                                   tuiApp.userCursor.index, &cur);
             if (cur->ptr != NULL && cur->ptr->vtable.msgHandler != NULL) {
                 cur->ptr->vtable.msgHandler(cur->ptr, msg);
             }
@@ -408,11 +409,11 @@ static void tuiAppMsgHandle() {
             arrayIndexPushBack(&gRenderStk, tuiApp.curRoot);
             while (arrayIndexSize(&gRenderStk) > 0) {
                 Index curIndex;
-                CHECKED_ARRAY_INDEX_GET(&gRenderStk, arrayIndexSize(&gRenderStk) - 1,
-                              &curIndex);
+                CHECKED_ARRAY_INDEX_GET(
+                    &gRenderStk, arrayIndexSize(&gRenderStk) - 1, &curIndex);
                 arrayIndexPopBack(&gRenderStk);
                 CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, curIndex,
-                                          &curEntry);
+                                       &curEntry);
                 if (curEntry->ptr != NULL &&
                     curEntry->ptr->vtable.msgHandler != NULL) {
                     curEntry->ptr->vtable.msgHandler(curEntry->ptr, msg);
@@ -429,12 +430,11 @@ static void tuiAppMsgHandle() {
         case MsgFetch: {
             ControlRegEntry *container;
             CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, msg.arg1.index,
-                                      &container);
+                                   &container);
             Index curIdx = container->child;
             ControlRegEntry *cur;
             while (curIdx != 0) {
-                CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, curIdx,
-                                          &cur);
+                CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, curIdx, &cur);
                 msg.arg2.fetchRecv(container->ptr, cur->ptr);
                 curIdx = cur->sibling;
             }
@@ -458,7 +458,7 @@ static void tuiAppChangeRoot(Index root) {
             CHECKED_QUEUE_INDEX_FRONT(&q, &curIndex);
             queueIndexPop(&q);
             CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, curIndex,
-                                      &curEntry);
+                                   &curEntry);
             if (curIndex != 0) {
                 controlDeinstantiate(curEntry->ptr);
             }
@@ -468,7 +468,7 @@ static void tuiAppChangeRoot(Index root) {
             if (curEntry->sibling != 0) {
                 queueIndexPush(&q, curEntry->sibling);
                 CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry,
-                                          curEntry->sibling, &curEntry);
+                                       curEntry->sibling, &curEntry);
             }
         }
     }
@@ -476,7 +476,7 @@ static void tuiAppChangeRoot(Index root) {
     queueIndexPush(&q, tuiApp.curRoot);
     if (tuiApp.curRoot != 0) {
         CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, tuiApp.curRoot,
-                                  &curEntry);
+                               &curEntry);
         controlInstantiate(curEntry->ptr, NULL);
     }
     while (!queueIndexIsEmpty(&q)) {
@@ -491,7 +491,7 @@ static void tuiAppChangeRoot(Index root) {
                 ControlRegEntry *child;
                 queueIndexPush(&q, childIdx);
                 CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, childIdx,
-                                          &child);
+                                       &child);
                 controlInstantiate(child->ptr, parent->ptr);
                 childIdx = child->sibling;
             }
@@ -509,16 +509,18 @@ static void tuiAppRefreshNavChain() {
     arrayIndexPushBack(&gRenderStk, tuiApp.curRoot);
     while (arrayIndexSize(&gRenderStk) > 0) {
         Index curIndex;
-        CHECKED_ARRAY_INDEX_GET(&gRenderStk, arrayIndexSize(&gRenderStk) - 1, &curIndex);
+        CHECKED_ARRAY_INDEX_GET(&gRenderStk, arrayIndexSize(&gRenderStk) - 1,
+                                &curIndex);
         arrayIndexPopBack(&gRenderStk);
         CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, curIndex, &curEntry);
-        if (curIndex != 0 && curEntry->ptr->focusable) {
+        if (curIndex != 0 && curEntry->ptr->focusable &&
+            curEntry->ptr->visible) {
             arrayIndexPushBack(&tuiApp.navChainCache, curIndex);
         }
         if (curIndex != tuiApp.curRoot && curEntry->sibling != 0) {
             arrayIndexPushBack(&gRenderStk, curEntry->sibling);
         }
-        if (curEntry->child != 0) {
+        if (curEntry->child != 0 && curEntry->ptr->visible) {
             arrayIndexPushBack(&gRenderStk, curEntry->child);
         }
     }
@@ -530,13 +532,14 @@ static void tuiAppRefreshNavChain() {
     // correct the real index to registry
     Index tmp;
     bool found = false;
-    CHECKED_ARRAY_INDEX_GET(&tuiApp.navChainCache, tuiApp.userCursor.indexOfCache, &tmp);
+    CHECKED_ARRAY_INDEX_GET(&tuiApp.navChainCache,
+                            tuiApp.userCursor.indexOfCache, &tmp);
     if (tmp != tuiApp.userCursor.index) {
         ControlRegEntry *cur;
         // The root is the only entry who has NULL ptr
         if (tuiApp.userCursor.index != 0) {
             CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry,
-                                      tuiApp.userCursor.index, &cur);
+                                   tuiApp.userCursor.index, &cur);
             cur->ptr->focused = false;
             tuiAppPushMessage(
                 (TuiMsg){.type = MsgFocusLeave,
@@ -553,11 +556,12 @@ static void tuiAppRefreshNavChain() {
         }
         if (!found) {
             tuiApp.userCursor.indexOfCache = 0;
-            CHECKED_ARRAY_INDEX_GET(&tuiApp.navChainCache, tuiApp.userCursor.indexOfCache,
-                          &tuiApp.userCursor.index);
+            CHECKED_ARRAY_INDEX_GET(&tuiApp.navChainCache,
+                                    tuiApp.userCursor.indexOfCache,
+                                    &tuiApp.userCursor.index);
         }
-        CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry,
-                                  tuiApp.userCursor.index, &cur);
+        CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, tuiApp.userCursor.index,
+                               &cur);
         cur->ptr->focused = true;
         tuiAppPushMessage((TuiMsg){.type = MsgFocusEnter,
                                    .arg1 = {.index = tuiApp.userCursor.index}});
@@ -569,10 +573,10 @@ static void tuiAppNavigate(bool isBack) {
     Index nextIdx = tuiApp.userCursor.indexOfCache;
 
     CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, tuiApp.userCursor.index,
-                              &cur);
+                           &cur);
     cur->ptr->focused = false;
     tuiAppPushMessage((TuiMsg){.type = MsgFocusLeave,
-                                .arg1 = {.index = tuiApp.userCursor.index}});
+                               .arg1 = {.index = tuiApp.userCursor.index}});
 
     size_t startIdx = nextIdx;
     do {
@@ -603,10 +607,11 @@ static void tuiAppNavigate(bool isBack) {
     } while (!cur->ptr->visible);
 
     tuiApp.userCursor.indexOfCache = nextIdx;
-    CHECKED_ARRAY_INDEX_GET(&tuiApp.navChainCache, tuiApp.userCursor.indexOfCache,
-                  &tuiApp.userCursor.index);
+    CHECKED_ARRAY_INDEX_GET(&tuiApp.navChainCache,
+                            tuiApp.userCursor.indexOfCache,
+                            &tuiApp.userCursor.index);
     CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, tuiApp.userCursor.index,
-                              &cur);
+                           &cur);
     cur->ptr->focused = true;
     tuiAppPushMessage((TuiMsg){.type = MsgFocusEnter,
                                .arg1 = {.index = tuiApp.userCursor.index}});
@@ -643,4 +648,14 @@ static Index findWidgetAtMouse(int screenY, int screenX) {
     return deepest;
 }
 
-void tuiAppRefresh() { tuiAppPushMessage((TuiMsg){.type = MsgRefresh}); }
+void tuiAppRefresh() {
+    tuiAppRefreshNavChain();
+    tuiAppPushMessage((TuiMsg){.type = MsgRefresh});
+}
+
+void tuiAppVisibilityChange(Control *dest, bool visible) {
+    dest->visible = visible;
+    if (dest->focusable) {
+        tuiAppRefresh();
+    }
+}

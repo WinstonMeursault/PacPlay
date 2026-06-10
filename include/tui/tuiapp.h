@@ -25,9 +25,9 @@
 #ifndef TUIAPP_H
 #define TUIAPP_H
 
+#include "control.h"
 #include "ncurses_wrapper.h"
 #include "tuimsg.h"
-#include "control.h"
 
 void tuiAppInit();
 void tuiAppControlRegister(Control *entry, Control *parent);
@@ -38,5 +38,6 @@ void tuiAppStop();
 void tuiAppChangePage(ControlPage *entry);
 void tuiAppPushMessage(TuiMsg msg);
 void tuiAppRefresh();
+void tuiAppVisibilityChange(Control *dest, bool visible);
 
 #endif // TUIAPP_H
