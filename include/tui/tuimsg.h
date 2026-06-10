@@ -11,7 +11,8 @@ typedef enum {
     MsgInput,
     MsgResize,
     MsgFetch, // Send direct child control ptr to container
-    MsgRefresh
+    MsgRefresh,
+    MsgMouse
 } MsgType;
 
 typedef union {

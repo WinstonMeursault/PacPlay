@@ -42,7 +42,16 @@ enum {
     OverMax = 130,
     MinWidth = 3,
     SmallWidth = 1,
-    DelChar = 0x7F
+    DelChar = 0x7F,
+    TextBoxTestWidth = 12,
+    TextBoxTestHeight = 5,
+    TextBoxMinH = 3,
+    TextBoxMinW = 3,
+    TextBoxVisibleLines = 3,
+    TextBoxAvailWidth = 10,
+    Buf4096 = 4096,
+    TwoLines = 2,
+    ZeroLines = 0
 };
 
 static int gClickCount = 0;
@@ -63,6 +72,7 @@ static void dummyCbBtn(ControlButton *self) { (void)self; }
 static void dummyCbGrid(ControlGrid *self) { (void)self; }
 static void dummyCbLabel(ControlLabel *self) { (void)self; }
 static void dummyCbInputBox(ControlInputBox *self) { (void)self; }
+static void dummyCbTextBox(ControlTextBox *self) { (void)self; }
 
 /* ────────────────── ControlPage tests ───────────────────────────────────── */
 
@@ -213,7 +223,7 @@ static void testControlInputBoxConstruct(void) {
     gClickCount = 0;
 
     controlInputBoxConstruct(&box, TestWidth, TestY, TestX,
-                             NULL, dummyCbInputBox,
+                             NULL, dummyCbInputBox, dummyCbInputBox,
                              dummyOnSubmit, dummyCbInputBox);
 
     ASSERT_TRUE(box.base.focusable);
@@ -245,7 +255,7 @@ static void testControlInputBoxMinWidthClamp(void) {
     memset(&box, 0, sizeof(box));
 
     controlInputBoxConstruct(&box, SmallWidth, TestY, TestX,
-                             NULL, dummyCbInputBox,
+                             NULL, dummyCbInputBox, dummyCbInputBox,
                              dummyOnSubmit, dummyCbInputBox);
 
     ASSERT_INT_EQ(box.base.width, MinWidth);
@@ -259,7 +269,7 @@ static void setupInputBox(ControlInputBox *box) {
     memset(box, 0, sizeof(*box));
     gClickCount = 0;
     controlInputBoxConstruct(box, InputMax, TestY, TestX,
-                             NULL, dummyCbInputBox,
+                             NULL, dummyCbInputBox, dummyCbInputBox,
                              dummyOnSubmit, dummyCbInputBox);
 }
 
@@ -425,6 +435,262 @@ static void testInputBoxSubmitCallback(void) {
     teardownInputBox(&box);
 }
 
+/* ────────────────── ControlTextBox tests ─────────────────────────────────── */
+
+static void testControlTextBoxConstruct(void) {
+    ControlTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    controlTextBoxConstruct(&box, TextBoxTestHeight, TextBoxTestWidth,
+                            TestY, TestX, "Hello World",
+                            NULL, dummyCbTextBox, dummyCbTextBox);
+
+    ASSERT_TRUE(box.base.focusable);
+    ASSERT_FALSE(box.base.isContainer);
+    ASSERT_FALSE(box.base.focused);
+    ASSERT_FALSE(box.base.isPage);
+    ASSERT_FALSE(box.base.takeOverInput);
+    ASSERT_TRUE(box.base.visible);
+    ASSERT_INT_EQ(box.base.height, TextBoxTestHeight);
+    ASSERT_INT_EQ(box.base.width, TextBoxTestWidth);
+    ASSERT_INT_EQ(box.base.y, TestY);
+    ASSERT_INT_EQ(box.base.x, TestX);
+    ASSERT_NOT_NULL(box.text);
+    ASSERT_STR_EQ(box.text, "Hello World");
+    ASSERT_UINT_EQ(box.viewBegin, DefaultIndex);
+    ASSERT_NOT_NULL(box.base.vtable.draw);
+    ASSERT_NOT_NULL(box.base.vtable.msgHandler);
+    ASSERT_NOT_NULL(box.base.vtable.destruct);
+    ASSERT_NOT_NULL(box.base.commonMsgHandlers.resize);
+    ASSERT_NOT_NULL(box.base.commonMsgHandlers.refresh);
+
+    ASSERT_UINT_EQ(box.base.index, DefaultIndex);
+    ASSERT_UINT_EQ(box.base.childCount, DefaultIndex);
+    ASSERT_NULL(box.base.windowHandler);
+
+    free(box.text);
+}
+
+static void testControlTextBoxMinSizeClamp(void) {
+    ControlTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    /* height < 3 and width < 3 should be clamped */
+    controlTextBoxConstruct(&box, IntOne, IntOne, TestY, TestX, "A",
+                            NULL, dummyCbTextBox, dummyCbTextBox);
+
+    ASSERT_INT_EQ(box.base.height, TextBoxMinH);
+    ASSERT_INT_EQ(box.base.width, TextBoxMinW);
+
+    free(box.text);
+}
+
+static void testControlTextBoxMaxTextLen(void) {
+    ControlTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    char longText[Buf4096 * Two];
+    memset(longText, 'X', sizeof(longText) - 1);
+    longText[sizeof(longText) - 1] = '\0';
+
+    controlTextBoxConstruct(&box, TextBoxTestHeight, TextBoxTestWidth,
+                            TestY, TestX, longText,
+                            NULL, dummyCbTextBox, dummyCbTextBox);
+
+    ASSERT_NOT_NULL(box.text);
+    ASSERT_UINT_EQ(strlen(box.text), (size_t)(TEXTBOX_TEXT_MAXLEN - 1));
+    ASSERT_TRUE(box.text[TEXTBOX_TEXT_MAXLEN - 1] == '\0');
+
+    free(box.text);
+}
+
+static void testControlTextBoxEmptyText(void) {
+    ControlTextBox box;
+    memset(&box, 0, sizeof(box));
+
+    controlTextBoxConstruct(&box, TextBoxTestHeight, TextBoxTestWidth,
+                            TestY, TestX, "",
+                            NULL, dummyCbTextBox, dummyCbTextBox);
+
+    ASSERT_NOT_NULL(box.text);
+    ASSERT_UINT_EQ(box.textLen, DefaultIndex);
+    ASSERT_UINT_EQ(box.viewBegin, DefaultIndex);
+
+    free(box.text);
+}
+
+static void setupTextBox(ControlTextBox *box, const char *text) {
+    memset(box, 0, sizeof(*box));
+    controlTextBoxConstruct(box, TextBoxTestHeight, TextBoxTestWidth,
+                            TestY, TestX, text,
+                            NULL, dummyCbTextBox, dummyCbTextBox);
+}
+
+static void teardownTextBox(ControlTextBox *box) { free(box->text); }
+
+static void testTextBoxScrollDownBoundary(void) {
+    /* Text fits in one visual line when availWidth=10; maxView=0.
+     * Scrolling down should not move viewBegin. */
+    ControlTextBox box;
+    setupTextBox(&box, "short");
+
+    TuiMsg msgDown = {.type = MsgInput, .arg1 = {.input = KEY_DOWN}};
+    box.base.vtable.msgHandler(&box, msgDown);
+    ASSERT_UINT_EQ(box.viewBegin, DefaultIndex);
+
+    teardownTextBox(&box);
+}
+
+static void testTextBoxScrollDownMulti(void) {
+    /* "line1\nline2\nline3\nline4\nline5" has 5 lines.
+     * With visibleLines=3, maxView=2. */
+    ControlTextBox box;
+    setupTextBox(&box, "line1\nline2\nline3\nline4\nline5");
+
+    TuiMsg msgDown = {.type = MsgInput, .arg1 = {.input = KEY_DOWN}};
+    box.base.vtable.msgHandler(&box, msgDown);
+    ASSERT_UINT_EQ(box.viewBegin, One);
+    box.base.vtable.msgHandler(&box, msgDown);
+    ASSERT_UINT_EQ(box.viewBegin, TwoLines);
+    /* At boundary — no change */
+    box.base.vtable.msgHandler(&box, msgDown);
+    ASSERT_UINT_EQ(box.viewBegin, TwoLines);
+
+    teardownTextBox(&box);
+}
+
+static void testTextBoxScrollUpBoundary(void) {
+    ControlTextBox box;
+    setupTextBox(&box, "line1\nline2\nline3\nline4\nline5");
+
+    TuiMsg msgDown = {.type = MsgInput, .arg1 = {.input = KEY_DOWN}};
+    box.base.vtable.msgHandler(&box, msgDown);
+    box.base.vtable.msgHandler(&box, msgDown);
+    ASSERT_UINT_EQ(box.viewBegin, TwoLines);
+
+    TuiMsg msgUp = {.type = MsgInput, .arg1 = {.input = KEY_UP}};
+    box.base.vtable.msgHandler(&box, msgUp);
+    ASSERT_UINT_EQ(box.viewBegin, One);
+    box.base.vtable.msgHandler(&box, msgUp);
+    ASSERT_UINT_EQ(box.viewBegin, DefaultIndex);
+    /* At upper boundary — no change */
+    box.base.vtable.msgHandler(&box, msgUp);
+    ASSERT_UINT_EQ(box.viewBegin, DefaultIndex);
+
+    teardownTextBox(&box);
+}
+
+static void testTextBoxPageUpDown(void) {
+    /* 9 lines with visibleLines=3 → maxView=6 */
+    ControlTextBox box;
+    setupTextBox(&box, "a\nb\nc\nd\ne\nf\ng\nh\ni");
+
+    /* Page down by 3 */
+    TuiMsg msgPgDn = {.type = MsgInput, .arg1 = {.input = KEY_NPAGE}};
+    box.base.vtable.msgHandler(&box, msgPgDn);
+    ASSERT_UINT_EQ(box.viewBegin, (size_t)TextBoxVisibleLines);
+
+    /* Another page down to maxView (6) */
+    box.base.vtable.msgHandler(&box, msgPgDn);
+    ASSERT_UINT_EQ(box.viewBegin, (size_t)(TextBoxVisibleLines * TwoLines));
+
+    /* Page up back to 3 */
+    TuiMsg msgPgUp = {.type = MsgInput, .arg1 = {.input = KEY_PPAGE}};
+    box.base.vtable.msgHandler(&box, msgPgUp);
+    ASSERT_UINT_EQ(box.viewBegin, (size_t)TextBoxVisibleLines);
+
+    teardownTextBox(&box);
+}
+
+static void testTextBoxHomeEnd(void) {
+    /* 5 lines with visibleLines=3 → maxView=2 */
+    ControlTextBox box;
+    setupTextBox(&box, "line1\nline2\nline3\nline4\nline5");
+
+    TuiMsg msgEnd = {.type = MsgInput, .arg1 = {.input = KEY_END}};
+    box.base.vtable.msgHandler(&box, msgEnd);
+    ASSERT_UINT_EQ(box.viewBegin, TwoLines);
+
+    TuiMsg msgHome = {.type = MsgInput, .arg1 = {.input = KEY_HOME}};
+    box.base.vtable.msgHandler(&box, msgHome);
+    ASSERT_UINT_EQ(box.viewBegin, DefaultIndex);
+
+    teardownTextBox(&box);
+}
+
+static void testTextBoxMouseScrollUp(void) {
+    ControlTextBox box;
+    setupTextBox(&box, "line1\nline2\nline3\nline4\nline5");
+
+    /* Scroll down first */
+    TuiMsg msgEnd = {.type = MsgInput, .arg1 = {.input = KEY_END}};
+    box.base.vtable.msgHandler(&box, msgEnd);
+    ASSERT_UINT_EQ(box.viewBegin, TwoLines);
+
+    /* Mouse scroll up */
+    TuiMsg msgMouseUp = {.type = MsgMouse, .arg2 = {.input = BUTTON4_PRESSED}};
+    box.base.vtable.msgHandler(&box, msgMouseUp);
+    ASSERT_UINT_EQ(box.viewBegin, One);
+
+    teardownTextBox(&box);
+}
+
+static void testTextBoxMouseScrollDown(void) {
+    ControlTextBox box;
+    setupTextBox(&box, "line1\nline2\nline3\nline4\nline5");
+
+    /* Mouse scroll down from top */
+    TuiMsg msgMouseDn = {.type = MsgMouse, .arg2 = {.input = BUTTON5_PRESSED}};
+    box.base.vtable.msgHandler(&box, msgMouseDn);
+    ASSERT_UINT_EQ(box.viewBegin, One);
+
+    teardownTextBox(&box);
+}
+
+static void testTextBoxVisualLineWordWrap(void) {
+    /* Text: "hello world test" with availWidth=10.
+     * "hello world" is 11 chars → wraps at space after "hello" (5 chars).
+     * "world test" fits in 10 chars.
+     * Total visual lines = 2. With visibleLines=3, maxView=0. */
+    ControlTextBox box;
+    setupTextBox(&box, "hello world test");
+
+    /* END should set viewBegin to maxView = 0 */
+    TuiMsg msgEnd = {.type = MsgInput, .arg1 = {.input = KEY_END}};
+    box.base.vtable.msgHandler(&box, msgEnd);
+    ASSERT_UINT_EQ(box.viewBegin, ZeroLines);
+
+    teardownTextBox(&box);
+}
+
+static void testTextBoxVisualLineHardBreak(void) {
+    /* Text: "abcdefghijklmnop" (16 chars no spaces) with availWidth=10.
+     * Hard break every 10 chars → 2 visual lines. maxView = max(0, 2-3) = 0. */
+    ControlTextBox box;
+    setupTextBox(&box, "abcdefghijklmnop");
+
+    TuiMsg msgEnd = {.type = MsgInput, .arg1 = {.input = KEY_END}};
+    box.base.vtable.msgHandler(&box, msgEnd);
+    ASSERT_UINT_EQ(box.viewBegin, ZeroLines);
+
+    teardownTextBox(&box);
+}
+
+static void testTextBoxFocusToggle(void) {
+    ControlTextBox box;
+    setupTextBox(&box, "text");
+
+    TuiMsg msgEnter = {.type = MsgFocusEnter};
+    box.base.vtable.msgHandler(&box, msgEnter);
+    ASSERT_TRUE(box.base.focused);
+
+    TuiMsg msgLeave = {.type = MsgFocusLeave};
+    box.base.vtable.msgHandler(&box, msgLeave);
+    ASSERT_FALSE(box.base.focused);
+
+    teardownTextBox(&box);
+}
+
 /* ────────────────── double-destruct safety tests ────────────────────────── */
 
 static void testControlButtonDestructDoubleSafe(void) {
@@ -449,10 +715,20 @@ static void testControlInputBoxDestructDoubleSafe(void) {
     ControlInputBox box;
     memset(&box, 0, sizeof(box));
     controlInputBoxConstruct(&box, TestWidth, TestY, TestX,
-                             NULL, dummyCbInputBox,
+                             NULL, dummyCbInputBox, dummyCbInputBox,
                              dummyOnSubmit, dummyCbInputBox);
     free(box.buf);
     box.buf = NULL;
+}
+
+static void testControlTextBoxDestructDoubleSafe(void) {
+    ControlTextBox box;
+    memset(&box, 0, sizeof(box));
+    controlTextBoxConstruct(&box, TextBoxTestHeight, TextBoxTestWidth,
+                            TestY, TestX, "OK",
+                            NULL, dummyCbTextBox, dummyCbTextBox);
+    free(box.text);
+    box.text = NULL;
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -494,6 +770,29 @@ int main(void) {
     RUN_TEST(testControlButtonDestructDoubleSafe);
     RUN_TEST(testControlLabelDestructDoubleSafe);
     RUN_TEST(testControlInputBoxDestructDoubleSafe);
+    RUN_TEST(testControlTextBoxDestructDoubleSafe);
+
+    /* TextBox construction */
+    RUN_TEST(testControlTextBoxConstruct);
+    RUN_TEST(testControlTextBoxMinSizeClamp);
+    RUN_TEST(testControlTextBoxMaxTextLen);
+    RUN_TEST(testControlTextBoxEmptyText);
+
+    /* TextBox scrolling */
+    RUN_TEST(testTextBoxScrollDownBoundary);
+    RUN_TEST(testTextBoxScrollDownMulti);
+    RUN_TEST(testTextBoxScrollUpBoundary);
+    RUN_TEST(testTextBoxPageUpDown);
+    RUN_TEST(testTextBoxHomeEnd);
+    RUN_TEST(testTextBoxMouseScrollUp);
+    RUN_TEST(testTextBoxMouseScrollDown);
+
+    /* TextBox visual line wrapping */
+    RUN_TEST(testTextBoxVisualLineWordWrap);
+    RUN_TEST(testTextBoxVisualLineHardBreak);
+
+    /* TextBox focus */
+    RUN_TEST(testTextBoxFocusToggle);
 
     return TEST_REPORT();
 }

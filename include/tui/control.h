@@ -28,6 +28,7 @@
 #define BTN_LABEL_MAXLEN 20
 #define INPUTBOX_BUF_MAX_LEN 128
 #define LABEL_TEXT_MAXLEN 128
+#define TEXTBOX_TEXT_MAXLEN 4096
 
 #include "ncurses_wrapper.h"
 #include "tuimsg.h"
@@ -41,6 +42,7 @@ typedef struct ControlButton ControlButton;
 typedef struct ControlGrid ControlGrid;
 typedef struct ControlLabel ControlLabel;
 typedef struct ControlInputBox ControlInputBox;
+typedef struct ControlTextBox ControlTextBox;
 
 struct ControlVTable {
     void (*destruct)(void *self);
@@ -112,6 +114,13 @@ struct ControlInputBox {
     void (*submit)(ControlInputBox *self);
 };
 
+struct ControlTextBox {
+    Control base;
+    char *text;
+    size_t textLen;
+    size_t viewBegin;
+};
+
 void controlInstantiate(Control *self, Control *parent);
 void controlDeinstantiate(Control *self);
 
@@ -145,5 +154,12 @@ void controlInputBoxConstruct(ControlInputBox *self, int width, int y, int x,
                               void (*submit)(ControlInputBox *self),
                               void (*refresh)(ControlInputBox *self));
 void controlInputBoxDraw(void *self);
+
+void controlTextBoxConstruct(ControlTextBox *self, int height, int width,
+                             int y, int x, const char *text,
+                             void (*draw)(ControlTextBox *),
+                             void (*resize)(ControlTextBox *self),
+                             void (*refresh)(ControlTextBox *self));
+void controlTextBoxDraw(void *self);
 
 #endif // CONTROL_H

@@ -56,6 +56,14 @@ static void controlLabelMsgHandler(void *self, TuiMsg msg);
 static void controlInputBoxDestruct(void *self);
 static void controlInputBoxMsgHandler(void *self, TuiMsg msg);
 
+static void controlTextBoxDestruct(void *self);
+static void controlTextBoxMsgHandler(void *self, TuiMsg msg);
+static size_t textBoxAdvanceVisualLine(const char *text, size_t textLen,
+                                       size_t start, int availWidth,
+                                       bool *isBreakOut);
+static size_t textBoxCountVisualLines(const char *text, size_t textLen,
+                                      int availWidth);
+
 const static ControlVTable defaultCtrlVtable = {
     .destruct = NULL, .draw = NULL, .msgHandler = NULL};
 const static ControlVTable defaultBtnVtable = {
@@ -74,6 +82,10 @@ const static ControlVTable defaultInputBoxVtable = {
     .destruct = controlInputBoxDestruct,
     .draw = controlInputBoxDraw,
     .msgHandler = controlInputBoxMsgHandler};
+const static ControlVTable defaultTextBoxVtable = {
+    .destruct = controlTextBoxDestruct,
+    .draw = controlTextBoxDraw,
+    .msgHandler = controlTextBoxMsgHandler};
 
 static void customBox(WINDOW *handler, const wchar_t *lsRaw,
                       const wchar_t *rsRaw, const wchar_t *tsRaw,
@@ -554,5 +566,239 @@ static void controlInputBoxMsgHandler(void *self, TuiMsg msg) {
         box->viewBegin = box->curLoc - ((size_t)box->base.width - 2) + 1;
     } else if (box->viewBegin > 0 && box->curLoc <= box->viewBegin) {
         box->viewBegin = box->curLoc > 0 ? box->curLoc - 1 : 0;
+    }
+}
+
+void controlTextBoxConstruct(ControlTextBox *self, int height, int width,
+                             int y, int x, const char *text,
+                             void (*draw)(ControlTextBox *),
+                             void (*resize)(ControlTextBox *self),
+                             void (*refresh)(ControlTextBox *self)) {
+    enum { TextBoxMinHeight = 3, TextBoxMinWidth = 3 };
+    if (height < TextBoxMinHeight) {
+        height = TextBoxMinHeight;
+    }
+    if (width < TextBoxMinWidth) {
+        width = TextBoxMinWidth;
+    }
+    controlConstruct((Control *)self, height, width, y, x, true, false);
+    self->base.vtable = defaultTextBoxVtable;
+    if (draw != NULL) {
+        self->base.vtable.draw = (void (*)(void *))draw;
+    }
+    self->base.commonMsgHandlers.resize = (void (*)(void *))resize;
+    self->base.commonMsgHandlers.refresh = (void (*)(void *))refresh;
+    self->text = malloc(sizeof(char) * TEXTBOX_TEXT_MAXLEN);
+    if (self->text == NULL) {
+        LOG_ERROR("malloc failed for text box text");
+        return;
+    }
+    strncpy(self->text, text, TEXTBOX_TEXT_MAXLEN);
+    self->text[TEXTBOX_TEXT_MAXLEN - 1] = '\0';
+    self->textLen = strlen(self->text);
+    self->viewBegin = 0;
+}
+
+static size_t textBoxAdvanceVisualLine(const char *text, size_t textLen,
+                                       size_t start, int availWidth,
+                                       bool *isBreakOut) {
+    *isBreakOut = false;
+    if (start >= textLen) {
+        return textLen;
+    }
+    if (text[start] == '\n') {
+        return start + 1;
+    }
+
+    size_t logicalEnd = start;
+    while (logicalEnd < textLen && text[logicalEnd] != '\n') {
+        logicalEnd++;
+    }
+    size_t logicalLen = logicalEnd - start;
+
+    if (logicalLen <= (size_t)availWidth) {
+        return (logicalEnd < textLen) ? logicalEnd + 1 : logicalEnd;
+    }
+
+    size_t maxPos = start + (size_t)availWidth;
+    if (maxPos > logicalEnd) {
+        maxPos = logicalEnd;
+    }
+    size_t bp = maxPos;
+    while (bp > start && text[bp - 1] != ' ') {
+        bp--;
+    }
+
+    if (bp > start) {
+        *isBreakOut = true;
+        return bp;
+    }
+    return start + (size_t)availWidth;
+}
+
+static size_t textBoxCountVisualLines(const char *text, size_t textLen,
+                                      int availWidth) {
+    size_t offset = 0;
+    size_t count = 0;
+    bool unused;
+    while (offset < textLen) {
+        offset = textBoxAdvanceVisualLine(text, textLen, offset, availWidth,
+                                          &unused);
+        count++;
+    }
+    return count;
+}
+
+void controlTextBoxDraw(void *self) {
+    ControlTextBox *box = (ControlTextBox *)self;
+    werase(box->base.windowHandler);
+
+    if (box->base.focused) {
+        DOUBLE_BOX(box->base.windowHandler);
+    } else {
+        box(box->base.windowHandler, 0, 0);
+    }
+
+    int availWidth = box->base.width - 2;
+    int visibleLines = box->base.height - 2;
+    if (availWidth < 1 || visibleLines < 1 || box->text == NULL) {
+        wnoutrefresh(box->base.windowHandler);
+        return;
+    }
+
+    size_t offset = 0;
+    bool isContinuation = false;
+    size_t visualLine = 0;
+
+    while (visualLine < box->viewBegin && offset < box->textLen) {
+        offset = textBoxAdvanceVisualLine(box->text, box->textLen, offset,
+                                          availWidth, &isContinuation);
+        visualLine++;
+    }
+
+    int curY = 1;
+    while (curY <= visibleLines && offset < box->textLen) {
+        size_t renderStart = offset;
+        if (isContinuation) {
+            while (renderStart < box->textLen &&
+                   box->text[renderStart] == ' ') {
+                renderStart++;
+            }
+        }
+
+        offset = textBoxAdvanceVisualLine(box->text, box->textLen, offset,
+                                          availWidth, &isContinuation);
+
+        size_t end = offset;
+        if (end > renderStart && box->text[end - 1] == '\n') {
+            end--;
+        }
+        while (end > renderStart && box->text[end - 1] == ' ') {
+            end--;
+        }
+
+        if (end > renderStart) {
+            mvwprintw(box->base.windowHandler, curY, 1, "%.*s",
+                      (int)(end - renderStart), box->text + renderStart);
+        }
+        curY++;
+    }
+
+    wnoutrefresh(box->base.windowHandler);
+}
+
+static void controlTextBoxDestruct(void *self) {
+    ControlTextBox *box = (ControlTextBox *)self;
+    free(box->text);
+}
+
+static void controlTextBoxMsgHandler(void *self, TuiMsg msg) {
+    ControlTextBox *box = (ControlTextBox *)self;
+    switch (msg.type) {
+    case MsgResize:
+        if (box->base.commonMsgHandlers.resize != NULL) {
+            box->base.commonMsgHandlers.resize(box);
+        }
+        break;
+    case MsgRefresh:
+        if (box->base.commonMsgHandlers.refresh != NULL) {
+            box->base.commonMsgHandlers.refresh(box);
+        }
+        break;
+    case MsgFocusEnter:
+        box->base.focused = true;
+        break;
+    case MsgFocusLeave:
+        box->base.focused = false;
+        break;
+    case MsgInput: {
+        int availWidth = box->base.width - 2;
+        int visibleLines = box->base.height - 2;
+        if (availWidth < 1 || visibleLines < 1 || box->text == NULL) {
+            break;
+        }
+        size_t totalLines = textBoxCountVisualLines(box->text, box->textLen,
+                                                     availWidth);
+        size_t maxView = (totalLines > (size_t)visibleLines)
+                             ? totalLines - (size_t)visibleLines
+                             : 0;
+        switch (msg.arg1.input) {
+        case KEY_UP:
+            if (box->viewBegin > 0) {
+                box->viewBegin--;
+            }
+            break;
+        case KEY_DOWN:
+            if (box->viewBegin < maxView) {
+                box->viewBegin++;
+            }
+            break;
+        case KEY_PPAGE:
+            if (box->viewBegin > (size_t)visibleLines) {
+                box->viewBegin -= (size_t)visibleLines;
+            } else {
+                box->viewBegin = 0;
+            }
+            break;
+        case KEY_NPAGE:
+            if (box->viewBegin + (size_t)visibleLines < maxView) {
+                box->viewBegin += (size_t)visibleLines;
+            } else {
+                box->viewBegin = maxView;
+            }
+            break;
+        case KEY_HOME:
+            box->viewBegin = 0;
+            break;
+        case KEY_END:
+            box->viewBegin = maxView;
+            break;
+        }
+        break;
+    }
+    case MsgMouse: {
+        int availWidth = box->base.width - 2;
+        int visibleLines = box->base.height - 2;
+        if (availWidth < 1 || visibleLines < 1 || box->text == NULL) {
+            break;
+        }
+        size_t totalLines = textBoxCountVisualLines(box->text, box->textLen,
+                                                     availWidth);
+        size_t maxView = (totalLines > (size_t)visibleLines)
+                             ? totalLines - (size_t)visibleLines
+                             : 0;
+        if (msg.arg2.input == BUTTON4_PRESSED) {
+            if (box->viewBegin > 0) {
+                box->viewBegin--;
+            }
+        } else if (msg.arg2.input == BUTTON5_PRESSED) {
+            if (box->viewBegin < maxView) {
+                box->viewBegin++;
+            }
+        }
+        break;
+    }
+    default:
+        break;
     }
 }

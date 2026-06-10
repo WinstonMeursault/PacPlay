@@ -102,6 +102,7 @@ static void tuiAppMsgHandle();
 static void tuiAppChangeRoot(Index root);
 static void tuiAppRefreshNavChain();
 static void tuiAppNavigate(bool isBack);
+static Index findWidgetAtMouse(int screenY, int screenX);
 
 struct {
     bool isRunning;
@@ -172,6 +173,7 @@ void tuiAppInit() {
     }
     raw();
     keypad(stdscr, true);
+    mousemask(BUTTON4_PRESSED | BUTTON5_PRESSED | REPORT_MOUSE_POSITION, NULL);
     curs_set(0);
     noecho();
     nodelay(stdscr, true);
@@ -290,6 +292,24 @@ static void tuiAppInput() {
     if (ch == -1) {
         return;
     }
+
+    if (ch == KEY_MOUSE) {
+        MEVENT event;
+        if (getmouse(&event) == OK &&
+            (event.bstate & (BUTTON4_PRESSED | BUTTON5_PRESSED))) {
+            Index target = findWidgetAtMouse(event.y, event.x);
+            if (target != 0) {
+                tuiAppPushMessage(
+                    (TuiMsg){.type = MsgMouse,
+                             .arg1 = {.index = target},
+                             .arg2 = {.input = (event.bstate & BUTTON4_PRESSED)
+                                                  ? BUTTON4_PRESSED
+                                                  : BUTTON5_PRESSED}});
+            }
+        }
+        return;
+    }
+
     ControlRegEntry *cur;
     CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, tuiApp.userCursor.index,
                               &cur);
@@ -353,6 +373,15 @@ static void tuiAppMsgHandle() {
             break;
         case MsgFocusEnter:
         case MsgFocusLeave: {
+            ControlRegEntry *cur;
+            CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, msg.arg1.index,
+                                      &cur);
+            if (cur->ptr != NULL && cur->ptr->vtable.msgHandler != NULL) {
+                cur->ptr->vtable.msgHandler(cur->ptr, msg);
+            }
+            break;
+        }
+        case MsgMouse: {
             ControlRegEntry *cur;
             CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, msg.arg1.index,
                                       &cur);
@@ -581,6 +610,37 @@ static void tuiAppNavigate(bool isBack) {
     cur->ptr->focused = true;
     tuiAppPushMessage((TuiMsg){.type = MsgFocusEnter,
                                .arg1 = {.index = tuiApp.userCursor.index}});
+}
+
+static Index findWidgetAtMouse(int screenY, int screenX) {
+    Index deepest = 0;
+    ControlRegEntry *curEntry;
+    ensureRenderStkCap(0);
+    gRenderStk.size = 0;
+    arrayIndexPushBack(&gRenderStk, tuiApp.curRoot);
+    while (arrayIndexSize(&gRenderStk) > 0) {
+        Index curIndex;
+        CHECKED_ARRAY_INDEX_GET(&gRenderStk, arrayIndexSize(&gRenderStk) - 1,
+                                &curIndex);
+        arrayIndexPopBack(&gRenderStk);
+        CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, curIndex, &curEntry);
+        if (curIndex != 0 && curEntry->ptr->visible &&
+            curEntry->ptr->windowHandler != NULL) {
+            int localY = screenY;
+            int localX = screenX;
+            if (wmouse_trafo(curEntry->ptr->windowHandler, &localY, &localX,
+                             FALSE)) {
+                deepest = curIndex;
+            }
+        }
+        if (curIndex != tuiApp.curRoot && curEntry->sibling != 0) {
+            arrayIndexPushBack(&gRenderStk, curEntry->sibling);
+        }
+        if (curEntry->child != 0) {
+            arrayIndexPushBack(&gRenderStk, curEntry->child);
+        }
+    }
+    return deepest;
 }
 
 void tuiAppRefresh() { tuiAppPushMessage((TuiMsg){.type = MsgRefresh}); }
