@@ -25,6 +25,8 @@ typedef struct {
     MsgType type;
     MsgArg arg1;
     MsgArg arg2;
+    int mouseY;
+    int mouseX;
 } TuiMsg;
 
 #endif // TUIMSG_H

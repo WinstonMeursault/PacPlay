@@ -51,7 +51,23 @@ enum {
     TextBoxAvailWidth = 10,
     Buf4096 = 4096,
     TwoLines = 2,
-    ZeroLines = 0
+    ZeroLines = 0,
+    /* Selection test coordinates (window-local, row 1 = first content line) */
+    SelY1 = 1,
+    SelY2 = 2,
+    SelY3 = 3,
+    SelX1 = 1,
+    SelX3 = 3,
+    SelX5 = 5,
+    SelX6 = 6,
+    /* Byte offsets for "line1\\nline2\\nline3\\nline4\\nline5" (29 chars) */
+    SelByteLine1End = 5,
+    SelByteLine2Start = 6,
+    SelByteLine2End = 11,
+    SelByteLine3Start = 12,
+    SelByteLine3End = 17,
+    SelByteTextEnd = 29,
+    ScrollTextBoxDefMax = 100
 };
 
 static int gClickCount = 0;
@@ -73,6 +89,7 @@ static void dummyCbGrid(ControlGrid *self) { (void)self; }
 static void dummyCbLabel(ControlLabel *self) { (void)self; }
 static void dummyCbInputBox(ControlInputBox *self) { (void)self; }
 static void dummyCbTextBox(ControlTextBox *self) { (void)self; }
+static void dummyCbScrollTextBox(ControlScrollTextBox *self) { (void)self; }
 
 /* ────────────────── ControlPage tests ───────────────────────────────────── */
 
@@ -691,6 +708,229 @@ static void testTextBoxFocusToggle(void) {
     teardownTextBox(&box);
 }
 
+/* ────────────────── TextBox mouse selection tests ───────────────────────── */
+
+static void testTextBoxSelectionPressStart(void) {
+    ControlTextBox box;
+    setupTextBox(&box, "line1\nline2\nline3\nline4\nline5");
+
+    TuiMsg msgPress = {.type = MsgMouse,
+                       .arg2 = {.input = BUTTON1_PRESSED},
+                       .mouseY = SelY1,
+                       .mouseX = SelX1};
+    box.base.vtable.msgHandler(&box, msgPress);
+    ASSERT_TRUE(box.selection.active);
+    ASSERT_UINT_EQ(box.selection.startByte, Zero);
+    ASSERT_UINT_EQ(box.selection.endByte, Zero);
+
+    teardownTextBox(&box);
+}
+
+static void testTextBoxSelectionPressSecondLine(void) {
+    ControlTextBox box;
+    setupTextBox(&box, "line1\nline2\nline3\nline4\nline5");
+
+    TuiMsg msgPress = {.type = MsgMouse,
+                       .arg2 = {.input = BUTTON1_PRESSED},
+                       .mouseY = SelY2,
+                       .mouseX = SelX1};
+    box.base.vtable.msgHandler(&box, msgPress);
+    ASSERT_TRUE(box.selection.active);
+    ASSERT_UINT_EQ(box.selection.startByte, SelByteLine2Start);
+
+    teardownTextBox(&box);
+}
+
+static void testTextBoxSelectionPressPastEnd(void) {
+    ControlTextBox box;
+    setupTextBox(&box, "line1\nline2\nline3\nline4\nline5");
+
+    /* Click at (Y=1, X=6) — past end of "line1", should clamp to line end */
+    TuiMsg msgPress = {.type = MsgMouse,
+                       .arg2 = {.input = BUTTON1_PRESSED},
+                       .mouseY = SelY1,
+                       .mouseX = SelX6};
+    box.base.vtable.msgHandler(&box, msgPress);
+    ASSERT_TRUE(box.selection.active);
+    ASSERT_UINT_EQ(box.selection.startByte, SelByteLine1End);
+
+    teardownTextBox(&box);
+}
+
+static void testTextBoxSelectionDragUpdate(void) {
+    ControlTextBox box;
+    setupTextBox(&box, "line1\nline2\nline3\nline4\nline5");
+
+    /* Start selection at begin of line1 */
+    TuiMsg msgPress = {.type = MsgMouse,
+                       .arg2 = {.input = BUTTON1_PRESSED},
+                       .mouseY = SelY1,
+                       .mouseX = SelX1};
+    box.base.vtable.msgHandler(&box, msgPress);
+    ASSERT_UINT_EQ(box.selection.startByte, Zero);
+
+    /* Drag to end of line1 */
+    TuiMsg msgDrag1 = {.type = MsgMouse,
+                       .arg2 = {.input = REPORT_MOUSE_POSITION},
+                       .mouseY = SelY1,
+                       .mouseX = SelX6};
+    box.base.vtable.msgHandler(&box, msgDrag1);
+    ASSERT_TRUE(box.selection.active);
+    ASSERT_UINT_EQ(box.selection.endByte, SelByteLine1End);
+
+    /* Drag to line2 */
+    TuiMsg msgDrag2 = {.type = MsgMouse,
+                       .arg2 = {.input = REPORT_MOUSE_POSITION},
+                       .mouseY = SelY2,
+                       .mouseX = SelX6};
+    box.base.vtable.msgHandler(&box, msgDrag2);
+    ASSERT_TRUE(box.selection.active);
+    ASSERT_UINT_EQ(box.selection.endByte, SelByteLine2End);
+
+    /* Drag to line3 */
+    TuiMsg msgDrag3 = {.type = MsgMouse,
+                       .arg2 = {.input = REPORT_MOUSE_POSITION},
+                       .mouseY = SelY3,
+                       .mouseX = SelX6};
+    box.base.vtable.msgHandler(&box, msgDrag3);
+    ASSERT_TRUE(box.selection.active);
+    ASSERT_UINT_EQ(box.selection.endByte, SelByteLine3End);
+
+    teardownTextBox(&box);
+}
+
+static void testTextBoxSelectionReleaseClears(void) {
+    ControlTextBox box;
+    setupTextBox(&box, "line1\nline2\nline3\nline4\nline5");
+
+    /* Press + drag + release: active must become false after release */
+    TuiMsg msgPress = {.type = MsgMouse,
+                       .arg2 = {.input = BUTTON1_PRESSED},
+                       .mouseY = SelY1,
+                       .mouseX = SelX1};
+    box.base.vtable.msgHandler(&box, msgPress);
+
+    TuiMsg msgDrag = {.type = MsgMouse,
+                      .arg2 = {.input = REPORT_MOUSE_POSITION},
+                      .mouseY = SelY1,
+                      .mouseX = SelX5};
+    box.base.vtable.msgHandler(&box, msgDrag);
+
+    TuiMsg msgRelease = {.type = MsgMouse,
+                         .arg2 = {.input = BUTTON1_RELEASED},
+                         .mouseY = SelY1,
+                         .mouseX = SelX5};
+    box.base.vtable.msgHandler(&box, msgRelease);
+    ASSERT_FALSE(box.selection.active);
+
+    teardownTextBox(&box);
+}
+
+static void testTextBoxSelectionReverseNormalize(void) {
+    ControlTextBox box;
+    setupTextBox(&box, "line1\nline2\nline3\nline4\nline5");
+
+    /* Start at end, drag to start → endByte < startByte */
+    TuiMsg msgPress = {.type = MsgMouse,
+                       .arg2 = {.input = BUTTON1_PRESSED},
+                       .mouseY = SelY1,
+                       .mouseX = SelX5};
+    box.base.vtable.msgHandler(&box, msgPress);
+    ASSERT_UINT_EQ(box.selection.startByte, SelByteLine1End - 1);
+
+    TuiMsg msgDrag = {.type = MsgMouse,
+                      .arg2 = {.input = REPORT_MOUSE_POSITION},
+                      .mouseY = SelY1,
+                      .mouseX = SelX1};
+    box.base.vtable.msgHandler(&box, msgDrag);
+    /* endByte should be less than startByte for reverse selection */
+    ASSERT_UINT_EQ(box.selection.endByte, Zero);
+    ASSERT_TRUE(box.selection.startByte > box.selection.endByte);
+
+    /* Release: should normalize and copy — active cleared */
+    TuiMsg msgRelease = {.type = MsgMouse,
+                         .arg2 = {.input = BUTTON1_RELEASED},
+                         .mouseY = SelY1,
+                         .mouseX = SelX1};
+    box.base.vtable.msgHandler(&box, msgRelease);
+    ASSERT_FALSE(box.selection.active);
+
+    teardownTextBox(&box);
+}
+
+static void testTextBoxSelectionEmptyText(void) {
+    ControlTextBox box;
+    setupTextBox(&box, "");
+
+    TuiMsg msgPress = {.type = MsgMouse,
+                       .arg2 = {.input = BUTTON1_PRESSED},
+                       .mouseY = SelY1,
+                       .mouseX = SelX1};
+    box.base.vtable.msgHandler(&box, msgPress);
+    /* Empty text: selection should not activate or should be zero-length */
+    ASSERT_UINT_EQ(box.selection.startByte, Zero);
+    ASSERT_UINT_EQ(box.selection.endByte, Zero);
+
+    TuiMsg msgRelease = {.type = MsgMouse,
+                         .arg2 = {.input = BUTTON1_RELEASED},
+                         .mouseY = SelY1,
+                         .mouseX = SelX1};
+    box.base.vtable.msgHandler(&box, msgRelease);
+    ASSERT_FALSE(box.selection.active);
+
+    teardownTextBox(&box);
+}
+
+static void testTextBoxSelectionSingleChar(void) {
+    ControlTextBox box;
+    setupTextBox(&box, "a");
+
+    /* Press + release at same position: one char selected, active cleared */
+    TuiMsg msgPress = {.type = MsgMouse,
+                       .arg2 = {.input = BUTTON1_PRESSED},
+                       .mouseY = SelY1,
+                       .mouseX = SelX1};
+    box.base.vtable.msgHandler(&box, msgPress);
+    ASSERT_TRUE(box.selection.active);
+    ASSERT_UINT_EQ(box.selection.startByte, Zero);
+
+    TuiMsg msgRelease = {.type = MsgMouse,
+                         .arg2 = {.input = BUTTON1_RELEASED},
+                         .mouseY = SelY1,
+                         .mouseX = SelX1};
+    box.base.vtable.msgHandler(&box, msgRelease);
+    ASSERT_FALSE(box.selection.active);
+
+    teardownTextBox(&box);
+}
+
+static void testScrollTextBoxSelectionPress(void) {
+    ControlScrollTextBox box;
+    memset(&box, 0, sizeof(box));
+    controlScrollTextBoxConstruct(&box, TextBoxTestHeight, TextBoxTestWidth,
+                                  TestY, TestX, ScrollTextBoxDefMax,
+                                  NULL, dummyCbScrollTextBox, dummyCbScrollTextBox);
+    controlScrollTextBoxAppend(&box, "hello\nworld");
+
+    TuiMsg msgPress = {.type = MsgMouse,
+                       .arg2 = {.input = BUTTON1_PRESSED},
+                       .mouseY = SelY1,
+                       .mouseX = SelX1};
+    box.base.base.vtable.msgHandler(&box, msgPress);
+    ASSERT_TRUE(box.base.selection.active);
+    ASSERT_UINT_EQ(box.base.selection.startByte, Zero);
+
+    /* Release to clear */
+    TuiMsg msgRelease = {.type = MsgMouse,
+                         .arg2 = {.input = BUTTON1_RELEASED},
+                         .mouseY = SelY1,
+                         .mouseX = SelX1};
+    box.base.base.vtable.msgHandler(&box, msgRelease);
+    ASSERT_FALSE(box.base.selection.active);
+
+    free(box.base.text);
+}
+
 /* ────────────────── double-destruct safety tests ────────────────────────── */
 
 static void testControlButtonDestructDoubleSafe(void) {
@@ -1048,6 +1288,17 @@ int main(void) {
 
     /* ScrollTextBox destruct safety */
     RUN_TEST(testScrollTextBoxDestructDoubleSafe);
+
+    /* ─────────── TextBox mouse selection ──────────────────────────────── */
+    RUN_TEST(testTextBoxSelectionPressStart);
+    RUN_TEST(testTextBoxSelectionPressSecondLine);
+    RUN_TEST(testTextBoxSelectionPressPastEnd);
+    RUN_TEST(testTextBoxSelectionDragUpdate);
+    RUN_TEST(testTextBoxSelectionReleaseClears);
+    RUN_TEST(testTextBoxSelectionReverseNormalize);
+    RUN_TEST(testTextBoxSelectionEmptyText);
+    RUN_TEST(testTextBoxSelectionSingleChar);
+    RUN_TEST(testScrollTextBoxSelectionPress);
 
     return TEST_REPORT();
 }

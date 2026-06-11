@@ -122,6 +122,8 @@ struct {
 
     Index curRoot;
 
+    Index selectingWidget;
+
     ArrayControlRegEntry controlRegistry;
     ArrayIndex navChainCache;
     QueueTuiMsg msgQueue;
@@ -129,6 +131,7 @@ struct {
 } tuiApp = {
     .options = {.fps = 24},        // NOLINT(readability-magic-numbers)
     .constants = {.escDelay = 25}, // NOLINT(readability-magic-numbers)
+    .selectingWidget = 0,
 };
 
 void tuiAppChangePage(ControlPage *entry) {
@@ -173,7 +176,9 @@ void tuiAppInit() {
     }
     raw();
     keypad(stdscr, true);
-    mousemask(BUTTON4_PRESSED | BUTTON5_PRESSED | REPORT_MOUSE_POSITION, NULL);
+    mousemask(BUTTON1_PRESSED | BUTTON1_RELEASED | BUTTON4_PRESSED |
+                  BUTTON5_PRESSED | REPORT_MOUSE_POSITION,
+              NULL);
     curs_set(0);
     noecho();
     nodelay(stdscr, true);
@@ -294,16 +299,50 @@ static void tuiAppInput() {
 
     if (ch == KEY_MOUSE) {
         MEVENT event;
-        if (getmouse(&event) == OK &&
-            (event.bstate & (BUTTON4_PRESSED | BUTTON5_PRESSED))) {
-            Index target = findWidgetAtMouse(event.y, event.x);
-            if (target != 0) {
-                tuiAppPushMessage(
-                    (TuiMsg){.type = MsgMouse,
-                             .arg1 = {.index = target},
-                             .arg2 = {.input = (event.bstate & BUTTON4_PRESSED)
-                                                   ? BUTTON4_PRESSED
-                                                   : BUTTON5_PRESSED}});
+        if (getmouse(&event) == OK) {
+            int bstate = event.bstate;
+            Index target;
+
+            if ((bstate & BUTTON1_PRESSED) != 0) {
+                target = findWidgetAtMouse(event.y, event.x);
+                if (target != 0) {
+                    tuiApp.selectingWidget = target;
+                    tuiAppPushMessage((TuiMsg){.type = MsgMouse,
+                                               .arg1 = {.index = target},
+                                               .arg2 = {.input = BUTTON1_PRESSED},
+                                               .mouseY = event.y,
+                                               .mouseX = event.x});
+                }
+            } else if ((bstate & BUTTON1_RELEASED) != 0) {
+                if (tuiApp.selectingWidget != 0) {
+                    target = tuiApp.selectingWidget;
+                    tuiApp.selectingWidget = 0;
+                    tuiAppPushMessage((TuiMsg){.type = MsgMouse,
+                                               .arg1 = {.index = target},
+                                               .arg2 = {.input =
+                                                            BUTTON1_RELEASED},
+                                               .mouseY = event.y,
+                                               .mouseX = event.x});
+                }
+            } else if ((bstate & REPORT_MOUSE_POSITION) != 0 &&
+                       tuiApp.selectingWidget != 0) {
+                tuiAppPushMessage((TuiMsg){.type = MsgMouse,
+                                           .arg1 = {.index =
+                                                        tuiApp.selectingWidget},
+                                           .arg2 = {.input =
+                                                        REPORT_MOUSE_POSITION},
+                                           .mouseY = event.y,
+                                           .mouseX = event.x});
+            } else if ((bstate & (BUTTON4_PRESSED | BUTTON5_PRESSED)) != 0) {
+                target = findWidgetAtMouse(event.y, event.x);
+                if (target != 0) {
+                    tuiAppPushMessage((TuiMsg){
+                        .type = MsgMouse,
+                        .arg1 = {.index = target},
+                        .arg2 = {.input = (bstate & BUTTON4_PRESSED)
+                                                  ? BUTTON4_PRESSED
+                                                  : BUTTON5_PRESSED}});
+                }
             }
         }
         return;

@@ -122,6 +122,11 @@ struct ControlTextBox {
     char *text;
     size_t textLen;
     size_t viewBegin;
+    struct {
+        bool active;
+        size_t startByte;
+        size_t endByte;
+    } selection;
 };
 
 struct ControlScrollTextBox {

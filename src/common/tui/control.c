@@ -23,6 +23,7 @@
  */
 
 #include "tui/control.h"
+#include "clipboard.h"
 #include "log.h"
 #include "tui/tuiapp.h"
 #include <ctype.h>
@@ -601,6 +602,9 @@ void controlTextBoxConstruct(ControlTextBox *self, int height, int width,
     self->text[TEXTBOX_TEXT_MAXLEN - 1] = '\0';
     self->textLen = strlen(self->text);
     self->viewBegin = 0;
+    self->selection.active = false;
+    self->selection.startByte = 0;
+    self->selection.endByte = 0;
 }
 
 static size_t textBoxAdvanceVisualLine(const char *text, size_t textLen,
@@ -653,6 +657,94 @@ static size_t textBoxCountVisualLines(const char *text, size_t textLen,
     return count;
 }
 
+static bool textBoxGetVisualLineRange(const ControlTextBox *box,
+                                      size_t visualLineIdx, size_t *outStart,
+                                      size_t *outEnd) {
+    int availWidth = box->base.width - 2;
+    size_t offset;
+    bool isContinuation;
+    size_t curLine;
+    size_t renderStart;
+
+    if (availWidth < 1 || box->text == NULL) {
+        return false;
+    }
+
+    offset = 0;
+    isContinuation = false;
+    curLine = 0;
+
+    while (curLine < visualLineIdx && offset < box->textLen) {
+        offset = textBoxAdvanceVisualLine(box->text, box->textLen, offset,
+                                          availWidth, &isContinuation);
+        curLine++;
+    }
+
+    if (offset >= box->textLen) {
+        return false;
+    }
+
+    renderStart = offset;
+    if (isContinuation) {
+        while (renderStart < box->textLen && box->text[renderStart] == ' ') {
+            renderStart++;
+        }
+    }
+
+    offset = textBoxAdvanceVisualLine(box->text, box->textLen, offset,
+                                      availWidth, &isContinuation);
+
+    *outEnd = offset;
+    if (*outEnd > renderStart && box->text[*outEnd - 1] == '\n') {
+        (*outEnd)--;
+    }
+    while (*outEnd > renderStart && box->text[*outEnd - 1] == ' ') {
+        (*outEnd)--;
+    }
+
+    *outStart = renderStart;
+    return true;
+}
+
+static size_t textBoxCoordToByteOffset(ControlTextBox *box, int localY,
+                                       int localX) {
+    int availWidth;
+    int visibleLines;
+    size_t visualLineIdx;
+    size_t lineStart;
+    size_t lineEnd;
+    size_t charOff;
+    size_t result;
+
+    availWidth = box->base.width - 2;
+    visibleLines = box->base.height - 2;
+    if (availWidth < 1 || visibleLines < 1 || box->text == NULL ||
+        box->textLen == 0) {
+        return 0;
+    }
+
+    if (localY < 1) {
+        localY = 1;
+    }
+
+    visualLineIdx = box->viewBegin + (size_t)(localY - 1);
+
+    if (!textBoxGetVisualLineRange(box, visualLineIdx, &lineStart, &lineEnd)) {
+        return box->textLen;
+    }
+
+    if (localX < 1) {
+        return lineStart;
+    }
+
+    charOff = (size_t)(localX - 1);
+    result = lineStart + charOff;
+    if (result > lineEnd) {
+        result = lineEnd;
+    }
+    return result;
+}
+
 void controlTextBoxDraw(void *self) {
     ControlTextBox *box = (ControlTextBox *)self;
     werase(box->base.windowHandler);
@@ -701,7 +793,48 @@ void controlTextBoxDraw(void *self) {
             end--;
         }
 
-        if (end > renderStart) {
+        if (end <= renderStart) {
+            curY++;
+            continue;
+        }
+
+        if (box->selection.active) {
+            size_t selStart = box->selection.startByte;
+            size_t selEnd = box->selection.endByte;
+
+            if (selStart > selEnd) {
+                size_t tmp = selStart;
+                selStart = selEnd;
+                selEnd = tmp;
+            }
+
+            if (selEnd > renderStart && selStart < end) {
+                size_t hlStart;
+                size_t hlEnd;
+
+                hlStart = (selStart > renderStart) ? selStart : renderStart;
+                hlEnd = (selEnd < end) ? selEnd : end;
+
+                if (hlStart > renderStart) {
+                    mvwprintw(box->base.windowHandler, curY, 1, "%.*s",
+                              (int)(hlStart - renderStart),
+                              box->text + renderStart);
+                }
+                wattron(box->base.windowHandler, A_REVERSE);
+                mvwprintw(box->base.windowHandler,
+                          curY, 1 + (int)(hlStart - renderStart), "%.*s",
+                          (int)(hlEnd - hlStart), box->text + hlStart);
+                wattroff(box->base.windowHandler, A_REVERSE);
+                if (hlEnd < end) {
+                    mvwprintw(box->base.windowHandler,
+                              curY, 1 + (int)(hlEnd - renderStart), "%.*s",
+                              (int)(end - hlEnd), box->text + hlEnd);
+                }
+            } else {
+                mvwprintw(box->base.windowHandler, curY, 1, "%.*s",
+                          (int)(end - renderStart), box->text + renderStart);
+            }
+        } else {
             mvwprintw(box->base.windowHandler, curY, 1, "%.*s",
                       (int)(end - renderStart), box->text + renderStart);
         }
@@ -783,21 +916,69 @@ static void controlTextBoxMsgHandler(void *self, TuiMsg msg) {
     case MsgMouse: {
         int availWidth = box->base.width - 2;
         int visibleLines = box->base.height - 2;
+        int input;
+
         if (availWidth < 1 || visibleLines < 1 || box->text == NULL) {
             break;
         }
-        size_t totalLines = textBoxCountVisualLines(box->text, box->textLen,
-                                                     availWidth);
-        size_t maxView = (totalLines > (size_t)visibleLines)
-                             ? totalLines - (size_t)visibleLines
-                             : 0;
-        if (msg.arg2.input == BUTTON4_PRESSED) {
-            if (box->viewBegin > 0) {
-                box->viewBegin--;
+
+        if (box->base.windowHandler != NULL) {
+            wmouse_trafo(box->base.windowHandler, &msg.mouseY, &msg.mouseX,
+                         FALSE);
+        }
+
+        input = msg.arg2.input;
+
+        if ((input & BUTTON1_PRESSED) != 0) {
+            box->selection.active = true;
+            box->selection.startByte =
+                textBoxCoordToByteOffset(box, msg.mouseY, msg.mouseX);
+            box->selection.endByte = box->selection.startByte;
+        } else if (input == REPORT_MOUSE_POSITION && box->selection.active) {
+            box->selection.endByte =
+                textBoxCoordToByteOffset(box, msg.mouseY, msg.mouseX);
+        } else if ((input & BUTTON1_RELEASED) != 0 && box->selection.active) {
+            size_t selStart;
+            size_t selEnd;
+            char *selected;
+
+            box->selection.endByte =
+                textBoxCoordToByteOffset(box, msg.mouseY, msg.mouseX);
+
+            selStart = box->selection.startByte;
+            selEnd = box->selection.endByte;
+            if (selStart > selEnd) {
+                size_t tmp = selStart;
+                selStart = selEnd;
+                selEnd = tmp;
             }
-        } else if (msg.arg2.input == BUTTON5_PRESSED) {
-            if (box->viewBegin < maxView) {
-                box->viewBegin++;
+
+            if (selEnd > selStart && selEnd <= box->textLen) {
+                selected = malloc(selEnd - selStart + 1);
+                if (selected != NULL) {
+                    memcpy(selected, box->text + selStart,
+                           selEnd - selStart);
+                    selected[selEnd - selStart] = '\0';
+                    clipboardCopy(selected);
+                    free(selected);
+                }
+            }
+
+            box->selection.active = false;
+        } else if (input == BUTTON4_PRESSED || input == BUTTON5_PRESSED) {
+            size_t totalLines = textBoxCountVisualLines(box->text, box->textLen,
+                                                         availWidth);
+            size_t maxView = (totalLines > (size_t)visibleLines)
+                                 ? totalLines - (size_t)visibleLines
+                                 : 0;
+            if (input == BUTTON4_PRESSED) {
+                if (box->viewBegin > 0) {
+                    box->viewBegin--;
+                }
+            } else {
+                if (box->viewBegin < maxView) {
+                    box->viewBegin++;
+                }
             }
         }
         break;
@@ -837,6 +1018,9 @@ void controlScrollTextBoxConstruct(ControlScrollTextBox *self, int height,
     self->base.text[0] = '\0';
     self->base.textLen = 0;
     self->base.viewBegin = 0;
+    self->base.selection.active = false;
+    self->base.selection.startByte = 0;
+    self->base.selection.endByte = 0;
     self->maxLines =
         (maxLines > 0) ? maxLines : SCROLLTEXTBOX_DEFAULT_MAX_LINES;
 }
