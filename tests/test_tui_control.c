@@ -931,6 +931,62 @@ static void testScrollTextBoxSelectionPress(void) {
     free(box.base.text);
 }
 
+static void testButtonMouseClickFiresOnClick(void) {
+    ControlButton btn;
+    memset(&btn, 0, sizeof(btn));
+    gClickCount = 0;
+
+    controlButtonConstruct(&btn, TestHeight, TestWidth, TestY, TestX, "OK",
+                           NULL, dummyOnClick, dummyCbBtn, dummyCbBtn);
+
+    TuiMsg msgClick = {.type = MsgMouse,
+                       .arg2 = {.input = BUTTON1_RELEASED | BUTTON1_CLICKED}};
+    btn.base.vtable.msgHandler(&btn, msgClick);
+    ASSERT_INT_EQ(gClickCount, IntOne);
+
+    free(btn.text);
+}
+
+static void testButtonMouseDragNoClick(void) {
+    ControlButton btn;
+    memset(&btn, 0, sizeof(btn));
+    gClickCount = 0;
+
+    controlButtonConstruct(&btn, TestHeight, TestWidth, TestY, TestX, "OK",
+                           NULL, dummyOnClick, dummyCbBtn, dummyCbBtn);
+
+    TuiMsg msgRelease = {.type = MsgMouse,
+                         .arg2 = {.input = BUTTON1_RELEASED}};
+    btn.base.vtable.msgHandler(&btn, msgRelease);
+    ASSERT_INT_EQ(gClickCount, IntZero);
+
+    free(btn.text);
+}
+
+static void testTextBoxMouseClickSwitchesFocus(void) {
+    ControlTextBox box;
+    setupTextBox(&box, "line1\nline2\nline3\nline4\nline5");
+
+    /* Press starts selection */
+    TuiMsg msgPress = {.type = MsgMouse,
+                       .arg2 = {.input = BUTTON1_PRESSED},
+                       .mouseY = SelY1,
+                       .mouseX = SelX1};
+    box.base.vtable.msgHandler(&box, msgPress);
+    ASSERT_TRUE(box.selection.active);
+
+    /* Release with BUTTON1_CLICKED: no drag → no copy, but active cleared */
+    TuiMsg msgClickRelease = {
+        .type = MsgMouse,
+        .arg2 = {.input = BUTTON1_RELEASED | BUTTON1_CLICKED},
+        .mouseY = SelY1,
+        .mouseX = SelX1};
+    box.base.vtable.msgHandler(&box, msgClickRelease);
+    ASSERT_FALSE(box.selection.active);
+
+    teardownTextBox(&box);
+}
+
 /* ────────────────── double-destruct safety tests ────────────────────────── */
 
 static void testControlButtonDestructDoubleSafe(void) {
@@ -1299,6 +1355,9 @@ int main(void) {
     RUN_TEST(testTextBoxSelectionEmptyText);
     RUN_TEST(testTextBoxSelectionSingleChar);
     RUN_TEST(testScrollTextBoxSelectionPress);
+    RUN_TEST(testButtonMouseClickFiresOnClick);
+    RUN_TEST(testButtonMouseDragNoClick);
+    RUN_TEST(testTextBoxMouseClickSwitchesFocus);
 
     return TEST_REPORT();
 }

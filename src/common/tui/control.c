@@ -245,6 +245,12 @@ static void controlButtonMsgHandler(void *self, TuiMsg msg) {
             btn->base.commonMsgHandlers.resize(btn);
         }
         break;
+    case MsgMouse:
+        if ((msg.arg2.input & BUTTON1_CLICKED) != 0 &&
+            btn->onClick != NULL) {
+            btn->onClick(btn);
+        }
+        break;
     default:
         break;
     }

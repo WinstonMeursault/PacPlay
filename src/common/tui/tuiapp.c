@@ -102,6 +102,7 @@ static void tuiAppMsgHandle();
 static void tuiAppChangeRoot(Index root);
 static void tuiAppRefreshNavChain();
 static void tuiAppNavigate(bool isBack);
+static bool findFocusableInNavChain(Index widgetIdx, Index *outPos);
 static Index findWidgetAtMouse(int screenY, int screenX);
 
 struct {
@@ -176,8 +177,8 @@ void tuiAppInit() {
     }
     raw();
     keypad(stdscr, true);
-    mousemask(BUTTON1_PRESSED | BUTTON1_RELEASED | BUTTON4_PRESSED |
-                  BUTTON5_PRESSED | REPORT_MOUSE_POSITION,
+    mousemask(BUTTON1_PRESSED | BUTTON1_RELEASED | BUTTON1_CLICKED |
+                  BUTTON4_PRESSED | BUTTON5_PRESSED | REPORT_MOUSE_POSITION,
               NULL);
     curs_set(0);
     noecho();
@@ -306,6 +307,29 @@ static void tuiAppInput() {
             if ((bstate & BUTTON1_PRESSED) != 0) {
                 target = findWidgetAtMouse(event.y, event.x);
                 if (target != 0) {
+                    Index navPos;
+                    if (findFocusableInNavChain(target, &navPos) &&
+                        target != tuiApp.userCursor.index) {
+                        ControlRegEntry *cur;
+                        if (tuiApp.userCursor.index != 0) {
+                            CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry,
+                                                   tuiApp.userCursor.index,
+                                                   &cur);
+                            cur->ptr->focused = false;
+                            tuiAppPushMessage(
+                                (TuiMsg){.type = MsgFocusLeave,
+                                         .arg1 = {.index =
+                                                      tuiApp.userCursor
+                                                          .index}});
+                        }
+                        tuiApp.userCursor.indexOfCache = navPos;
+                        tuiApp.userCursor.index = target;
+                        CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, target,
+                                               &cur);
+                        cur->ptr->focused = true;
+                        tuiAppPushMessage((TuiMsg){.type = MsgFocusEnter,
+                                                   .arg1 = {.index = target}});
+                    }
                     tuiApp.selectingWidget = target;
                     tuiAppPushMessage((TuiMsg){.type = MsgMouse,
                                                .arg1 = {.index = target},
@@ -319,8 +343,7 @@ static void tuiAppInput() {
                     tuiApp.selectingWidget = 0;
                     tuiAppPushMessage((TuiMsg){.type = MsgMouse,
                                                .arg1 = {.index = target},
-                                               .arg2 = {.input =
-                                                            BUTTON1_RELEASED},
+                                               .arg2 = {.input = bstate},
                                                .mouseY = event.y,
                                                .mouseX = event.x});
                 }
@@ -654,6 +677,20 @@ static void tuiAppNavigate(bool isBack) {
     cur->ptr->focused = true;
     tuiAppPushMessage((TuiMsg){.type = MsgFocusEnter,
                                .arg1 = {.index = tuiApp.userCursor.index}});
+}
+
+static bool findFocusableInNavChain(Index widgetIdx, Index *outPos) {
+    size_t size = arrayIndexSize(&tuiApp.navChainCache);
+    Index i;
+    for (i = 0; i < size; ++i) {
+        Index cur;
+        CHECKED_ARRAY_INDEX_GET(&tuiApp.navChainCache, i, &cur);
+        if (cur == widgetIdx) {
+            *outPos = i;
+            return true;
+        }
+    }
+    return false;
 }
 
 static Index findWidgetAtMouse(int screenY, int screenX) {
