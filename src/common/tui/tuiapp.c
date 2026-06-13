@@ -180,6 +180,7 @@ void tuiAppInit() {
     mousemask(BUTTON1_PRESSED | BUTTON1_RELEASED | BUTTON1_CLICKED |
                   BUTTON4_PRESSED | BUTTON5_PRESSED | REPORT_MOUSE_POSITION,
               NULL);
+    mouseinterval(0);
     curs_set(0);
     noecho();
     nodelay(stdscr, true);
@@ -316,11 +317,9 @@ static void tuiAppInput() {
                                                    tuiApp.userCursor.index,
                                                    &cur);
                             cur->ptr->focused = false;
-                            tuiAppPushMessage(
-                                (TuiMsg){.type = MsgFocusLeave,
-                                         .arg1 = {.index =
-                                                      tuiApp.userCursor
-                                                          .index}});
+                            tuiAppPushMessage((TuiMsg){
+                                .type = MsgFocusLeave,
+                                .arg1 = {.index = tuiApp.userCursor.index}});
                         }
                         tuiApp.userCursor.indexOfCache = navPos;
                         tuiApp.userCursor.index = target;
@@ -331,11 +330,12 @@ static void tuiAppInput() {
                                                    .arg1 = {.index = target}});
                     }
                     tuiApp.selectingWidget = target;
-                    tuiAppPushMessage((TuiMsg){.type = MsgMouse,
-                                               .arg1 = {.index = target},
-                                               .arg2 = {.input = BUTTON1_PRESSED},
-                                               .mouseY = event.y,
-                                               .mouseX = event.x});
+                    tuiAppPushMessage(
+                        (TuiMsg){.type = MsgMouse,
+                                 .arg1 = {.index = target},
+                                 .arg2 = {.input = BUTTON1_PRESSED},
+                                 .mouseY = event.y,
+                                 .mouseX = event.x});
                 }
             } else if ((bstate & BUTTON1_RELEASED) != 0) {
                 if (tuiApp.selectingWidget != 0) {
@@ -345,8 +345,7 @@ static void tuiAppInput() {
                        the same widget that received the press.  Most terminal
                        emulators never report BUTTON1_CLICKED natively, so we
                        compose it here to guarantee button onClick fires. */
-                    Index releaseTarget =
-                        findWidgetAtMouse(event.y, event.x);
+                    Index releaseTarget = findWidgetAtMouse(event.y, event.x);
                     if (releaseTarget == target) {
                         bstate |= BUTTON1_CLICKED;
                     }
@@ -356,24 +355,54 @@ static void tuiAppInput() {
                                                .mouseY = event.y,
                                                .mouseX = event.x});
                 }
+            } else if ((bstate & BUTTON1_CLICKED) != 0) {
+                target = findWidgetAtMouse(event.y, event.x);
+                if (target != 0) {
+                    Index navPos;
+                    if (findFocusableInNavChain(target, &navPos) &&
+                        target != tuiApp.userCursor.index) {
+                        ControlRegEntry *cur;
+                        if (tuiApp.userCursor.index != 0) {
+                            CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry,
+                                                   tuiApp.userCursor.index,
+                                                   &cur);
+                            cur->ptr->focused = false;
+                            tuiAppPushMessage((TuiMsg){
+                                .type = MsgFocusLeave,
+                                .arg1 = {.index = tuiApp.userCursor.index}});
+                        }
+                        tuiApp.userCursor.indexOfCache = navPos;
+                        tuiApp.userCursor.index = target;
+                        CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, target,
+                                               &cur);
+                        cur->ptr->focused = true;
+                        tuiAppPushMessage((TuiMsg){.type = MsgFocusEnter,
+                                                   .arg1 = {.index = target}});
+                    }
+                    tuiAppPushMessage(
+                        (TuiMsg){.type = MsgMouse,
+                                 .arg1 = {.index = target},
+                                 .arg2 = {.input = BUTTON1_CLICKED},
+                                 .mouseY = event.y,
+                                 .mouseX = event.x});
+                }
             } else if ((bstate & REPORT_MOUSE_POSITION) != 0 &&
                        tuiApp.selectingWidget != 0) {
-                tuiAppPushMessage((TuiMsg){.type = MsgMouse,
-                                           .arg1 = {.index =
-                                                        tuiApp.selectingWidget},
-                                           .arg2 = {.input =
-                                                        REPORT_MOUSE_POSITION},
-                                           .mouseY = event.y,
-                                           .mouseX = event.x});
+                tuiAppPushMessage(
+                    (TuiMsg){.type = MsgMouse,
+                             .arg1 = {.index = tuiApp.selectingWidget},
+                             .arg2 = {.input = REPORT_MOUSE_POSITION},
+                             .mouseY = event.y,
+                             .mouseX = event.x});
             } else if ((bstate & (BUTTON4_PRESSED | BUTTON5_PRESSED)) != 0) {
                 target = findWidgetAtMouse(event.y, event.x);
                 if (target != 0) {
-                    tuiAppPushMessage((TuiMsg){
-                        .type = MsgMouse,
-                        .arg1 = {.index = target},
-                        .arg2 = {.input = (bstate & BUTTON4_PRESSED)
-                                                  ? BUTTON4_PRESSED
-                                                  : BUTTON5_PRESSED}});
+                    tuiAppPushMessage(
+                        (TuiMsg){.type = MsgMouse,
+                                 .arg1 = {.index = target},
+                                 .arg2 = {.input = (bstate & BUTTON4_PRESSED)
+                                                       ? BUTTON4_PRESSED
+                                                       : BUTTON5_PRESSED}});
                 }
             }
         }
