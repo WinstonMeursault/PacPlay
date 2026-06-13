@@ -341,6 +341,15 @@ static void tuiAppInput() {
                 if (tuiApp.selectingWidget != 0) {
                     target = tuiApp.selectingWidget;
                     tuiApp.selectingWidget = 0;
+                    /* Synthesize BUTTON1_CLICKED when the release lands on
+                       the same widget that received the press.  Most terminal
+                       emulators never report BUTTON1_CLICKED natively, so we
+                       compose it here to guarantee button onClick fires. */
+                    Index releaseTarget =
+                        findWidgetAtMouse(event.y, event.x);
+                    if (releaseTarget == target) {
+                        bstate |= BUTTON1_CLICKED;
+                    }
                     tuiAppPushMessage((TuiMsg){.type = MsgMouse,
                                                .arg1 = {.index = target},
                                                .arg2 = {.input = bstate},
