@@ -719,9 +719,9 @@ static void testTextBoxSelectionPressStart(void) {
                        .mouseY = SelY1,
                        .mouseX = SelX1};
     box.base.vtable.msgHandler(&box, msgPress);
-    ASSERT_TRUE(box.selection.active);
-    ASSERT_UINT_EQ(box.selection.startByte, Zero);
-    ASSERT_UINT_EQ(box.selection.endByte, Zero);
+    ASSERT_TRUE(box.base.selection.active);
+    ASSERT_UINT_EQ(box.base.selection.startByte, Zero);
+    ASSERT_UINT_EQ(box.base.selection.endByte, Zero);
 
     teardownTextBox(&box);
 }
@@ -735,8 +735,8 @@ static void testTextBoxSelectionPressSecondLine(void) {
                        .mouseY = SelY2,
                        .mouseX = SelX1};
     box.base.vtable.msgHandler(&box, msgPress);
-    ASSERT_TRUE(box.selection.active);
-    ASSERT_UINT_EQ(box.selection.startByte, SelByteLine2Start);
+    ASSERT_TRUE(box.base.selection.active);
+    ASSERT_UINT_EQ(box.base.selection.startByte, SelByteLine2Start);
 
     teardownTextBox(&box);
 }
@@ -751,8 +751,8 @@ static void testTextBoxSelectionPressPastEnd(void) {
                        .mouseY = SelY1,
                        .mouseX = SelX6};
     box.base.vtable.msgHandler(&box, msgPress);
-    ASSERT_TRUE(box.selection.active);
-    ASSERT_UINT_EQ(box.selection.startByte, SelByteLine1End);
+    ASSERT_TRUE(box.base.selection.active);
+    ASSERT_UINT_EQ(box.base.selection.startByte, SelByteLine1End);
 
     teardownTextBox(&box);
 }
@@ -767,7 +767,7 @@ static void testTextBoxSelectionDragUpdate(void) {
                        .mouseY = SelY1,
                        .mouseX = SelX1};
     box.base.vtable.msgHandler(&box, msgPress);
-    ASSERT_UINT_EQ(box.selection.startByte, Zero);
+    ASSERT_UINT_EQ(box.base.selection.startByte, Zero);
 
     /* Drag to end of line1 */
     TuiMsg msgDrag1 = {.type = MsgMouse,
@@ -775,8 +775,8 @@ static void testTextBoxSelectionDragUpdate(void) {
                        .mouseY = SelY1,
                        .mouseX = SelX6};
     box.base.vtable.msgHandler(&box, msgDrag1);
-    ASSERT_TRUE(box.selection.active);
-    ASSERT_UINT_EQ(box.selection.endByte, SelByteLine1End);
+    ASSERT_TRUE(box.base.selection.active);
+    ASSERT_UINT_EQ(box.base.selection.endByte, SelByteLine1End);
 
     /* Drag to line2 */
     TuiMsg msgDrag2 = {.type = MsgMouse,
@@ -784,8 +784,8 @@ static void testTextBoxSelectionDragUpdate(void) {
                        .mouseY = SelY2,
                        .mouseX = SelX6};
     box.base.vtable.msgHandler(&box, msgDrag2);
-    ASSERT_TRUE(box.selection.active);
-    ASSERT_UINT_EQ(box.selection.endByte, SelByteLine2End);
+    ASSERT_TRUE(box.base.selection.active);
+    ASSERT_UINT_EQ(box.base.selection.endByte, SelByteLine2End);
 
     /* Drag to line3 */
     TuiMsg msgDrag3 = {.type = MsgMouse,
@@ -793,8 +793,8 @@ static void testTextBoxSelectionDragUpdate(void) {
                        .mouseY = SelY3,
                        .mouseX = SelX6};
     box.base.vtable.msgHandler(&box, msgDrag3);
-    ASSERT_TRUE(box.selection.active);
-    ASSERT_UINT_EQ(box.selection.endByte, SelByteLine3End);
+    ASSERT_TRUE(box.base.selection.active);
+    ASSERT_UINT_EQ(box.base.selection.endByte, SelByteLine3End);
 
     teardownTextBox(&box);
 }
@@ -821,7 +821,7 @@ static void testTextBoxSelectionReleaseClears(void) {
                          .mouseY = SelY1,
                          .mouseX = SelX5};
     box.base.vtable.msgHandler(&box, msgRelease);
-    ASSERT_FALSE(box.selection.active);
+    ASSERT_FALSE(box.base.selection.active);
 
     teardownTextBox(&box);
 }
@@ -836,7 +836,7 @@ static void testTextBoxSelectionReverseNormalize(void) {
                        .mouseY = SelY1,
                        .mouseX = SelX5};
     box.base.vtable.msgHandler(&box, msgPress);
-    ASSERT_UINT_EQ(box.selection.startByte, SelByteLine1End - 1);
+    ASSERT_UINT_EQ(box.base.selection.startByte, SelByteLine1End - 1);
 
     TuiMsg msgDrag = {.type = MsgMouse,
                       .arg2 = {.input = REPORT_MOUSE_POSITION},
@@ -844,8 +844,8 @@ static void testTextBoxSelectionReverseNormalize(void) {
                       .mouseX = SelX1};
     box.base.vtable.msgHandler(&box, msgDrag);
     /* endByte should be less than startByte for reverse selection */
-    ASSERT_UINT_EQ(box.selection.endByte, Zero);
-    ASSERT_TRUE(box.selection.startByte > box.selection.endByte);
+    ASSERT_UINT_EQ(box.base.selection.endByte, Zero);
+    ASSERT_TRUE(box.base.selection.startByte > box.base.selection.endByte);
 
     /* Release: should normalize and copy — active cleared */
     TuiMsg msgRelease = {.type = MsgMouse,
@@ -853,7 +853,7 @@ static void testTextBoxSelectionReverseNormalize(void) {
                          .mouseY = SelY1,
                          .mouseX = SelX1};
     box.base.vtable.msgHandler(&box, msgRelease);
-    ASSERT_FALSE(box.selection.active);
+    ASSERT_FALSE(box.base.selection.active);
 
     teardownTextBox(&box);
 }
@@ -868,15 +868,15 @@ static void testTextBoxSelectionEmptyText(void) {
                        .mouseX = SelX1};
     box.base.vtable.msgHandler(&box, msgPress);
     /* Empty text: selection should not activate or should be zero-length */
-    ASSERT_UINT_EQ(box.selection.startByte, Zero);
-    ASSERT_UINT_EQ(box.selection.endByte, Zero);
+    ASSERT_UINT_EQ(box.base.selection.startByte, Zero);
+    ASSERT_UINT_EQ(box.base.selection.endByte, Zero);
 
     TuiMsg msgRelease = {.type = MsgMouse,
                          .arg2 = {.input = BUTTON1_RELEASED},
                          .mouseY = SelY1,
                          .mouseX = SelX1};
     box.base.vtable.msgHandler(&box, msgRelease);
-    ASSERT_FALSE(box.selection.active);
+    ASSERT_FALSE(box.base.selection.active);
 
     teardownTextBox(&box);
 }
@@ -891,15 +891,15 @@ static void testTextBoxSelectionSingleChar(void) {
                        .mouseY = SelY1,
                        .mouseX = SelX1};
     box.base.vtable.msgHandler(&box, msgPress);
-    ASSERT_TRUE(box.selection.active);
-    ASSERT_UINT_EQ(box.selection.startByte, Zero);
+    ASSERT_TRUE(box.base.selection.active);
+    ASSERT_UINT_EQ(box.base.selection.startByte, Zero);
 
     TuiMsg msgRelease = {.type = MsgMouse,
                          .arg2 = {.input = BUTTON1_RELEASED},
                          .mouseY = SelY1,
                          .mouseX = SelX1};
     box.base.vtable.msgHandler(&box, msgRelease);
-    ASSERT_FALSE(box.selection.active);
+    ASSERT_FALSE(box.base.selection.active);
 
     teardownTextBox(&box);
 }
@@ -917,8 +917,8 @@ static void testScrollTextBoxSelectionPress(void) {
                        .mouseY = SelY1,
                        .mouseX = SelX1};
     box.base.base.vtable.msgHandler(&box, msgPress);
-    ASSERT_TRUE(box.base.selection.active);
-    ASSERT_UINT_EQ(box.base.selection.startByte, Zero);
+    ASSERT_TRUE(box.base.base.selection.active);
+    ASSERT_UINT_EQ(box.base.base.selection.startByte, Zero);
 
     /* Release to clear */
     TuiMsg msgRelease = {.type = MsgMouse,
@@ -926,7 +926,7 @@ static void testScrollTextBoxSelectionPress(void) {
                          .mouseY = SelY1,
                          .mouseX = SelX1};
     box.base.base.vtable.msgHandler(&box, msgRelease);
-    ASSERT_FALSE(box.base.selection.active);
+    ASSERT_FALSE(box.base.base.selection.active);
 
     free(box.base.text);
 }
@@ -973,7 +973,7 @@ static void testTextBoxMouseClickSwitchesFocus(void) {
                        .mouseY = SelY1,
                        .mouseX = SelX1};
     box.base.vtable.msgHandler(&box, msgPress);
-    ASSERT_TRUE(box.selection.active);
+    ASSERT_TRUE(box.base.selection.active);
 
     /* Release with BUTTON1_CLICKED: no drag → no copy, but active cleared */
     TuiMsg msgClickRelease = {
@@ -982,7 +982,7 @@ static void testTextBoxMouseClickSwitchesFocus(void) {
         .mouseY = SelY1,
         .mouseX = SelX1};
     box.base.vtable.msgHandler(&box, msgClickRelease);
-    ASSERT_FALSE(box.selection.active);
+    ASSERT_FALSE(box.base.selection.active);
 
     teardownTextBox(&box);
 }

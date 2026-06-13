@@ -1,8 +1,7 @@
 /**
  * @file clipboard.c
  * @brief Clipboard implementation using OSC 52 escape sequences with Base64
- *        encoding. Works with modern terminals (kitty, wezterm, alacritty,
- *        Windows Terminal) without any external dependencies.
+ *        encoding. Writes directly to /dev/tty to avoid conflicts with ncurses.
  *
  * @date 2026-06-11
  * @copyright GPLv3 License
@@ -46,6 +45,28 @@ enum {
 static const char gBase64Alphabet[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+static FILE *gTtyFile;
+
+bool clipboardInit(void) {
+    gTtyFile = fopen("/dev/tty", "w");
+    return gTtyFile != NULL;
+}
+
+void clipboardDeinit(void) {
+    if (gTtyFile != NULL) {
+        fclose(gTtyFile);
+        gTtyFile = NULL;
+    }
+}
+
+void clipboardWriteRaw(const char *data) {
+    if (data == NULL || gTtyFile == NULL) {
+        return;
+    }
+    fputs(data, gTtyFile);
+    fflush(gTtyFile);
+}
+
 void clipboardCopy(const char *text) {
     size_t len;
     size_t padCount;
@@ -54,7 +75,7 @@ void clipboardCopy(const char *text) {
     size_t j;
     char *b64;
 
-    if (text == NULL) {
+    if (text == NULL || gTtyFile == NULL) {
         return;
     }
     len = strlen(text);
@@ -96,8 +117,8 @@ void clipboardCopy(const char *text) {
     }
     b64[outLen] = '\0';
 
-    printf("\033]52;c;%s\a", b64);
-    fflush(stdout);
+    fprintf(gTtyFile, "\033]52;c;%s\a", b64);
+    fflush(gTtyFile);
 
     free(b64);
 }

@@ -51,6 +51,8 @@ struct ControlVTable {
     void (*destruct)(void *self);
     void (*draw)(void *self);
     void (*msgHandler)(void *self, TuiMsg msg);
+    const char *(*getSelectableText)(void *self, size_t *outLen);
+    size_t (*coordToByteOffset)(void *self, int localY, int localX);
 };
 
 struct ControlCommonMsgHandlers {
@@ -75,6 +77,11 @@ struct Control {
     size_t childCount;
     bool takeOverInput;
     bool visible;
+    struct {
+        bool active;
+        size_t startByte;
+        size_t endByte;
+    } selection;
 };
 
 struct ControlButton {
@@ -122,11 +129,6 @@ struct ControlTextBox {
     char *text;
     size_t textLen;
     size_t viewBegin;
-    struct {
-        bool active;
-        size_t startByte;
-        size_t endByte;
-    } selection;
 };
 
 struct ControlScrollTextBox {
@@ -181,5 +183,7 @@ void controlScrollTextBoxConstruct(ControlScrollTextBox *self, int height,
                                    void (*resize)(ControlScrollTextBox *self),
                                    void (*refresh)(ControlScrollTextBox *self));
 void controlScrollTextBoxAppend(ControlScrollTextBox *self, const char *text);
+
+bool controlSelectionHandleMouse(Control *self, TuiMsg msg);
 
 #endif // CONTROL_H

@@ -23,6 +23,7 @@
  */
 
 #include "tui/tuiapp.h"
+#include "clipboard.h"
 #include "log.h"
 #include "tui/ncurses_wrapper.h"
 #include "tui/tuimsg.h"
@@ -200,6 +201,8 @@ void tuiAppInit() {
         }
         pthread_mutexattr_destroy(&attr);
     }
+    clipboardInit();
+    clipboardWriteRaw("\033[?1002h");
 }
 
 // parent must be already registered and it must be a container or a page.
@@ -279,6 +282,8 @@ static void tuiAppDeinit() {
     arrayIndexDeinit(&tuiApp.navChainCache);
     pthread_mutex_destroy(&tuiApp.msgQueueLock);
     queueTuiMsgDeinit(&tuiApp.msgQueue);
+    clipboardWriteRaw("\033[?1002l");
+    clipboardDeinit();
     endwin();
 }
 

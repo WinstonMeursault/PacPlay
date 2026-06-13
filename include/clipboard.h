@@ -25,6 +25,11 @@
 #ifndef CLIPBOARD_H
 #define CLIPBOARD_H
 
+#include <stdbool.h>
+
+bool clipboardInit(void);
+void clipboardDeinit(void);
 void clipboardCopy(const char *text);
+void clipboardWriteRaw(const char *data);
 
 #endif /* CLIPBOARD_H */

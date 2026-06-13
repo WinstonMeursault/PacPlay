@@ -63,34 +63,59 @@ static size_t textBoxAdvanceVisualLine(const char *text, size_t textLen,
                                        size_t start, int availWidth,
                                        bool *isBreakOut);
 static size_t textBoxCountVisualLines(const char *text, size_t textLen,
-                                      int availWidth);
+                                       int availWidth);
+
+static const char *labelGetSelectableText(void *self, size_t *outLen);
+static size_t labelCoordToByteOffset(void *self, int localY, int localX);
+
+static const char *inputBoxGetSelectableText(void *self, size_t *outLen);
+static size_t inputBoxCoordToByteOffset(void *self, int localY, int localX);
+
+static const char *textBoxGetSelectableText(void *self, size_t *outLen);
+static size_t textBoxCoordToByteOffset(void *self, int localY, int localX);
 
 const static ControlVTable defaultCtrlVtable = {
-    .destruct = NULL, .draw = NULL, .msgHandler = NULL};
+    .destruct = NULL,
+    .draw = NULL,
+    .msgHandler = NULL,
+    .getSelectableText = NULL,
+    .coordToByteOffset = NULL};
 const static ControlVTable defaultBtnVtable = {
     .destruct = controlButtonDestruct,
     .draw = controlButtonDraw,
-    .msgHandler = controlButtonMsgHandler};
-const static ControlVTable defaultGridVtable = {.destruct = NULL,
-                                                .draw = controlGridDraw,
-                                                .msgHandler =
-                                                    controlGridMsgHandler};
+    .msgHandler = controlButtonMsgHandler,
+    .getSelectableText = NULL,
+    .coordToByteOffset = NULL};
+const static ControlVTable defaultGridVtable = {
+    .destruct = NULL,
+    .draw = controlGridDraw,
+    .msgHandler = controlGridMsgHandler,
+    .getSelectableText = NULL,
+    .coordToByteOffset = NULL};
 const static ControlVTable defaultLabelVtable = {
     .destruct = controlLabelDestruct,
     .draw = controlLabelDraw,
-    .msgHandler = controlLabelMsgHandler};
+    .msgHandler = controlLabelMsgHandler,
+    .getSelectableText = labelGetSelectableText,
+    .coordToByteOffset = labelCoordToByteOffset};
 const static ControlVTable defaultInputBoxVtable = {
     .destruct = controlInputBoxDestruct,
     .draw = controlInputBoxDraw,
-    .msgHandler = controlInputBoxMsgHandler};
+    .msgHandler = controlInputBoxMsgHandler,
+    .getSelectableText = inputBoxGetSelectableText,
+    .coordToByteOffset = inputBoxCoordToByteOffset};
 const static ControlVTable defaultTextBoxVtable = {
     .destruct = controlTextBoxDestruct,
     .draw = controlTextBoxDraw,
-    .msgHandler = controlTextBoxMsgHandler};
+    .msgHandler = controlTextBoxMsgHandler,
+    .getSelectableText = textBoxGetSelectableText,
+    .coordToByteOffset = textBoxCoordToByteOffset};
 const static ControlVTable defaultScrollTextBoxVtable = {
     .destruct = controlTextBoxDestruct,
     .draw = controlTextBoxDraw,
-    .msgHandler = controlTextBoxMsgHandler};
+    .msgHandler = controlTextBoxMsgHandler,
+    .getSelectableText = textBoxGetSelectableText,
+    .coordToByteOffset = textBoxCoordToByteOffset};
 
 static void customBox(WINDOW *handler, const wchar_t *lsRaw,
                       const wchar_t *rsRaw, const wchar_t *tsRaw,
@@ -147,6 +172,9 @@ static void controlConstruct(Control *self, int height, int width, int y, int x,
     self->visible = true;
     self->commonMsgHandlers.resize = NULL;
     self->commonMsgHandlers.refresh = NULL;
+    self->selection.active = false;
+    self->selection.startByte = 0;
+    self->selection.endByte = 0;
 }
 
 void controlPageConstruct(ControlPage *self) {
@@ -174,6 +202,73 @@ static void controlPageRefreshChild(void *self, void *child) {
     ControlPage *page = (ControlPage *)self;
     controlDeinstantiate((Control *)child);
     controlInstantiate((Control *)child, (Control *)page);
+}
+
+bool controlSelectionHandleMouse(Control *self, TuiMsg msg) {
+    int input;
+    size_t textLen;
+    const char *text;
+
+    if (self->vtable.getSelectableText == NULL ||
+        self->vtable.coordToByteOffset == NULL) {
+        return false;
+    }
+
+    text = self->vtable.getSelectableText(self, &textLen);
+    if (text == NULL || textLen == 0) {
+        return false;
+    }
+
+    if (self->windowHandler != NULL) {
+        wmouse_trafo(self->windowHandler, &msg.mouseY, &msg.mouseX, FALSE);
+    }
+
+    input = msg.arg2.input;
+
+    if ((input & BUTTON1_PRESSED) != 0) {
+        self->selection.active = true;
+        self->selection.startByte =
+            self->vtable.coordToByteOffset(self, msg.mouseY, msg.mouseX);
+        self->selection.endByte = self->selection.startByte;
+        return true;
+    }
+
+    if (input == REPORT_MOUSE_POSITION && self->selection.active) {
+        self->selection.endByte =
+            self->vtable.coordToByteOffset(self, msg.mouseY, msg.mouseX);
+        return true;
+    }
+
+    if ((input & BUTTON1_RELEASED) != 0 && self->selection.active) {
+        size_t selStart;
+        size_t selEnd;
+
+        self->selection.endByte =
+            self->vtable.coordToByteOffset(self, msg.mouseY, msg.mouseX);
+
+        selStart = self->selection.startByte;
+        selEnd = self->selection.endByte;
+        if (selStart > selEnd) {
+            size_t tmp = selStart;
+            selStart = selEnd;
+            selEnd = tmp;
+        }
+
+        if (selEnd > selStart && selEnd <= textLen) {
+            char *selected = malloc(selEnd - selStart + 1);
+            if (selected != NULL) {
+                memcpy(selected, text + selStart, selEnd - selStart);
+                selected[selEnd - selStart] = '\0';
+                clipboardCopy(selected);
+                free(selected);
+            }
+        }
+
+        self->selection.active = false;
+        return true;
+    }
+
+    return false;
 }
 
 // funcptrs == NULL to use default
@@ -382,7 +477,40 @@ void controlLabelDraw(void *self) {
     werase(label->base.windowHandler);
 
     if (label->text != NULL) {
-        mvwprintw(label->base.windowHandler, 0, 0, "%s", label->text);
+        size_t textLen = strlen(label->text);
+        if (label->base.selection.active && textLen > 0) {
+            size_t selStart = label->base.selection.startByte;
+            size_t selEnd = label->base.selection.endByte;
+
+            if (selStart > selEnd) {
+                size_t tmp = selStart;
+                selStart = selEnd;
+                selEnd = tmp;
+            }
+            if (selEnd > textLen) {
+                selEnd = textLen;
+            }
+            if (selStart > textLen) {
+                selStart = textLen;
+            }
+
+            if (selStart > 0) {
+                mvwprintw(label->base.windowHandler, 0, 0, "%.*s",
+                          (int)selStart, label->text);
+            }
+            if (selEnd > selStart) {
+                wattron(label->base.windowHandler, A_REVERSE);
+                mvwprintw(label->base.windowHandler, 0, (int)selStart, "%.*s",
+                          (int)(selEnd - selStart), label->text + selStart);
+                wattroff(label->base.windowHandler, A_REVERSE);
+            }
+            if (selEnd < textLen) {
+                mvwprintw(label->base.windowHandler, 0, (int)selEnd, "%.*s",
+                          (int)(textLen - selEnd), label->text + selEnd);
+            }
+        } else {
+            mvwprintw(label->base.windowHandler, 0, 0, "%s", label->text);
+        }
     }
 
     wnoutrefresh(label->base.windowHandler);
@@ -406,9 +534,39 @@ static void controlLabelMsgHandler(void *self, TuiMsg msg) {
             label->base.commonMsgHandlers.refresh(label);
         }
         break;
+    case MsgMouse:
+        controlSelectionHandleMouse((Control *)label, msg);
+        break;
     default:
         break;
     }
+}
+
+static const char *labelGetSelectableText(void *self, size_t *outLen) {
+    ControlLabel *label = (ControlLabel *)self;
+    if (label->text == NULL) {
+        *outLen = 0;
+        return NULL;
+    }
+    *outLen = strlen(label->text);
+    return label->text;
+}
+
+static size_t labelCoordToByteOffset(void *self, int localY, int localX) {
+    ControlLabel *label = (ControlLabel *)self;
+    size_t textLen;
+    size_t offset;
+    (void)localY;
+
+    if (label->text == NULL) {
+        return 0;
+    }
+    textLen = strlen(label->text);
+    if (localX < 0) {
+        return 0;
+    }
+    offset = (size_t)localX;
+    return (offset > textLen) ? textLen : offset;
 }
 
 void controlInputBoxConstruct(ControlInputBox *self, int width, int y, int x,
@@ -458,18 +616,34 @@ void controlInputBoxDraw(void *self) {
     }
 
     if (box->buf != NULL) {
+        size_t selStart = box->base.selection.startByte;
+        size_t selEnd = box->base.selection.endByte;
+        if (selStart > selEnd) {
+            size_t tmp = selStart;
+            selStart = selEnd;
+            selEnd = tmp;
+        }
+
         for (size_t i = box->viewBegin;
              i <= box->viewBegin + (size_t)box->base.width - 3 &&
              i <= box->curLen;
              ++i) {
             int curX = 1 + (int)i - (int)box->viewBegin;
             char dest = box->hideContent ? '*' : box->buf[i];
+            attr_t attr = 0;
+
+            if (i == box->curLoc && box->base.focused) {
+                attr |= A_REVERSE;
+            }
+            if (box->base.selection.active && i >= selStart && i < selEnd) {
+                attr |= A_REVERSE;
+            }
+
             if (i == box->curLoc) {
                 mvwaddch(box->base.windowHandler, 1, curX,
-                         (i == box->curLen ? ' ' : dest) |
-                             (box->base.focused ? A_REVERSE : 0));
+                         (chtype)(i == box->curLen ? ' ' : dest) | attr);
             } else if (i < box->curLen) {
-                mvwaddch(box->base.windowHandler, 1, curX, dest);
+                mvwaddch(box->base.windowHandler, 1, curX, (chtype)dest | attr);
             }
         }
     }
@@ -570,6 +744,9 @@ static void controlInputBoxMsgHandler(void *self, TuiMsg msg) {
         }
         break;
     }
+    case MsgMouse:
+        controlSelectionHandleMouse((Control *)box, msg);
+        break;
     default:
         break;
     }
@@ -578,6 +755,28 @@ static void controlInputBoxMsgHandler(void *self, TuiMsg msg) {
     } else if (box->viewBegin > 0 && box->curLoc <= box->viewBegin) {
         box->viewBegin = box->curLoc > 0 ? box->curLoc - 1 : 0;
     }
+}
+
+static const char *inputBoxGetSelectableText(void *self, size_t *outLen) {
+    ControlInputBox *box = (ControlInputBox *)self;
+    if (box->buf == NULL || box->hideContent) {
+        *outLen = 0;
+        return NULL;
+    }
+    *outLen = box->curLen;
+    return box->buf;
+}
+
+static size_t inputBoxCoordToByteOffset(void *self, int localY, int localX) {
+    ControlInputBox *box = (ControlInputBox *)self;
+    size_t offset;
+    (void)localY;
+
+    if (localX <= 1) {
+        return box->viewBegin;
+    }
+    offset = box->viewBegin + (size_t)(localX - 1);
+    return (offset > box->curLen) ? box->curLen : offset;
 }
 
 void controlTextBoxConstruct(ControlTextBox *self, int height, int width,
@@ -608,9 +807,16 @@ void controlTextBoxConstruct(ControlTextBox *self, int height, int width,
     self->text[TEXTBOX_TEXT_MAXLEN - 1] = '\0';
     self->textLen = strlen(self->text);
     self->viewBegin = 0;
-    self->selection.active = false;
-    self->selection.startByte = 0;
-    self->selection.endByte = 0;
+}
+
+static const char *textBoxGetSelectableText(void *self, size_t *outLen) {
+    ControlTextBox *box = (ControlTextBox *)self;
+    if (box->text == NULL) {
+        *outLen = 0;
+        return NULL;
+    }
+    *outLen = box->textLen;
+    return box->text;
 }
 
 static size_t textBoxAdvanceVisualLine(const char *text, size_t textLen,
@@ -712,8 +918,8 @@ static bool textBoxGetVisualLineRange(const ControlTextBox *box,
     return true;
 }
 
-static size_t textBoxCoordToByteOffset(ControlTextBox *box, int localY,
-                                       int localX) {
+static size_t textBoxCoordToByteOffset(void *self, int localY, int localX) {
+    ControlTextBox *box = (ControlTextBox *)self;
     int availWidth;
     int visibleLines;
     size_t visualLineIdx;
@@ -804,9 +1010,9 @@ void controlTextBoxDraw(void *self) {
             continue;
         }
 
-        if (box->selection.active) {
-            size_t selStart = box->selection.startByte;
-            size_t selEnd = box->selection.endByte;
+        if (box->base.selection.active) {
+            size_t selStart = box->base.selection.startByte;
+            size_t selEnd = box->base.selection.endByte;
 
             if (selStart > selEnd) {
                 size_t tmp = selStart;
@@ -928,50 +1134,12 @@ static void controlTextBoxMsgHandler(void *self, TuiMsg msg) {
             break;
         }
 
-        if (box->base.windowHandler != NULL) {
-            wmouse_trafo(box->base.windowHandler, &msg.mouseY, &msg.mouseX,
-                         FALSE);
+        if (controlSelectionHandleMouse((Control *)box, msg)) {
+            break;
         }
 
         input = msg.arg2.input;
-
-        if ((input & BUTTON1_PRESSED) != 0) {
-            box->selection.active = true;
-            box->selection.startByte =
-                textBoxCoordToByteOffset(box, msg.mouseY, msg.mouseX);
-            box->selection.endByte = box->selection.startByte;
-        } else if (input == REPORT_MOUSE_POSITION && box->selection.active) {
-            box->selection.endByte =
-                textBoxCoordToByteOffset(box, msg.mouseY, msg.mouseX);
-        } else if ((input & BUTTON1_RELEASED) != 0 && box->selection.active) {
-            size_t selStart;
-            size_t selEnd;
-            char *selected;
-
-            box->selection.endByte =
-                textBoxCoordToByteOffset(box, msg.mouseY, msg.mouseX);
-
-            selStart = box->selection.startByte;
-            selEnd = box->selection.endByte;
-            if (selStart > selEnd) {
-                size_t tmp = selStart;
-                selStart = selEnd;
-                selEnd = tmp;
-            }
-
-            if (selEnd > selStart && selEnd <= box->textLen) {
-                selected = malloc(selEnd - selStart + 1);
-                if (selected != NULL) {
-                    memcpy(selected, box->text + selStart,
-                           selEnd - selStart);
-                    selected[selEnd - selStart] = '\0';
-                    clipboardCopy(selected);
-                    free(selected);
-                }
-            }
-
-            box->selection.active = false;
-        } else if (input == BUTTON4_PRESSED || input == BUTTON5_PRESSED) {
+        if (input == BUTTON4_PRESSED || input == BUTTON5_PRESSED) {
             size_t totalLines = textBoxCountVisualLines(box->text, box->textLen,
                                                          availWidth);
             size_t maxView = (totalLines > (size_t)visibleLines)
@@ -1024,9 +1192,6 @@ void controlScrollTextBoxConstruct(ControlScrollTextBox *self, int height,
     self->base.text[0] = '\0';
     self->base.textLen = 0;
     self->base.viewBegin = 0;
-    self->base.selection.active = false;
-    self->base.selection.startByte = 0;
-    self->base.selection.endByte = 0;
     self->maxLines =
         (maxLines > 0) ? maxLines : SCROLLTEXTBOX_DEFAULT_MAX_LINES;
 }
