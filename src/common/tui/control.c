@@ -26,8 +26,8 @@
 #include "clipboard.h"
 #include "log.h"
 #include "tui/tuiapp.h"
-#include <ctype.h>
 #include "utils.h"
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
@@ -83,18 +83,21 @@ const static ControlVTable defaultCtrlVtable = {.destruct = NULL,
 const static ControlVTable defaultBtnVtable = {
     .destruct = (void (*)(Control *))controlButtonDestruct,
     .draw = (void (*)(Control *))controlButtonDraw,
+    .update = NULL,
     .msgHandler = (void (*)(Control *, TuiMsg))controlButtonMsgHandler,
     .getSelectableText = NULL,
     .coordToByteOffset = NULL};
 const static ControlVTable defaultGridVtable = {
     .destruct = NULL,
     .draw = (void (*)(Control *))controlGridDraw,
+    .update = NULL,
     .msgHandler = (void (*)(Control *, TuiMsg))controlGridMsgHandler,
     .getSelectableText = NULL,
     .coordToByteOffset = NULL};
 const static ControlVTable defaultLabelVtable = {
     .destruct = (void (*)(Control *))controlLabelDestruct,
     .draw = (void (*)(Control *))controlLabelDraw,
+    .update = NULL,
     .msgHandler = (void (*)(Control *, TuiMsg))controlLabelMsgHandler,
     .getSelectableText =
         (const char *(*)(Control *, size_t *))labelGetSelectableText,
@@ -103,6 +106,7 @@ const static ControlVTable defaultLabelVtable = {
 const static ControlVTable defaultInputBoxVtable = {
     .destruct = (void (*)(Control *))controlInputBoxDestruct,
     .draw = (void (*)(Control *))controlInputBoxDraw,
+    .update = NULL,
     .msgHandler = (void (*)(Control *, TuiMsg))controlInputBoxMsgHandler,
     .getSelectableText =
         (const char *(*)(Control *, size_t *))inputBoxGetSelectableText,
@@ -111,6 +115,7 @@ const static ControlVTable defaultInputBoxVtable = {
 const static ControlVTable defaultTextBoxVtable = {
     .destruct = (void (*)(Control *))controlTextBoxDestruct,
     .draw = (void (*)(Control *))controlTextBoxDraw,
+    .update = NULL,
     .msgHandler = (void (*)(Control *, TuiMsg))controlTextBoxMsgHandler,
     .getSelectableText =
         (const char *(*)(Control *, size_t *))textBoxGetSelectableText,
@@ -119,6 +124,7 @@ const static ControlVTable defaultTextBoxVtable = {
 const static ControlVTable defaultScrollTextBoxVtable = {
     .destruct = (void (*)(Control *))controlTextBoxDestruct,
     .draw = (void (*)(Control *))controlTextBoxDraw,
+    .update = NULL,
     .msgHandler = (void (*)(Control *, TuiMsg))controlTextBoxMsgHandler,
     .getSelectableText =
         (const char *(*)(Control *, size_t *))textBoxGetSelectableText,
@@ -128,6 +134,7 @@ const static ControlVTable defaultScrollTextBoxVtable = {
 const static ControlVTable defaultListBoxVtable = {
     .destruct = (void (*)(Control *))controlListBoxDestruct,
     .draw = (void (*)(Control *))controlListBoxDraw,
+    .update = NULL,
     .msgHandler = (void (*)(Control *, TuiMsg))controlListBoxMsgHandler,
     .getSelectableText = NULL,
     .coordToByteOffset = NULL};
@@ -291,14 +298,18 @@ bool controlSelectionHandleMouse(Control *self, TuiMsg msg) {
 // funcptrs == NULL to use default
 void controlButtonConstruct(ControlButton *self, int height, int width, int y,
                             int x, const char *text,
-                            void (*draw)(ControlButton *),
+                            void (*draw)(ControlButton *self),
                             void (*onClick)(ControlButton *self),
                             void (*resize)(ControlButton *self),
-                            void (*refresh)(ControlButton *self)) {
+                            void (*refresh)(ControlButton *self),
+                            void (*update)(ControlButton *self)) {
     controlConstruct((Control *)self, height, width, y, x, true, false);
     self->base.vtable = defaultBtnVtable;
     if (draw != NULL) {
         self->base.vtable.draw = (void (*)(Control *))draw;
+    }
+    if (update != NULL) {
+        self->base.vtable.update = (void (*)(Control *))update;
     }
     self->onClick = onClick;
     self->base.commonMsgHandlers.resize = (void (*)(Control *))resize;
@@ -364,10 +375,11 @@ static void controlButtonMsgHandler(ControlButton *self, TuiMsg msg) {
 
 void controlGridConstruct(ControlGrid *self, int height, int width, int y,
                           int x, GridLayoutMethod layoutMethod, size_t hmargin,
-                          size_t vmargin, void (*draw)(ControlGrid *),
+                          size_t vmargin, void (*draw)(ControlGrid *self),
                           void (*resize)(ControlGrid *self),
                           void (*refresh)(ControlGrid *self),
-                          void (*layout)(ControlGrid *, Control *)) {
+                          void (*update)(ControlGrid *self),
+                          void (*layout)(ControlGrid *self, Control *child)) {
     controlConstruct((Control *)self, height, width, y, x, false, true);
     self->base.vtable = defaultGridVtable;
     self->layoutMethod = layoutMethod;
@@ -378,6 +390,9 @@ void controlGridConstruct(ControlGrid *self, int height, int width, int y,
     self->layoutAccRow = 0;
     if (draw != NULL) {
         self->base.vtable.draw = (void (*)(Control *))draw;
+    }
+    if (update != NULL) {
+        self->base.vtable.update = (void (*)(Control *))update;
     }
     self->base.commonMsgHandlers.resize = (void (*)(Control *))resize;
     self->base.commonMsgHandlers.refresh = (void (*)(Control *))refresh;
@@ -460,15 +475,19 @@ static void controlGridLayout(ControlGrid *self, Control *child) {
 // maxWidth == 0 to use inital text length
 void controlLabelConstruct(ControlLabel *self, const char *text,
                            size_t maxWidth, int y, int x,
-                           void (*draw)(ControlLabel *),
+                           void (*draw)(ControlLabel *self),
                            void (*resize)(ControlLabel *self),
-                           void (*refresh)(ControlLabel *self)) {
+                           void (*refresh)(ControlLabel *self),
+                           void (*update)(ControlLabel *self)) {
     size_t len = strlen(text);
     controlConstruct((Control *)self, 1, (maxWidth == 0 ? len : maxWidth), y, x,
                      false, false);
     self->base.vtable = defaultLabelVtable;
     if (draw != NULL) {
         self->base.vtable.draw = (void (*)(Control *))draw;
+    }
+    if (update != NULL) {
+        self->base.vtable.update = (void (*)(Control *))update;
     }
     self->base.commonMsgHandlers.resize = (void (*)(Control *))resize;
     self->base.commonMsgHandlers.refresh = (void (*)(Control *))refresh;
@@ -573,10 +592,12 @@ static size_t labelCoordToByteOffset(ControlLabel *self, int localY,
 }
 
 void controlInputBoxConstruct(ControlInputBox *self, int width, int y, int x,
-                              bool hideContent, void (*draw)(ControlInputBox *),
+                              bool hideContent,
+                              void (*draw)(ControlInputBox *self),
                               void (*resize)(ControlInputBox *self),
                               void (*submit)(ControlInputBox *self),
-                              void (*refresh)(ControlInputBox *self)) {
+                              void (*refresh)(ControlInputBox *self),
+                              void (*update)(ControlInputBox *self)) {
     enum { InputBoxMinWidth = 3 };
     if (width < InputBoxMinWidth) {
         LOG_ERROR("InputBox width %d is less than minimum %d, clamping", width,
@@ -588,6 +609,9 @@ void controlInputBoxConstruct(ControlInputBox *self, int width, int y, int x,
     self->base.vtable = defaultInputBoxVtable;
     if (draw != NULL) {
         self->base.vtable.draw = (void (*)(Control *))draw;
+    }
+    if (update != NULL) {
+        self->base.vtable.update = (void (*)(Control *))update;
     }
     self->base.commonMsgHandlers.resize = (void (*)(Control *))resize;
     self->base.commonMsgHandlers.refresh = (void (*)(Control *))refresh;
@@ -789,9 +813,10 @@ static size_t inputBoxCoordToByteOffset(ControlInputBox *self, int localY,
 
 void controlTextBoxConstruct(ControlTextBox *self, int height, int width, int y,
                              int x, const char *text,
-                             void (*draw)(ControlTextBox *),
+                             void (*draw)(ControlTextBox *self),
                              void (*resize)(ControlTextBox *self),
-                             void (*refresh)(ControlTextBox *self)) {
+                             void (*refresh)(ControlTextBox *self),
+                             void (*update)(ControlTextBox *self)) {
     enum { TextBoxMinHeight = 3, TextBoxMinWidth = 3 };
     if (height < TextBoxMinHeight) {
         height = TextBoxMinHeight;
@@ -803,6 +828,9 @@ void controlTextBoxConstruct(ControlTextBox *self, int height, int width, int y,
     self->base.vtable = defaultTextBoxVtable;
     if (draw != NULL) {
         self->base.vtable.draw = (void (*)(Control *))draw;
+    }
+    if (update != NULL) {
+        self->base.vtable.update = (void (*)(Control *))update;
     }
     self->base.commonMsgHandlers.resize = (void (*)(Control *))resize;
     self->base.commonMsgHandlers.refresh = (void (*)(Control *))refresh;
@@ -1165,11 +1193,12 @@ static void controlTextBoxMsgHandler(ControlTextBox *self, TuiMsg msg) {
     }
 }
 
-void controlScrollTextBoxConstruct(
-    ControlScrollTextBox *self, int height, int width, int y, int x,
-    size_t maxLines, void (*draw)(ControlScrollTextBox *),
-    void (*resize)(ControlScrollTextBox *self),
-    void (*refresh)(ControlScrollTextBox *self)) {
+void controlScrollTextBoxConstruct(ControlScrollTextBox *self, int height,
+                                   int width, int y, int x, size_t maxLines,
+                                   void (*draw)(ControlScrollTextBox *self),
+                                   void (*resize)(ControlScrollTextBox *self),
+                                   void (*refresh)(ControlScrollTextBox *self),
+                                   void (*update)(ControlScrollTextBox *self)) {
     enum { ScrollTextBoxMinHeight = 3, ScrollTextBoxMinWidth = 3 };
     if (height < ScrollTextBoxMinHeight) {
         height = ScrollTextBoxMinHeight;
@@ -1181,6 +1210,9 @@ void controlScrollTextBoxConstruct(
     self->base.base.vtable = defaultScrollTextBoxVtable;
     if (draw != NULL) {
         self->base.base.vtable.draw = (void (*)(Control *))draw;
+    }
+    if (update != NULL) {
+        self->base.base.vtable.update = (void (*)(Control *))update;
     }
     self->base.base.commonMsgHandlers.resize = (void (*)(Control *))resize;
     self->base.base.commonMsgHandlers.refresh = (void (*)(Control *))refresh;
@@ -1286,22 +1318,22 @@ void controlScrollTextBoxAppend(ControlScrollTextBox *self, const char *text) {
 void controlListBoxConstruct(ControlListBox *self, int height, int width, int y,
                              int x, void (*draw)(ControlListBox *self),
                              void (*resize)(ControlListBox *self),
-                             void (*refresh)(ControlListBox *self)) {
+                             void (*refresh)(ControlListBox *self),
+                             void (*update)(ControlListBox *self)) {
     controlConstruct((Control *)self, height, width, y, x, true, false);
     self->base.vtable = defaultListBoxVtable;
-    arrayStrInit(&self->list, ARRAY_DEFAULT_CAPACITY);
+    arrayControlListBoxEntryInit(&self->list, ARRAY_DEFAULT_CAPACITY);
     self->viewBegin = 0;
     self->curLine = 0;
     self->entryCnt = 0;
     if (draw != NULL) {
         self->base.vtable.draw = (void (*)(Control *))draw;
     }
-    if (resize != NULL) {
-        self->base.commonMsgHandlers.resize = (void (*)(Control *))resize;
+    if (update != NULL) {
+        self->base.vtable.update = (void (*)(Control *))update;
     }
-    if (refresh != NULL) {
-        self->base.commonMsgHandlers.refresh = (void (*)(Control *))resize;
-    }
+    self->base.commonMsgHandlers.resize = (void (*)(Control *))resize;
+    self->base.commonMsgHandlers.refresh = (void (*)(Control *))refresh;
 }
 
 void controlListBoxDraw(ControlListBox *self) {
@@ -1322,37 +1354,38 @@ void controlListBoxDraw(ControlListBox *self) {
          i < (size_t)self->base.height - 2 + self->viewBegin &&
          i < self->entryCnt;
          ++i) {
-        Str cur;
-        arrayStrGet(&self->list, i, &cur);
+        ControlListBoxEntry cur;
+        arrayControlListBoxEntryGet(&self->list, i, &cur);
         if (i == self->curLine) {
             wattron(self->base.windowHandler, A_REVERSE);
             mvwprintw(self->base.windowHandler, i - self->viewBegin + 1, 1,
-                      "%-*s", self->base.width - 2, cur);
+                      "%-*s", self->base.width - 2, cur.disp);
             wattroff(self->base.windowHandler, A_REVERSE);
             attroff(A_REVERSE);
         } else {
             mvwprintw(self->base.windowHandler, i - self->viewBegin + 1, 1,
-                      "%-*s", self->base.width - 2, cur);
+                      "%-*s", self->base.width - 2, cur.disp);
         }
     }
 
     wnoutrefresh(self->base.windowHandler);
 }
 
-void controlListBoxAppend(ControlListBox *self, const char *entry) {
-    char *cur = malloc(strlen(entry) + 1);
-    strcpy(cur, entry);
-    arrayStrPushBack(&self->list, cur);
+void controlListBoxAppend(ControlListBox *self, const char *disp, size_t id) {
+    char *cur = malloc(strlen(disp) + 1);
+    strcpy(cur, disp);
+    arrayControlListBoxEntryPushBack(
+        &self->list, (ControlListBoxEntry){.disp = cur, .id = id});
     ++self->entryCnt;
 }
 
 static void controlListBoxDestruct(ControlListBox *self) {
-    for (size_t i = 0; i < arrayStrSize(&self->list); ++i) {
-        Str cur;
-        arrayStrGet(&self->list, i, &cur);
-        free(cur);
+    for (size_t i = 0; i < arrayControlListBoxEntrySize(&self->list); ++i) {
+        ControlListBoxEntry cur;
+        arrayControlListBoxEntryGet(&self->list, i, &cur);
+        free(cur.disp);
     }
-    arrayStrDeinit(&self->list);
+    arrayControlListBoxEntryDeinit(&self->list);
 }
 
 static void controlListBoxMsgHandler(ControlListBox *self, TuiMsg msg) {

@@ -109,6 +109,9 @@ typedef enum {
     MsgLogout,
     MsgHeartbeat,
 
+    /* Game list */
+    MsgGameList,
+
     /* Game control (future). */
     MsgGameStart,
     MsgGameStop

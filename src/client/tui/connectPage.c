@@ -162,29 +162,29 @@ static void exitBtn(ControlButton *self) {
 void tuiClientConnectPageInit() {
     controlPageConstruct(&connectPage);
     controlGridConstruct(&connectGrid, 0, 0, 0, 0, LayoutNone, 0, 0, NULL,
-                         connectGridResize, NULL, NULL);
+                         connectGridResize, NULL, NULL, NULL);
     controlLabelConstruct(&connectPrompt, "Connect to server", 0, 1,
-                          TUI_CONNECT_WIDTH / 2 - 9, NULL, NULL, NULL);
+                          TUI_CONNECT_WIDTH / 2 - 9, NULL, NULL, NULL, NULL);
     controlLabelConstruct(&connectAddressLabel, "Server address: ", 0, 4, 2,
-                          NULL, NULL, NULL);
+                          NULL, NULL, NULL, NULL);
     controlInputBoxConstruct(&connectAddressBox, 20, 3, 19, false, NULL, NULL,
-                             NULL, NULL);
+                             NULL, NULL, NULL);
     controlLabelConstruct(&connectPortLabel, "Port: ", 0, 7, 2, NULL, NULL,
-                          NULL);
+                          NULL, NULL);
     controlInputBoxConstruct(&connectPortBox, 20, 6, 19, false, NULL, NULL,
-                             NULL, NULL);
+                             NULL, NULL, NULL);
     controlLabelConstruct(&connectStatusLabel, "", TUI_CONNECT_WIDTH - 3,
                           TUI_CONNECT_HEIGHT - TUI_BTN_HEIGHT - 3, 2,
-                          connectStatusDraw, NULL, NULL);
+                          connectStatusDraw, NULL, NULL, NULL);
     tuiAppVisibilityChange((Control *)&connectStatusLabel, false);
     controlButtonConstruct(&connectButton, TUI_BTN_HEIGHT, TUI_BTN_WIDTH,
                            TUI_CONNECT_HEIGHT - TUI_BTN_HEIGHT - 1,
                            TUI_CONNECT_WIDTH - 2 * TUI_BTN_WIDTH - 3, "Connect",
-                           NULL, connectButtonOnClick, NULL, NULL);
+                           NULL, connectButtonOnClick, NULL, NULL, NULL);
     controlButtonConstruct(&connectExitButton, TUI_BTN_HEIGHT, TUI_BTN_WIDTH,
                            TUI_CONNECT_HEIGHT - TUI_BTN_HEIGHT - 1,
                            TUI_CONNECT_WIDTH - TUI_BTN_WIDTH - 2, "Exit", NULL,
-                           exitBtn, NULL, NULL);
+                           exitBtn, NULL, NULL, NULL);
 
     tuiAppControlRegister((Control *)&connectPage, NULL);
     tuiAppControlRegister((Control *)&connectGrid, (Control *)&connectPage);

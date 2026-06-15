@@ -349,7 +349,8 @@ static void totpRecommendGridResize(ControlGrid *self) {
     self->base.width = MIN(TUI_TOTP_RECO_GRID_WIDTH, pViewArea->width);
     self->base.height = MIN(TUI_TOTP_RECO_GRID_HEIGHT, pViewArea->height);
     self->base.x = MAX(0, pViewArea->width / 2 - TUI_TOTP_RECO_GRID_WIDTH / 2);
-    self->base.y = MAX(0, pViewArea->height / 2 - TUI_TOTP_RECO_GRID_HEIGHT / 2);
+    self->base.y =
+        MAX(0, pViewArea->height / 2 - TUI_TOTP_RECO_GRID_HEIGHT / 2);
     clear();
 }
 
@@ -381,7 +382,8 @@ static void totpSetupGridResize(ControlGrid *self) {
     self->base.width = MIN(TUI_TOTP_SETUP_GRID_WIDTH, pViewArea->width);
     self->base.height = MIN(TUI_TOTP_SETUP_GRID_HEIGHT, pViewArea->height);
     self->base.x = MAX(0, pViewArea->width / 2 - TUI_TOTP_SETUP_GRID_WIDTH / 2);
-    self->base.y = MAX(0, pViewArea->height / 2 - TUI_TOTP_SETUP_GRID_HEIGHT / 2);
+    self->base.y =
+        MAX(0, pViewArea->height / 2 - TUI_TOTP_SETUP_GRID_HEIGHT / 2);
     if (totpData.totpSucc && totpData.qrSucc) {
         if ((pViewArea->width < TUI_TOTP_SETUP_GRID_WIDTH ||
              pViewArea->height < TUI_TOTP_SETUP_GRID_HEIGHT)) {
@@ -468,8 +470,10 @@ static void totpSetupDoneBtnOnClick(ControlButton *self) {
 static void totpVerifyGridResize(ControlGrid *self) {
     self->base.width = MIN(TUI_TOTP_VERIFY_GRID_WIDTH, pViewArea->width);
     self->base.height = MIN(TUI_TOTP_VERIFY_GRID_HEIGHT, pViewArea->height);
-    self->base.x = MAX(0, pViewArea->width / 2 - TUI_TOTP_VERIFY_GRID_WIDTH / 2);
-    self->base.y = MAX(0, pViewArea->height / 2 - TUI_TOTP_VERIFY_GRID_HEIGHT / 2);
+    self->base.x =
+        MAX(0, pViewArea->width / 2 - TUI_TOTP_VERIFY_GRID_WIDTH / 2);
+    self->base.y =
+        MAX(0, pViewArea->height / 2 - TUI_TOTP_VERIFY_GRID_HEIGHT / 2);
     clear();
 }
 
@@ -495,32 +499,33 @@ void tuiClientLoginRegInit() {
 
     controlPageConstruct(&loginPage);
     controlGridConstruct(&loginGrid, 0, 0, 0, 0, LayoutNone, 0, 0, NULL,
-                         loginRegGridResize, NULL, NULL);
-    controlLabelConstruct(&loginPrompt, "Login", 0, 2, 2, NULL, NULL, NULL);
+                         loginRegGridResize, NULL, NULL, NULL);
+    controlLabelConstruct(&loginPrompt, "Login", 0, 2, 2, NULL, NULL, NULL,
+                          NULL);
     controlLabelConstruct(&loginUsernameLabel, "Username: ", 0, 6, 3, NULL,
-                          NULL, NULL);
+                          NULL, NULL, NULL);
     controlInputBoxConstruct(&loginUsernameBox, 20, 5, 15, false, NULL, NULL,
-                             NULL, NULL);
+                             NULL, NULL, NULL);
     controlLabelConstruct(&loginPasswordLabel, "Password: ", 0, 9, 3, NULL,
-                          NULL, NULL);
+                          NULL, NULL, NULL);
     controlInputBoxConstruct(&loginPasswordBox, 20, 8, 15, true, NULL, NULL,
-                             NULL, NULL);
+                             NULL, NULL, NULL);
     controlButtonConstruct(&loginButton, TUI_BTN_HEIGHT, TUI_BTN_WIDTH,
                            TUI_LOGIN_GRID_HEIGHT - 2 * TUI_BTN_HEIGHT - 1,
                            TUI_LOGIN_GRID_WIDTH - TUI_BTN_WIDTH - 2, "Login",
-                           NULL, loginBtnOnClick, NULL, NULL);
+                           NULL, loginBtnOnClick, NULL, NULL, NULL);
     controlLabelConstruct(&loginToRegPrompt, "I have no account: ", 0,
-                          TUI_LOGIN_GRID_HEIGHT - 3, 3, NULL, NULL, NULL);
+                          TUI_LOGIN_GRID_HEIGHT - 3, 3, NULL, NULL, NULL, NULL);
     controlButtonConstruct(&loginToRegButton, TUI_BTN_HEIGHT, 18,
                            TUI_LOGIN_GRID_HEIGHT - TUI_BTN_HEIGHT - 1,
                            TUI_LOGIN_GRID_WIDTH - 18 - 2, "To register...",
-                           NULL, loginToRegBtnOnClick, NULL, NULL);
+                           NULL, loginToRegBtnOnClick, NULL, NULL, NULL);
     controlButtonConstruct(&loginExit, TUI_BTN_HEIGHT, 6, 1,
                            TUI_LOGIN_GRID_WIDTH - 6 - 2, "Exit", NULL, exitBtn,
-                           NULL, NULL);
+                           NULL, NULL, NULL);
     controlLabelConstruct(&loginStatusLabel, "", TUI_LOGIN_GRID_WIDTH - 6,
                           TUI_LOGIN_GRID_HEIGHT - 2 * TUI_BTN_HEIGHT - 3, 3,
-                          loginRegStatusDraw, NULL, NULL);
+                          loginRegStatusDraw, NULL, NULL, NULL);
     tuiAppVisibilityChange((Control *)&loginStatusLabel, false);
 
     tuiAppControlRegister((Control *)&loginPage, NULL);
@@ -542,41 +547,42 @@ void tuiClientLoginRegInit() {
 
     controlPageConstruct(&regPage);
     controlGridConstruct(&regGrid, 0, 0, 0, 0, LayoutNone, 0, 0, NULL,
-                         loginRegGridResize, NULL, NULL);
-    controlLabelConstruct(&regPrompt, "Register", 0, 2, 2, NULL, NULL, NULL);
+                         loginRegGridResize, NULL, NULL, NULL);
+    controlLabelConstruct(&regPrompt, "Register", 0, 2, 2, NULL, NULL, NULL,
+                          NULL);
     controlLabelConstruct(&regUsernameLabel, "Username: ", 0, 6, 3, NULL, NULL,
-                          NULL);
+                          NULL, NULL);
     controlInputBoxConstruct(&regUsernameBox, 20, 5, 15, false, NULL, NULL,
-                             NULL, NULL);
+                             NULL, NULL, NULL);
     controlLabelConstruct(&regNicknameLabel, "Nickname: ", 0, 9, 3, NULL, NULL,
-                          NULL);
+                          NULL, NULL);
     controlInputBoxConstruct(&regNicknameBox, 20, 8, 15, false, NULL, NULL,
-                             NULL, NULL);
+                             NULL, NULL, NULL);
     controlLabelConstruct(&regPasswordLabel, "Password: ", 0, 12, 3, NULL, NULL,
-                          NULL);
+                          NULL, NULL);
     controlInputBoxConstruct(&regPasswordBox, 20, 11, 15, true, NULL, NULL,
-                             NULL, NULL);
+                             NULL, NULL, NULL);
     controlLabelConstruct(&regConfirmPasswordLabel,
-                          "Confirm your password: ", 0, 15, 3, NULL, NULL,
+                          "Confirm your password: ", 0, 15, 3, NULL, NULL, NULL,
                           NULL);
     controlInputBoxConstruct(&regConfirmPasswordBox, 20, 16, 15, true, NULL,
-                             NULL, NULL, NULL);
+                             NULL, NULL, NULL, NULL);
     controlButtonConstruct(&regButton, TUI_BTN_HEIGHT, TUI_BTN_WIDTH + 1,
                            TUI_LOGIN_GRID_HEIGHT - 2 * TUI_BTN_HEIGHT - 1,
                            TUI_LOGIN_GRID_WIDTH - (TUI_BTN_WIDTH + 1) - 2,
-                           "Register", NULL, regBtnOnClick, NULL, NULL);
+                           "Register", NULL, regBtnOnClick, NULL, NULL, NULL);
     controlLabelConstruct(&regToLoginPrompt, "I have an account: ", 0,
-                          TUI_LOGIN_GRID_HEIGHT - 3, 3, NULL, NULL, NULL);
+                          TUI_LOGIN_GRID_HEIGHT - 3, 3, NULL, NULL, NULL, NULL);
     controlButtonConstruct(&regToLoginButton, TUI_BTN_HEIGHT, 18,
                            TUI_LOGIN_GRID_HEIGHT - TUI_BTN_HEIGHT - 1,
                            TUI_LOGIN_GRID_WIDTH - 18 - 2, "To login...", NULL,
-                           regToLoginBtnOnClick, NULL, NULL);
+                           regToLoginBtnOnClick, NULL, NULL, NULL);
     controlButtonConstruct(&regExit, TUI_BTN_HEIGHT, 6, 1,
                            TUI_LOGIN_GRID_WIDTH - 6 - 2, "Exit", NULL, exitBtn,
-                           NULL, NULL);
+                           NULL, NULL, NULL);
     controlLabelConstruct(&regStatusLabel, "", TUI_LOGIN_GRID_WIDTH - 6,
                           TUI_LOGIN_GRID_HEIGHT - 2 * TUI_BTN_HEIGHT - 3, 3,
-                          loginRegStatusDraw, NULL, NULL);
+                          loginRegStatusDraw, NULL, NULL, NULL);
     tuiAppVisibilityChange((Control *)&regStatusLabel, false);
 
     tuiAppControlRegister((Control *)&regPage, NULL);
@@ -602,18 +608,19 @@ void tuiClientLoginRegInit() {
 
     controlPageConstruct(&totpRecommendPage);
     controlGridConstruct(&totpRecommendGrid, 0, 0, 0, 0, LayoutNone, 0, 0, NULL,
-                         totpRecommendGridResize, NULL, NULL);
+                         totpRecommendGridResize, NULL, NULL, NULL);
     controlLabelConstruct(&totpRecommendPrompt,
                           "Enable TOTP for stronger account protection?", 0, 3,
-                          3, NULL, NULL, NULL);
+                          3, NULL, NULL, NULL, NULL);
     controlButtonConstruct(&totpRecommendYes, TUI_BTN_HEIGHT, TUI_BTN_WIDTH,
                            TUI_TOTP_RECO_GRID_HEIGHT - TUI_BTN_HEIGHT - 1,
                            TUI_TOTP_RECO_GRID_WIDTH - 2 * TUI_BTN_WIDTH - 3,
-                           "Yes", NULL, totpRecommendYesBtnOnClick, NULL, NULL);
+                           "Yes", NULL, totpRecommendYesBtnOnClick, NULL, NULL,
+                           NULL);
     controlButtonConstruct(&totpRecommendNo, TUI_BTN_HEIGHT, TUI_BTN_WIDTH,
                            TUI_TOTP_RECO_GRID_HEIGHT - TUI_BTN_HEIGHT - 1,
                            TUI_TOTP_RECO_GRID_WIDTH - TUI_BTN_WIDTH - 2, "No",
-                           NULL, totpRecommendNoBtnOnClick, NULL, NULL);
+                           NULL, totpRecommendNoBtnOnClick, NULL, NULL, NULL);
 
     tuiAppControlRegister((Control *)&totpRecommendPage, NULL);
     tuiAppControlRegister((Control *)&totpRecommendGrid,
@@ -628,24 +635,25 @@ void tuiClientLoginRegInit() {
     // TOTP setup page
     controlPageConstruct(&totpSetupPage);
     controlGridConstruct(&totpSetupGrid, 0, 0, 0, 0, LayoutNone, 0, 0, NULL,
-                         totpSetupGridResize, NULL, NULL);
+                         totpSetupGridResize, NULL, NULL, NULL);
     controlLabelConstruct(&totpSetupPrompt, "Scan with your authenticator app",
                           45, 1, TUI_TOTP_SETUP_GRID_WIDTH / 2 - 16, NULL,
-                          totpSetupPromptResize, NULL);
+                          totpSetupPromptResize, NULL, NULL);
     controlLabelConstruct(&totpSetupStatus, "", TUI_TOTP_SETUP_GRID_WIDTH - 3,
-                          3, 2, loginRegStatusDraw, NULL, NULL);
+                          3, 2, loginRegStatusDraw, NULL, NULL, NULL);
     controlGridConstruct(&totpSetupQRDisplay, 43, 86, 2,
                          TUI_TOTP_SETUP_GRID_WIDTH / 2 - 43, LayoutNone, 0, 0,
-                         totpSetupQRDisplayDraw, NULL, NULL, NULL);
-    controlLabelConstruct(&totpSetupSecret, "", TOTP_SETUP_SECRET_LEN, 2,
-                          TUI_TOTP_SETUP_GRID_WIDTH / 2 -
-                              TOTP_SETUP_SECRET_LEN / 2,
-                          loginRegStatusDraw, totpSetupSecretResize, NULL);
+                         totpSetupQRDisplayDraw, NULL, NULL, NULL, NULL);
+    controlLabelConstruct(
+        &totpSetupSecret, "", TOTP_SETUP_SECRET_LEN, 2,
+        TUI_TOTP_SETUP_GRID_WIDTH / 2 - TOTP_SETUP_SECRET_LEN / 2,
+        loginRegStatusDraw, totpSetupSecretResize, NULL, NULL);
     tuiAppVisibilityChange((Control *)&totpSetupSecret, false);
     controlButtonConstruct(&totpSetupDoneBtn, TUI_BTN_HEIGHT, TUI_BTN_WIDTH,
                            TUI_TOTP_SETUP_GRID_HEIGHT - TUI_BTN_HEIGHT - 1,
                            TUI_TOTP_SETUP_GRID_WIDTH / 2 - TUI_BTN_WIDTH / 2,
-                           "Done", NULL, totpSetupDoneBtnOnClick, NULL, NULL);
+                           "Done", NULL, totpSetupDoneBtnOnClick, NULL, NULL,
+                           NULL);
 
     tuiAppControlRegister((Control *)&totpSetupPage, NULL);
     tuiAppControlRegister((Control *)&totpSetupGrid, (Control *)&totpSetupPage);
@@ -663,16 +671,17 @@ void tuiClientLoginRegInit() {
     // TOTP verify page
     controlPageConstruct(&totpVerifyPage);
     controlGridConstruct(&totpVerifyGrid, 0, 0, 0, 0, LayoutNone, 0, 0, NULL,
-                         totpVerifyGridResize, NULL, NULL);
+                         totpVerifyGridResize, NULL, NULL, NULL);
     controlInputBoxConstruct(&totpVerifyBox, 20, 10,
                              TUI_TOTP_VERIFY_GRID_WIDTH / 2 - 10, false, NULL,
-                             NULL, NULL, NULL);
+                             NULL, NULL, NULL, NULL);
     controlLabelConstruct(&totpVerifyPrompt, "Please input TOTP code:", 0, 3, 3,
-                          NULL, NULL, NULL);
+                          NULL, NULL, NULL, NULL);
     controlButtonConstruct(&totpVerifySubmit, TUI_BTN_HEIGHT, TUI_BTN_WIDTH,
                            TUI_TOTP_VERIFY_GRID_HEIGHT - TUI_BTN_HEIGHT - 1,
                            TUI_TOTP_VERIFY_GRID_WIDTH - 2 * TUI_BTN_WIDTH - 3,
-                           "Verify", NULL, totpVerifyBtnOnClick, NULL, NULL);
+                           "Verify", NULL, totpVerifyBtnOnClick, NULL, NULL,
+                           NULL);
 
     tuiAppControlRegister((Control *)&totpVerifyPage, NULL);
     tuiAppControlRegister((Control *)&totpVerifyGrid,

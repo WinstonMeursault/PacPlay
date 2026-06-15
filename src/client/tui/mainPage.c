@@ -40,10 +40,18 @@ ControlButton homeStatusExit;
 ControlLabel homeStatusUsername;
 ControlLabel homeStatusNickname;
 
+ControlLabel homeOperGameName;
+ControlLabel homeOperGamePath;
+ControlLabel homeOperGameTime;
+ControlButton homeOperAddGame;
+ControlButton homeOperRemoveGame;
+
 // Game page
 ControlPage gamePage;
 
-static void homePageUpdateUserData(char *nickname, char *username) {
+// Store page
+
+static void updateUserData(char *nickname, char *username) {
     if (nickname != NULL) {
         sprintf(homeStatusNickname.text, "User: %s", nickname);
     }
@@ -52,8 +60,18 @@ static void homePageUpdateUserData(char *nickname, char *username) {
     }
 }
 
+static void fetchGames() {
+    GameRecord **dest;
+    size_t cnt;
+    listGames(client, &dest, &cnt);
+    for (size_t i = 0; i < cnt; ++i) {
+        controlListBoxAppend(&homeGameList, dest[i]->gameName, dest[i]->gameId);
+    }
+}
+
 void homePageInitUpdate(char *nickname, char *username) {
-    homePageUpdateUserData(nickname, username);
+    updateUserData(nickname, username);
+    fetchGames();
 }
 
 static void homePageGridResize(ControlGrid *self) {
@@ -79,10 +97,16 @@ static void homePageGridDraw(ControlGrid *self) {
     mvwprintw(self->base.windowHandler, y + 5, x,
               "                               /____/");
 
-    mvwprintw(self->base.windowHandler, 4, 45, "v0.1");
-    mvwprintw(self->base.windowHandler, 5, 45, "GPLv3 License");
-    mvwprintw(self->base.windowHandler, 6, 45, "Copyright (C) 2026");
-    mvwprintw(self->base.windowHandler, 7, 45, "Winston Meursault & Kiraterin");
+    int descriptionBegin = 3;
+    mvwprintw(self->base.windowHandler, descriptionBegin + 0, 45, "v0.1");
+    mvwprintw(self->base.windowHandler, descriptionBegin + 1, 45,
+              "GPLv3 License");
+    mvwprintw(self->base.windowHandler, descriptionBegin + 2, 45,
+              "Copyright (C) 2026");
+    mvwprintw(self->base.windowHandler, descriptionBegin + 3, 45,
+              "Winston Meursault & Kiraterin");
+    mvwprintw(self->base.windowHandler, descriptionBegin + 4, 45,
+              "https://github.com/WinstonMeursault/PacPlay");
 
     wnoutrefresh(self->base.windowHandler);
 }
@@ -112,25 +136,25 @@ static void homeOperGridResize(ControlGrid *self) {
 void tuiClientMainPageInit() {
     controlPageConstruct(&homePage);
     controlGridConstruct(&homePageGrid, 0, 0, 0, 0, LayoutNone, 0, 0,
-                         homePageGridDraw, homePageGridResize, NULL, NULL);
+                         homePageGridDraw, homePageGridResize, NULL, NULL,
+                         NULL);
     controlGridConstruct(&homeStatusGrid, TUI_HOME_STATUSGRID_HEIGHT,
                          TUI_HOME_STATUSGRID_WIDTH, 1, 0, LayoutNone, 0, 0,
-                         NULL, homeStatusGridResize, NULL, NULL);
+                         NULL, homeStatusGridResize, NULL, NULL, NULL);
     controlListBoxConstruct(&homeGameList, 0, 0, 0, 1, NULL, homeGameListResize,
-                            NULL);
+                            NULL, NULL);
     controlGridConstruct(&homeOperGrid, 0, TUI_HOME_OPERGRID_WIDTH, 0, 0,
-                         LayoutNone, 0, 0, NULL, homeOperGridResize, NULL,
-                         NULL);
+                         LayoutVertical, 2, 2, NULL, homeOperGridResize, NULL,
+                         NULL, NULL);
     controlLabelConstruct(&homeStatusNickname, "",
                           TUI_HOME_STATUSGRID_WIDTH - 2 - 6, 2, 2, NULL, NULL,
-                          NULL);
+                          NULL, NULL);
     controlLabelConstruct(&homeStatusUsername, "",
                           TUI_HOME_STATUSGRID_WIDTH - 2 - 6, 3, 2, NULL, NULL,
-                          NULL);
+                          NULL, NULL);
     controlButtonConstruct(&homeStatusExit, TUI_BTN_HEIGHT, 6, 1,
                            TUI_HOME_STATUSGRID_WIDTH - 1 - 6, "Exit", NULL,
-                           homeStatusExitOnClick, NULL, NULL);
-    controlListBoxAppend(&homeGameList, "123");
+                           homeStatusExitOnClick, NULL, NULL, NULL);
 
     tuiAppControlRegister(&homePage, NULL);
     tuiAppControlRegister((Control *)&homePageGrid, (Control *)&homePage);

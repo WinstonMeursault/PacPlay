@@ -98,8 +98,9 @@ static void tuiAppUpdateViewArea();
 static void tuiAppDeinit();
 static void tuiAppMainLoop();
 static void tuiAppInput();
-static void tuiAppRender();
 static void tuiAppMsgHandle();
+static void tuiAppControlUpdate();
+static void tuiAppRender();
 static void tuiAppChangeRoot(Index root);
 static void tuiAppRefreshNavChain();
 static void tuiAppNavigate(bool isBack);
@@ -173,8 +174,8 @@ static void tuiAppUpdateViewArea() {
         pViewArea->x = COLS / 2 - pViewArea->width / 2;
     }
     delwin(pViewArea->windowHandler);
-    pViewArea->windowHandler = newwin(pViewArea->height, pViewArea->width,
-                                      pViewArea->y, pViewArea->x);
+    pViewArea->windowHandler =
+        newwin(pViewArea->height, pViewArea->width, pViewArea->y, pViewArea->x);
     clear();
 }
 
@@ -320,6 +321,7 @@ static void tuiAppMainLoop() {
     while (tuiApp.isRunning) {
         tuiAppInput();
         tuiAppMsgHandle();
+        tuiAppControlUpdate();
         tuiAppRender();
         if (!tuiApp.fastRefresh) {
             usleep(A_SEC / tuiApp.options.fps);
@@ -469,40 +471,6 @@ static void tuiAppInput() {
     }
 }
 
-static void tuiAppRender() {
-
-    // DEBUG:
-    werase(pViewArea->windowHandler);
-    box(pViewArea->windowHandler, 0, 0);
-    wnoutrefresh(pViewArea->windowHandler);
-
-    ControlRegEntry *curEntry;
-    ensureRenderStkCap(0);
-    gRenderStk.size = 0;
-    arrayIndexPushBack(&gRenderStk, tuiApp.curRoot);
-    while (arrayIndexSize(&gRenderStk) > 0) {
-        Index curIndex;
-        CHECKED_ARRAY_INDEX_GET(&gRenderStk, arrayIndexSize(&gRenderStk) - 1,
-                                &curIndex);
-        arrayIndexPopBack(&gRenderStk);
-        CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, curIndex, &curEntry);
-        if (curIndex != 0 && curEntry->ptr->windowHandler != NULL &&
-            curEntry->ptr->vtable.draw != NULL && curEntry->ptr->visible) {
-            curEntry->ptr->vtable.draw(curEntry->ptr);
-        }
-        if (curIndex != tuiApp.curRoot && curEntry->sibling != 0) {
-            arrayIndexPushBack(&gRenderStk, curEntry->sibling);
-        }
-        if (curEntry->child != 0 && curEntry->ptr != NULL &&
-            curEntry->ptr->visible) {
-            arrayIndexPushBack(&gRenderStk, curEntry->child);
-        }
-    }
-
-    doupdate();
-
-}
-
 static void tuiAppMsgHandle() {
     TuiMsg msg;
     pthread_mutex_lock(&tuiApp.msgQueueLock);
@@ -602,6 +570,63 @@ static void tuiAppMsgHandle() {
         }
     }
     pthread_mutex_unlock(&tuiApp.msgQueueLock);
+}
+
+static void tuiAppControlUpdate() {
+    ControlRegEntry *curEntry;
+    ensureRenderStkCap(0);
+    gRenderStk.size = 0;
+    arrayIndexPushBack(&gRenderStk, tuiApp.curRoot);
+    while (arrayIndexSize(&gRenderStk) > 0) {
+        Index curIndex;
+        CHECKED_ARRAY_INDEX_GET(&gRenderStk, arrayIndexSize(&gRenderStk) - 1,
+                                &curIndex);
+        arrayIndexPopBack(&gRenderStk);
+        CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, curIndex, &curEntry);
+        if (curIndex != 0 && curEntry->ptr->windowHandler != NULL &&
+            curEntry->ptr->vtable.update != NULL) {
+            curEntry->ptr->vtable.update(curEntry->ptr);
+        }
+        if (curIndex != tuiApp.curRoot && curEntry->sibling != 0) {
+            arrayIndexPushBack(&gRenderStk, curEntry->sibling);
+        }
+        if (curEntry->child != 0 && curEntry->ptr != NULL) {
+            arrayIndexPushBack(&gRenderStk, curEntry->child);
+        }
+    }
+}
+
+static void tuiAppRender() {
+
+    // DEBUG:
+    // werase(pViewArea->windowHandler);
+    // box(pViewArea->windowHandler, 0, 0);
+    // wnoutrefresh(pViewArea->windowHandler);
+
+    ControlRegEntry *curEntry;
+    ensureRenderStkCap(0);
+    gRenderStk.size = 0;
+    arrayIndexPushBack(&gRenderStk, tuiApp.curRoot);
+    while (arrayIndexSize(&gRenderStk) > 0) {
+        Index curIndex;
+        CHECKED_ARRAY_INDEX_GET(&gRenderStk, arrayIndexSize(&gRenderStk) - 1,
+                                &curIndex);
+        arrayIndexPopBack(&gRenderStk);
+        CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, curIndex, &curEntry);
+        if (curIndex != 0 && curEntry->ptr->windowHandler != NULL &&
+            curEntry->ptr->vtable.draw != NULL && curEntry->ptr->visible) {
+            curEntry->ptr->vtable.draw(curEntry->ptr);
+        }
+        if (curIndex != tuiApp.curRoot && curEntry->sibling != 0) {
+            arrayIndexPushBack(&gRenderStk, curEntry->sibling);
+        }
+        if (curEntry->child != 0 && curEntry->ptr != NULL &&
+            curEntry->ptr->visible) {
+            arrayIndexPushBack(&gRenderStk, curEntry->child);
+        }
+    }
+
+    doupdate();
 }
 
 static void tuiAppChangeRoot(Index root) {
