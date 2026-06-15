@@ -156,3 +156,9 @@ int serverHandleRoomJoin(Server *s, ClientSession *cs, const Packet *pkt) {
     serverSendStatusResponse(cs, MsgJoinRoomResp, StatusSuccess);
     return SERVER_SUCC;
 }
+
+void serverHandleRoomQuit(Server *s, ClientSession *cs) {
+    serverRemoveClientFromRoom(s, cs);
+    cs->currentRoomId = 0;
+    cs->state = SessionLogin;
+}

@@ -23,7 +23,7 @@
  */
 
 #include "clientTUI.h"
-#include "../client.h"
+#include "client/client.h"
 #include "connectPage.h"
 #include "loginReg.h"
 #include "mainPage.h"

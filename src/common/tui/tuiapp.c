@@ -147,9 +147,8 @@ void tuiAppChangePage(ControlPage *entry) {
         return;
     }
     tuiAppUpdateViewArea();
-    tuiAppPushMessage((TuiMsg){.type = MsgResize});
-    tuiAppMsgHandle();
     tuiAppChangeRoot(entry->index);
+    tuiAppPushMessage((TuiMsg){.type = MsgResize});
     clear();
 }
 
@@ -481,12 +480,7 @@ static void tuiAppMsgHandle() {
     TuiMsg msg;
     pthread_mutex_lock(&tuiApp.msgQueueLock);
 
-    size_t queueCurFrameSize = queueTuiMsgSize(&tuiApp.msgQueue);
-
-    for (size_t i = 0; i < queueCurFrameSize; ++i) {
-        if (queueTuiMsgIsEmpty(&tuiApp.msgQueue)) {
-            break;
-        }
+    while (!queueTuiMsgIsEmpty(&tuiApp.msgQueue)) {
         CHECKED_QUEUE_TUI_MSG_FRONT(&tuiApp.msgQueue, &msg);
         queueTuiMsgPop(&tuiApp.msgQueue);
         switch (msg.type) {
@@ -857,11 +851,13 @@ static Index findWidgetAtMouse(int screenY, int screenX) {
 
 void tuiAppRefresh() {
     tuiAppRefreshNavChain();
+    
     tuiAppPushMessage((TuiMsg){.type = MsgRefresh});
 }
 
 void tuiAppVisibilityChange(Control *dest, bool visible) {
     dest->visible = visible;
+    tuiAppUpdateViewArea();
     if (dest->focusable) {
         tuiAppRefresh();
     }

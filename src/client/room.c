@@ -33,10 +33,8 @@
 
 enum { MaxInputLen = 512, MaxRoomDisplay = 100, IdInputLen = 32, DecBase = 10 };
 
-int clientRoomMenu(Client *client) {
-
-refresh:
-    /* Request room list */
+// free roomIds after reaching the end of its lifetime
+int clientRoomList(Client *client, uint32_t **roomIds, size_t *roomCount) {
     if (clientSendEncryptedPacket(client, MsgRoomListReq, NULL, 0) !=
         PROTOCOL_SUCC) {
         return CLIENT_FAIL;
@@ -55,118 +53,47 @@ refresh:
         return CLIENT_FAIL;
     }
 
-    size_t roomCount = resp.header.payloadLength / sizeof(uint32_t);
-    uint32_t *roomIds = (uint32_t *)resp.payload;
+    *roomCount = resp.header.payloadLength / sizeof(uint32_t);
+    *roomIds = (uint32_t *)resp.payload;
 
-    printf("\n--- Available Rooms (%zu) ---\n", roomCount);
-    for (size_t i = 0; i < roomCount && i < MaxRoomDisplay; i++) {
-        printf("  Room %u\n", roomIds[i]);
+    return CLIENT_SUCC;
+}
+
+int clientCreateRoom(Client *client, uint32_t id) {
+    if (id == 0 || id > UINT32_MAX) {
+        LOG_ERROR("clientRoom: Invalid room ID");
     }
-    if (roomCount == 0) {
-        printf("  (none)\n");
+
+    if (clientSendEncryptedPacket(client, MsgCreateRoom, &id, sizeof(id)) !=
+        PROTOCOL_SUCC) {
+        return CLIENT_FAIL;
     }
 
-    packetClear(&resp);
-
-    for (;;) {
-        printf(
-            "\n[c]reate room  [j]oin room  [t]otp setup  [r]efresh  [q]uit\n");
-        printf("Choice: ");
-        fflush(stdout);
-
-        char choice[MaxInputLen];
-        if (fgets(choice, (int)sizeof(choice), stdin) == NULL) {
-            return CLIENT_FAIL;
-        }
-        choice[strcspn(choice, "\n")] = '\0';
-
-        if (strcmp(choice, "c") == 0) {
-            printf("Room ID to create: ");
-            fflush(stdout);
-            uint32_t roomId = 0;
-            {
-                char idStr[IdInputLen];
-                if (fgets(idStr, (int)sizeof(idStr), stdin) == NULL) {
-                    return CLIENT_FAIL;
-                }
-                char *endPtr = NULL;
-                enum { DecBase = 10 };
-                unsigned long parsed = strtoul(idStr, &endPtr, DecBase);
-                if (endPtr == idStr || parsed == 0 || parsed > UINT32_MAX) {
-                    printf("Invalid room ID.\n");
-                    continue;
-                }
-                roomId = (uint32_t)parsed;
-            }
-
-            if (clientSendEncryptedPacket(client, MsgCreateRoom, &roomId,
-                                          sizeof(roomId)) != PROTOCOL_SUCC) {
-                return CLIENT_FAIL;
-            }
-            int createStatus =
-                clientRecvStatusResponse(client, MsgCreateRoomResp);
-            if (createStatus != 0) {
-                printf("Room %u already exists.\n", roomId);
-                continue;
-            }
-            printf("Room %u created.\n", roomId);
-            /* Auto-join the newly created room */
-            if (clientSendEncryptedPacket(client, MsgJoinRoom, &roomId,
-                                          sizeof(roomId)) != PROTOCOL_SUCC) {
-                return CLIENT_FAIL;
-            }
-            int joinAfterCreate =
-                clientRecvStatusResponse(client, MsgJoinRoomResp);
-            if (joinAfterCreate != 0) {
-                printf("Room %u created but join failed.\n", roomId);
-                continue;
-            }
-            client->currentRoomId = roomId;
-            printf("Joined room %u.\n", roomId);
-            return CLIENT_SUCC;
-
-        } else if (strcmp(choice, "j") == 0) {
-            printf("Room ID to join: ");
-            fflush(stdout);
-            uint32_t roomId = 0;
-            {
-                char idStr[IdInputLen];
-                if (fgets(idStr, (int)sizeof(idStr), stdin) == NULL) {
-                    return CLIENT_FAIL;
-                }
-                char *endPtr = NULL;
-                enum { DecBase = 10 };
-                unsigned long parsed = strtoul(idStr, &endPtr, DecBase);
-                if (endPtr == idStr || parsed == 0 || parsed > UINT32_MAX) {
-                    printf("Invalid room ID.\n");
-                    continue;
-                }
-                roomId = (uint32_t)parsed;
-            }
-
-            if (clientSendEncryptedPacket(client, MsgJoinRoom, &roomId,
-                                          sizeof(roomId)) != PROTOCOL_SUCC) {
-                return CLIENT_FAIL;
-            }
-            int joinStatus = clientRecvStatusResponse(client, MsgJoinRoomResp);
-            if (joinStatus != 0) {
-                printf("Failed to join room %u.\n", roomId);
-                continue;
-            }
-            client->currentRoomId = roomId;
-            printf("Joined room %u.\n", roomId);
-            return CLIENT_SUCC;
-
-        } else if (strcmp(choice, "t") == 0) {
-            // clientTOTPSetup(client);
-
-        } else if (strcmp(choice, "r") == 0) {
-            /* Refresh: re-request room list (goto label above) */
-            goto refresh;
-
-        } else if (strcmp(choice, "q") == 0) {
-            clientSendEncryptedPacket(client, MsgLogout, NULL, 0);
-            return CLIENT_FAIL; /* Signal disconnect */
-        }
+    int createStatus = clientRecvStatusResponse(client, MsgCreateRoomResp);
+    if (createStatus != 0) {
+        LOG_ERROR("clientRoom: Room %u already exists", id);
     }
+
+    return CLIENT_SUCC;
+}
+
+int clientJoinRoom(Client *client, uint32_t id) {
+    if (clientSendEncryptedPacket(client, MsgJoinRoom, &id, sizeof(id)) !=
+        PROTOCOL_SUCC) {
+        return CLIENT_FAIL;
+    }
+
+    int joinAfterCreate = clientRecvStatusResponse(client, MsgJoinRoomResp);
+    if (joinAfterCreate != 0) {
+        LOG_ERROR("clientRoom: Failed to join room %u", id);
+        return CLIENT_FAIL;
+    }
+
+    client->currentRoomId = id;
+    LOG_INFO("clientRoom: Joined room %u", id);
+    return CLIENT_SUCC;
+}
+
+void clientQuitRoom(Client *client) {
+    clientSendEncryptedPacket(client, MsgQuitRoom, NULL, 0);
 }

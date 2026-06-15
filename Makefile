@@ -24,12 +24,14 @@ TEST_DIR := tests
 # Targets
 SERVER_BIN := $(BIN_DIR)/server/server
 CLIENT_BIN := $(BIN_DIR)/client/client
+LOADER_BIN := $(BIN_DIR)/client/loader
 
 # Source File Discovery
 
 # Target-specific sources
 SERVER_SRC := $(shell find $(SRC_DIR)/server -type f -name '*.c')
-CLIENT_SRC := $(shell find $(SRC_DIR)/client -type f -name '*.c')
+CLIENT_SRC := $(shell find $(SRC_DIR)/client -type f -name '*.c' ! -path "*/loader/*")
+LOADER_SRC := $(shell find $(SRC_DIR)/client/loader -type f -name '*.c')
 
 # Shared common sources
 COMMON_SRC := $(shell find $(SRC_DIR)/common -type f -name '*.c')
@@ -42,6 +44,9 @@ SERVER_OBJ := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SERVER_SRC))
 # Client-specific objects under build/client/
 CLIENT_OBJ := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(CLIENT_SRC))
 
+# Client-specific objects under build/client/loader
+LOADER_OBJ := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(LOADER_SRC))
+
 # Common objects compiled separately for each target to avoid main() conflicts
 COMMON_SERVER_OBJ := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/server/%.o, $(COMMON_SRC))
 COMMON_CLIENT_OBJ := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/client/%.o, $(COMMON_SRC))
@@ -49,10 +54,12 @@ COMMON_CLIENT_OBJ := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/client/%.o, $(COMMO
 # Full object lists for linking
 SERVER_ALL_OBJ := $(SERVER_OBJ) $(COMMON_SERVER_OBJ)
 CLIENT_ALL_OBJ := $(CLIENT_OBJ) $(COMMON_CLIENT_OBJ)
+LOADER_ALL_OBJ := $(LOADER_OBJ) $(COMMON_CLIENT_OBJ)
 
 # Dependency files for incremental rebuilds
 SERVER_DEP := $(SERVER_ALL_OBJ:.o=.d)
 CLIENT_DEP := $(CLIENT_ALL_OBJ:.o=.d)
+LOADER_DEP := $(LOADER_ALL_OBJ:.o=.d)
 
 # Test Discovery
 TEST_SRC := $(shell find $(TEST_DIR) -type f -name 'test_*.c')
@@ -74,7 +81,7 @@ C_RESET := \033[0m
 # Build Rules
 .PHONY: all server client clean run run-server run-client analyze test json json-server json-client debug
 
-all: analyze $(SERVER_BIN) $(CLIENT_BIN)
+all: analyze $(SERVER_BIN) $(CLIENT_BIN) $(LOADER_BIN)
 
 server: $(SERVER_BIN)
 
@@ -94,6 +101,11 @@ $(SERVER_BIN): $(SERVER_ALL_OBJ) | $(BIN_DIR)/server
 $(CLIENT_BIN): $(CLIENT_ALL_OBJ) | $(BIN_DIR)/client
 	@echo -e '$(C_GREEN)Linking client: $@$(C_RESET)'
 	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+
+# Link loader executable
+$(LOADER_BIN): $(LOADER_ALL_OBJ) | $(BIN_DIR)/client
+	@echo -e '$(C_GREEN)Linking loader: $@$(C_RESET)'
+	@$(CC) $(CFLAGS) -ldl $^ -o $@ $(LDLIBS)
 
 # Compile server-specific .c files
 $(BUILD_DIR)/server/%.o: $(SRC_DIR)/server/%.c
@@ -139,6 +151,7 @@ $(BIN_DIR):
 # Include auto-generated dependency files
 -include $(SERVER_DEP)
 -include $(CLIENT_DEP)
+-include $(LOADER_DEP)
 
 # Test Rules
 

@@ -31,9 +31,9 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
-#include "client/auth.h"
-#include "client/communication.h"
-#include "client/database.h"
+#include "auth.h"
+#include "communication.h"
+#include "database.h"
 #include "log.h"
 #include "utils.h"
 

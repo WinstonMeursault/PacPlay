@@ -22,7 +22,8 @@
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
-#include "../auth.h"
+#include "client/auth.h"
+#include "client/connection.h"
 #include "clientTUI.h"
 #include "mainPage.h"
 #include "qrcodegen.h"

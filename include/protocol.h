@@ -101,6 +101,7 @@ typedef enum {
     MsgCreateRoomResp,
     MsgJoinRoom,
     MsgJoinRoomResp,
+    MsgQuitRoom,
 
     /* In-room chat. */
     MsgChat,

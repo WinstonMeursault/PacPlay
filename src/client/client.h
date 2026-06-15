@@ -1,6 +1,6 @@
 /**
  * @file client.h
- * @brief PacPlay CLI client — state machine types and public API.
+ * @brief PacPlay client — state machine types and public API.
  *
  * @date 2026-05-27
  * @copyright GPLv3 License
@@ -50,40 +50,4 @@ typedef struct Client {
     struct ClientDB *db;           /**< Opaque encrypted client database. */
 } Client;
 
-/* ─────────────────────────────── public API ─────────────────────────────── */
-
-/**
- * @brief Connect to the server and perform ECDH+HKDF key exchange.
- *
- * @param client  Must be zero-initialised.
- * @param addr    Server IPv4 address (e.g. "127.0.0.1").
- * @param port    Server port.
- * @return @c CLIENT_SUCC on success, @c CLIENT_FAIL on failure.
- */
-int clientConnect(Client *client, const char *addr, uint16_t port);
-
-/**
- * @brief Enter the room lobby — list rooms, offer create / join options.
- *
- * @param client  Authenticated client.
- * @return @c CLIENT_SUCC on success, @c CLIENT_FAIL on error or logout.
- */
-int clientRoomMenu(Client *client);
-
-/**
- * @brief Enter the chat loop inside a room — send messages and display
- *        incoming broadcasts.
- *
- * @param client  Client inside a room.
- * @return @c CLIENT_SUCC on clean exit (/exit), @c CLIENT_FAIL on error.
- */
-int clientChatLoop(Client *client);
-
-/**
- * @brief Disconnect and clean up client resources.
- *
- * @param client  Client to tear down.
- */
-void clientDisconnect(Client *client);
-
-#endif /* CLIENT_H */
+#endif // CLIENT_H

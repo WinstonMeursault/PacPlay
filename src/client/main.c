@@ -25,20 +25,9 @@
 #include "client.h"
 #include "tui/clientTUI.h"
 
-enum { ServerPort = 12345 };
-
-// static const char *serverAddr = "127.0.0.1";
-
 int main(void) {
     Client clientInstance;
     memset(&clientInstance, 0, sizeof(clientInstance));
-
-    // if (clientConnect(&clientInstance, serverAddr, ServerPort) != CLIENT_SUCC) {
-    //     return 1;
-    // }
-
     tuiClientEntry(&clientInstance);
-
-    clientDisconnect(&clientInstance);
     return 0;
 }

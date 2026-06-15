@@ -1,8 +1,8 @@
 /**
- * @file client_tui.h
+ * @file main.c
  * @brief
  *
- * @date 2026-06-09
+ * @date 2026-06-15
  * @copyright GPLv3 License
  * @section LICENSE
  * PacPlay
@@ -22,37 +22,24 @@
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
-#ifndef CLIENTTUI_H
-#define CLIENTTUI_H
+#include <stdlib.h>
+#include <dlfcn.h>
+#include "log.h"
 
-#include "client/client.h"
-#include "tui/tuiapp.h"
+int main(int argc, const char *argv[]) {
+    if (argc != 2) {
+        LOG_ERROR("loader: invalid argument count");
+        return EXIT_FAILURE;
+    }
 
-#define TUI_BTN_HEIGHT 3
-#define TUI_BTN_WIDTH 13
+    void *handle = dlopen(argv[1], RTLD_LAZY);
 
-// Client pointer
-extern Client *client;
+    if (!handle) {
+        LOG_ERROR("loader: cannot open game shared object: %s", argv[1]);
+        return EXIT_FAILURE;
+    }
 
-extern ControlPage connectPage;
-extern ControlPage loginPage;
-extern ControlPage homePage;
+    
 
-typedef enum TuiClientColor {
-    ColorRed = 1,
-    ColorGreen,
-    ColorStableBlack,
-    ColorStableWhite
-} TuiClientColor;
-
-typedef enum TuiClientColorAttr {
-    ColorAttrDefault = 0,
-    ColorAttrRed = 1,
-    ColorAttrGreen,
-    ColorAttrStableBlack,
-    ColorAttrStableWhite
-} TuiClientColorAttr;
-
-void tuiClientEntry(Client *clientInstance);
-
-#endif // CLIENTTUI_H
+    return EXIT_SUCCESS;
+}

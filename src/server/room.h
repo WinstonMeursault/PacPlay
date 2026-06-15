@@ -111,4 +111,6 @@ int serverHandleRoomCreate(Server *s, ClientSession *cs, const Packet *pkt);
  */
 int serverHandleRoomJoin(Server *s, ClientSession *cs, const Packet *pkt);
 
+void serverHandleRoomQuit(Server *s, ClientSession *cs);
+
 #endif /* SERVER_ROOM_H */

@@ -452,6 +452,9 @@ static int processClient(Server *s, ClientSession *cs) {
             ret = serverHandleRoomCreate(s, cs, &pkt);
         } else if (mt == MsgJoinRoom) {
             ret = serverHandleRoomJoin(s, cs, &pkt);
+        } else if (mt == MsgQuitRoom) {
+            serverHandleRoomQuit(s, cs);
+            ret = SERVER_SUCC;
         } else if (mt == MsgLogout) {
             ret = handleLogout(s, cs);
         } else if (mt == MsgTOTPSetupReq) {
@@ -516,5 +519,3 @@ static int handleLogout(Server *s, ClientSession *cs) {
     LOG_INFO("User logging out (fd=%d)", cs->fd);
     return SERVER_FAIL; /* Signal to disconnect */
 }
-
-/* ══════════════════════════════ room helpers ══════════════════════════════ */

@@ -231,4 +231,6 @@ void controlListBoxDraw(ControlListBox *self);
 
 void controlListBoxAppend(ControlListBox *self, const char *disp, size_t id);
 
+void controlListBoxClear(ControlListBox *self);
+
 #endif // CONTROL_H

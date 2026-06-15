@@ -1,8 +1,8 @@
 /**
- * @file client_tui.h
+ * @file gameLoad.c
  * @brief
  *
- * @date 2026-06-09
+ * @date 2026-06-15
  * @copyright GPLv3 License
  * @section LICENSE
  * PacPlay
@@ -22,37 +22,4 @@
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
-#ifndef CLIENTTUI_H
-#define CLIENTTUI_H
-
-#include "client/client.h"
-#include "tui/tuiapp.h"
-
-#define TUI_BTN_HEIGHT 3
-#define TUI_BTN_WIDTH 13
-
-// Client pointer
-extern Client *client;
-
-extern ControlPage connectPage;
-extern ControlPage loginPage;
-extern ControlPage homePage;
-
-typedef enum TuiClientColor {
-    ColorRed = 1,
-    ColorGreen,
-    ColorStableBlack,
-    ColorStableWhite
-} TuiClientColor;
-
-typedef enum TuiClientColorAttr {
-    ColorAttrDefault = 0,
-    ColorAttrRed = 1,
-    ColorAttrGreen,
-    ColorAttrStableBlack,
-    ColorAttrStableWhite
-} TuiClientColorAttr;
-
-void tuiClientEntry(Client *clientInstance);
-
-#endif // CLIENTTUI_H
+#include "vterm.h"

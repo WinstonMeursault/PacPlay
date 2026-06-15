@@ -23,6 +23,7 @@
  */
 
 #include "connectPage.h"
+#include "client/connection.h"
 #include "clientTUI.h"
 #include "utils.h"
 #include <ctype.h>

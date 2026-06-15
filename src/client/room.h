@@ -31,4 +31,9 @@
 
 #include "client.h"
 
+int clientRoomList(Client *client, uint32_t **roomIds, size_t *roomCount);
+int clientCreateRoom(Client *client, uint32_t id);
+int clientJoinRoom(Client *client, uint32_t id);
+void clientQuitRoom(Client *client);
+
 #endif /* CLIENT_ROOM_H */

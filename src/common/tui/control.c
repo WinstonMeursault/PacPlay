@@ -1354,17 +1354,17 @@ void controlListBoxDraw(ControlListBox *self) {
          i < (size_t)self->base.height - 2 + self->viewBegin &&
          i < self->entryCnt;
          ++i) {
-        ControlListBoxEntry cur = {0};
-        arrayControlListBoxEntryGet(&self->list, i, &cur);
+        ControlListBoxEntry cur;
+        ContainerRes res = arrayControlListBoxEntryGet(&self->list, i, &cur);
         if (i == self->curLine) {
             wattron(self->base.windowHandler, A_REVERSE);
+        }
+        if (res == ContainerSucc) {
             mvwprintw(self->base.windowHandler, i - self->viewBegin + 1, 1,
                       "%-*s", self->base.width - 2, cur.disp);
+        }
+        if (i == self->curLine) {
             wattroff(self->base.windowHandler, A_REVERSE);
-            attroff(A_REVERSE);
-        } else {
-            mvwprintw(self->base.windowHandler, i - self->viewBegin + 1, 1,
-                      "%-*s", self->base.width - 2, cur.disp);
         }
     }
 
@@ -1379,12 +1379,16 @@ void controlListBoxAppend(ControlListBox *self, const char *disp, size_t id) {
     ++self->entryCnt;
 }
 
-static void controlListBoxDestruct(ControlListBox *self) {
+void controlListBoxClear(ControlListBox *self) {
     for (size_t i = 0; i < arrayControlListBoxEntrySize(&self->list); ++i) {
         ControlListBoxEntry cur = {0};
         arrayControlListBoxEntryGet(&self->list, i, &cur);
         free(cur.disp);
     }
+}
+
+static void controlListBoxDestruct(ControlListBox *self) {
+    controlListBoxClear(self);
     arrayControlListBoxEntryDeinit(&self->list);
 }
 

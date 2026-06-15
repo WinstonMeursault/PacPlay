@@ -1,8 +1,8 @@
 /**
- * @file client_tui.h
- * @brief
+ * @file connection.h
+ * @brief PacPlay client public connection API.
  *
- * @date 2026-06-09
+ * @date 2026-05-27
  * @copyright GPLv3 License
  * @section LICENSE
  * PacPlay
@@ -22,37 +22,30 @@
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
-#ifndef CLIENTTUI_H
-#define CLIENTTUI_H
+#ifndef CONNECTION_H
+#define CONNECTION_H
 
-#include "client/client.h"
-#include "tui/tuiapp.h"
+#include "client.h"
 
-#define TUI_BTN_HEIGHT 3
-#define TUI_BTN_WIDTH 13
+struct ClientDB; /* forward — full definition in client/database.h */
 
-// Client pointer
-extern Client *client;
+#include <stdint.h>
 
-extern ControlPage connectPage;
-extern ControlPage loginPage;
-extern ControlPage homePage;
+/**
+ * @brief Connect to the server and perform ECDH+HKDF key exchange.
+ *
+ * @param client  Must be zero-initialised.
+ * @param addr    Server IPv4 address (e.g. "127.0.0.1").
+ * @param port    Server port.
+ * @return @c CLIENT_SUCC on success, @c CLIENT_FAIL on failure.
+ */
+int clientConnect(Client *client, const char *addr, uint16_t port);
 
-typedef enum TuiClientColor {
-    ColorRed = 1,
-    ColorGreen,
-    ColorStableBlack,
-    ColorStableWhite
-} TuiClientColor;
+/**
+ * @brief Disconnect and clean up client resources.
+ *
+ * @param client  Client to tear down.
+ */
+void clientDisconnect(Client *client);
 
-typedef enum TuiClientColorAttr {
-    ColorAttrDefault = 0,
-    ColorAttrRed = 1,
-    ColorAttrGreen,
-    ColorAttrStableBlack,
-    ColorAttrStableWhite
-} TuiClientColorAttr;
-
-void tuiClientEntry(Client *clientInstance);
-
-#endif // CLIENTTUI_H
+#endif // CONNECTION_H
