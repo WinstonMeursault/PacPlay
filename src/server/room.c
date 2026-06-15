@@ -109,7 +109,7 @@ void serverRemoveClientFromRoom(Server *s, ClientSession *cs) {
 int serverHandleRoomList(Server *s, ClientSession *cs) {
     uint32_t *roomIds = NULL;
     size_t count = 0;
-    if (listRooms(s->gameDB, &roomIds, &count) != DB_SUCC) {
+    if (listRooms(s->roomDB, &roomIds, &count) != DB_SUCC) {
         serverSendEncryptedPacket(cs, MsgRoomListResp, NULL, 0);
         return SERVER_SUCC;
     }
@@ -125,7 +125,7 @@ int serverHandleRoomCreate(Server *s, ClientSession *cs, const Packet *pkt) {
         return SERVER_SUCC;
     }
     uint32_t roomId = *(uint32_t *)pkt->payload;
-    if (createRoom(s->gameDB, roomId, cs->currentUser.uid) != DB_SUCC) {
+    if (createRoom(s->roomDB, roomId, cs->currentUser.uid) != DB_SUCC) {
         serverSendStatusResponse(cs, MsgCreateRoomResp, StatusFailure);
         return SERVER_SUCC;
     }
@@ -139,7 +139,7 @@ int serverHandleRoomJoin(Server *s, ClientSession *cs, const Packet *pkt) {
         return SERVER_SUCC;
     }
     uint32_t roomId = *(uint32_t *)pkt->payload;
-    if (roomExists(s->gameDB, roomId) != DB_SUCC) {
+    if (roomExists(s->roomDB, roomId) != DB_SUCC) {
         serverSendStatusResponse(cs, MsgJoinRoomResp, StatusFailure);
         return SERVER_SUCC;
     }

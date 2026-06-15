@@ -73,12 +73,15 @@ static void removeDBFiles(void) {
     remove("./db/chatHistory.db");
     remove("./db/chatHistory.db-wal");
     remove("./db/chatHistory.db-shm");
-    remove("./db/game.db");
-    remove("./db/game.db-wal");
-    remove("./db/game.db-shm");
+    remove("./db/room.db");
+    remove("./db/room.db-wal");
+    remove("./db/room.db-shm");
     remove("./db/server.db");
     remove("./db/server.db-wal");
     remove("./db/server.db-shm");
+    remove("./db/game.db");
+    remove("./db/game.db-wal");
+    remove("./db/game.db-shm");
 }
 
 /** @brief All-zeros DEK for testing TOTP secret encryption. */
@@ -966,6 +969,7 @@ static void testQueryMsgIdZeroSearch(void) {
     Chat out;
     ASSERT_INT_EQ(queryChatByMsgId(db, RoomTestA, in.msgId, &out), DB_SUCC);
     free(out.message);
+    dbClose(db);
     /* msgId=0 before any store should fail */
     removeDBFiles();
     DB *db2 = dbInit(ChatHistoryDB, NULL);
@@ -2729,22 +2733,22 @@ static void testChatSchemaExists(void) {
     dbClose(db);
 }
 
-/* ═════════════════════ GameDB: room persistence tests ═════════════════════ */
+/* ═════════════════════ RoomDB: room persistence tests ═════════════════════ */
 
-static void testGameDbInitBasic(void) {
-    DB *db = dbInit(GameDB, NULL);
+static void testRoomDbInitBasic(void) {
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
-    ASSERT_INT_EQ(db->type, GameDB);
+    ASSERT_INT_EQ(db->type, RoomDB);
     dbClose(db);
 }
 
-static void testGameDbInitInvalidType(void) {
+static void testRoomDbInitInvalidType(void) {
     DB *db = dbInit((DBType)(-1), NULL);
     ASSERT_TRUE(db == NULL);
 }
 
 static void testCreateRoomBasic(void) {
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(createRoom(db, 1001, 42), DB_SUCC);
@@ -2754,7 +2758,7 @@ static void testCreateRoomBasic(void) {
 }
 
 static void testCreateRoomDuplicateRejected(void) {
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(createRoom(db, 2001, 42), DB_SUCC);
@@ -2775,14 +2779,14 @@ static void testCreateRoomWrongDBType(void) {
 }
 
 static void testCreateRoomIdZero(void) {
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(createRoom(db, 0, 42), DB_FAIL);
     dbClose(db);
 }
 
 static void testDeleteRoomBasic(void) {
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(createRoom(db, 3001, 42), DB_SUCC);
@@ -2793,7 +2797,7 @@ static void testDeleteRoomBasic(void) {
 }
 
 static void testDeleteRoomNonexistent(void) {
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(deleteRoom(db, 9999), DB_FAIL);
@@ -2803,7 +2807,7 @@ static void testDeleteRoomNonexistent(void) {
 
 static void testListRoomsEmpty(void) {
     removeDBFiles();
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     uint32_t *ids = (uint32_t *)(uintptr_t)1;
@@ -2818,7 +2822,7 @@ static void testListRoomsEmpty(void) {
 
 static void testListRoomsSingle(void) {
     removeDBFiles();
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(createRoom(db, 4001, 42), DB_SUCC);
@@ -2835,7 +2839,7 @@ static void testListRoomsSingle(void) {
 
 static void testListRoomsMultiple(void) {
     removeDBFiles();
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(createRoom(db, 5001, 42), DB_SUCC);
@@ -2856,7 +2860,7 @@ static void testListRoomsMultiple(void) {
 }
 
 static void testListRoomsNullOut(void) {
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(listRooms(db, NULL, NULL), DB_FAIL);
     dbClose(db);
@@ -2872,7 +2876,7 @@ static void testListRoomsWrongDBType(void) {
 }
 
 static void testRoomExistsBasic(void) {
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(createRoom(db, 6001, 42), DB_SUCC);
@@ -2882,7 +2886,7 @@ static void testRoomExistsBasic(void) {
 }
 
 static void testRoomExistsNotFound(void) {
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(roomExists(db, 9999), DB_FAIL);
@@ -2892,7 +2896,7 @@ static void testRoomExistsNotFound(void) {
 }
 
 static void testCreateDeleteRecreate(void) {
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
 
     ASSERT_INT_EQ(createRoom(db, 7001, 42), DB_SUCC);
@@ -2918,7 +2922,7 @@ static void testDeleteRoomWrongDBType(void) {
 
 /** @brief Deleting same room twice fails on second attempt. */
 static void testDeleteRoomTwice(void) {
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(createRoom(db, 8001, 42), DB_SUCC);
     ASSERT_INT_EQ(deleteRoom(db, 8001), DB_SUCC);
@@ -2941,7 +2945,7 @@ static void testRoomExistsWrongDBType(void) {
 
 /** @brief RoomExists returns DB_FAIL for deleted room. */
 static void testRoomExistsAfterDelete(void) {
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(createRoom(db, 9001, 42), DB_SUCC);
     ASSERT_INT_EQ(deleteRoom(db, 9001), DB_SUCC);
@@ -2949,16 +2953,16 @@ static void testRoomExistsAfterDelete(void) {
     dbClose(db);
 }
 
-/** @brief GameDB persists rooms across close and reopen. */
-static void testGameDBPersistence(void) {
+/** @brief RoomDB persists rooms across close and reopen. */
+static void testRoomDBPersistence(void) {
     removeDBFiles();
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(createRoom(db, 11001, 42), DB_SUCC);
     ASSERT_INT_EQ(createRoom(db, 11002, 99), DB_SUCC);
     dbClose(db);
 
-    DB *db2 = dbInit(GameDB, NULL);
+    DB *db2 = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db2 != NULL);
     ASSERT_INT_EQ(roomExists(db2, 11001), DB_SUCC);
     ASSERT_INT_EQ(roomExists(db2, 11002), DB_SUCC);
@@ -2977,7 +2981,7 @@ static void testCreateRoomOnChatHistoryDB(void) {
 /** @brief listRooms reflects deletions. */
 static void testListRoomsAfterDelete(void) {
     removeDBFiles();
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
     ASSERT_INT_EQ(createRoom(db, 12001, 42), DB_SUCC);
     ASSERT_INT_EQ(createRoom(db, 12002, 99), DB_SUCC);
@@ -2996,7 +3000,7 @@ static void testListRoomsAfterDelete(void) {
 /** @brief listRooms triggers realloc when exceeding QUERY_INITIAL_CAPACITY. */
 static void testListRoomsReallocTrigger(void) {
     removeDBFiles();
-    DB *db = dbInit(GameDB, NULL);
+    DB *db = dbInit(RoomDB, NULL);
     ASSERT_TRUE(db != NULL);
     enum { RoomCount = 20, BaseRoomRealloc = 13001 };
     for (uint32_t i = 0; i < RoomCount; i++) {
@@ -3011,6 +3015,281 @@ static void testListRoomsReallocTrigger(void) {
     }
     free(ids);
     dbClose(db);
+}
+
+/* ══════════════════════ GameDB: game registry tests ══════════════════════ */
+
+static void testGameDbInit(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    ASSERT_INT_EQ(db->type, GameDB);
+    dbClose(db);
+}
+
+static void testRegisterGameBasic(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    GameInfo g = {.gameId = 1,
+                  .name = "TestGame",
+                  .version = "1.0.0",
+                  .hash = "abc123",
+                  .path = "/games/test"};
+    ASSERT_INT_EQ(registerGame(db, &g), DB_SUCC);
+    dbClose(db);
+}
+
+static void testRegisterAndGetById(void) {
+    enum { TestGameId = 42 };
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    GameInfo g = {.gameId = TestGameId,
+                  .name = "Pacman",
+                  .version = "2.1.0",
+                  .hash = "deadbeef",
+                  .path = "/opt/pacman"};
+    ASSERT_INT_EQ(registerGame(db, &g), DB_SUCC);
+
+    GameInfo out;
+    memset(&out, 0, sizeof(out));
+    ASSERT_INT_EQ(getGameById(db, TestGameId, &out), DB_SUCC);
+    ASSERT_UINT_EQ(out.gameId, (uint32_t)TestGameId);
+    ASSERT_STR_EQ(out.name, "Pacman");
+    ASSERT_STR_EQ(out.version, "2.1.0");
+    ASSERT_STR_EQ(out.hash, "deadbeef");
+    ASSERT_STR_EQ(out.path, "/opt/pacman");
+    ASSERT_TRUE(out.createdAt > 0);
+    ASSERT_TRUE(out.updatedAt > 0);
+    gameInfoFree(&out);
+    dbClose(db);
+}
+
+static void testGetByIdNotFound(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    GameInfo out;
+    ASSERT_INT_EQ(getGameById(db, 999, &out), DB_FAIL);
+    dbClose(db);
+}
+
+static void testRegisterAndGetByName(void) {
+    enum { ChessGameId = 7 };
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    GameInfo g = {.gameId = ChessGameId,
+                  .name = "Chess",
+                  .version = "1.0.0",
+                  .hash = "aabbcc",
+                  .path = "/games/chess"};
+    ASSERT_INT_EQ(registerGame(db, &g), DB_SUCC);
+
+    GameInfo out;
+    memset(&out, 0, sizeof(out));
+    ASSERT_INT_EQ(getGameByName(db, "Chess", &out), DB_SUCC);
+    ASSERT_UINT_EQ(out.gameId, (uint32_t)ChessGameId);
+    ASSERT_STR_EQ(out.name, "Chess");
+    gameInfoFree(&out);
+    dbClose(db);
+}
+
+static void testGetByNameNotFound(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    GameInfo out;
+    ASSERT_INT_EQ(getGameByName(db, "NonExistent", &out), DB_FAIL);
+    dbClose(db);
+}
+
+static void testUpdateGameVersionBasic(void) {
+    enum { UpdatableGameId = 10 };
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    GameInfo g = {.gameId = UpdatableGameId,
+                  .name = "Updatable",
+                  .version = "0.1.0",
+                  .hash = "oldhash",
+                  .path = "/games/up"};
+    ASSERT_INT_EQ(registerGame(db, &g), DB_SUCC);
+    ASSERT_INT_EQ(updateGameVersion(db, UpdatableGameId, "0.2.0", "newhash"),
+                  DB_SUCC);
+
+    GameInfo out;
+    memset(&out, 0, sizeof(out));
+    ASSERT_INT_EQ(getGameById(db, UpdatableGameId, &out), DB_SUCC);
+    ASSERT_STR_EQ(out.version, "0.2.0");
+    ASSERT_STR_EQ(out.hash, "newhash");
+    ASSERT_STR_EQ(out.path, "/games/up");
+    gameInfoFree(&out);
+    dbClose(db);
+}
+
+static void testUpdateGameVersionNotFound(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    ASSERT_INT_EQ(updateGameVersion(db, 999, "1.0", "h"), DB_FAIL);
+    dbClose(db);
+}
+
+static void testUnregisterGameBasic(void) {
+    enum { DeleteGameId = 5 };
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    GameInfo g = {.gameId = DeleteGameId,
+                  .name = "ToDelete",
+                  .version = "1.0",
+                  .hash = "x",
+                  .path = "/tmp"};
+    ASSERT_INT_EQ(registerGame(db, &g), DB_SUCC);
+    ASSERT_INT_EQ(unregisterGame(db, DeleteGameId), DB_SUCC);
+
+    GameInfo out;
+    ASSERT_INT_EQ(getGameById(db, DeleteGameId, &out), DB_FAIL);
+    dbClose(db);
+}
+
+static void testUnregisterGameNotFound(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    ASSERT_INT_EQ(unregisterGame(db, 999), DB_FAIL);
+    dbClose(db);
+}
+
+static void testListGamesEmpty(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    GameInfo *arr = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(listRegisteredGames(db, &arr, &count), DB_SUCC);
+    ASSERT_UINT_EQ(count, (size_t)0);
+    ASSERT_TRUE(arr == NULL);
+    dbClose(db);
+}
+
+static void testListGamesMultiple(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    enum { IdA = 3, IdB = 1, IdC = 2 };
+    GameInfo a = {
+        .gameId = IdA, .name = "A", .version = "1", .hash = "h", .path = "p"};
+    GameInfo b = {
+        .gameId = IdB, .name = "B", .version = "1", .hash = "h", .path = "p"};
+    GameInfo c = {
+        .gameId = IdC, .name = "C", .version = "1", .hash = "h", .path = "p"};
+    ASSERT_INT_EQ(registerGame(db, &a), DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &b), DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &c), DB_SUCC);
+
+    GameInfo *arr = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(listRegisteredGames(db, &arr, &count), DB_SUCC);
+    ASSERT_UINT_EQ(count, (size_t)3);
+    ASSERT_UINT_EQ(arr[0].gameId, (uint32_t)IdB);
+    ASSERT_UINT_EQ(arr[1].gameId, (uint32_t)IdC);
+    ASSERT_UINT_EQ(arr[2].gameId, (uint32_t)IdA);
+    gameInfoArrayFree(arr, count);
+    dbClose(db);
+}
+
+static void testRegisterDuplicateNameFails(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    GameInfo g1 = {
+        .gameId = 1, .name = "Dup", .version = "1", .hash = "h", .path = "p"};
+    GameInfo g2 = {
+        .gameId = 2, .name = "Dup", .version = "2", .hash = "h2", .path = "p2"};
+    ASSERT_INT_EQ(registerGame(db, &g1), DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &g2), DB_FAIL);
+    dbClose(db);
+}
+
+static void testRegisterDuplicateIdFails(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    GameInfo g1 = {
+        .gameId = 1, .name = "G1", .version = "1", .hash = "h", .path = "p"};
+    GameInfo g2 = {
+        .gameId = 1, .name = "G2", .version = "1", .hash = "h", .path = "p"};
+    ASSERT_INT_EQ(registerGame(db, &g1), DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &g2), DB_FAIL);
+    dbClose(db);
+}
+
+static void testRegisterGameIdZero(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    GameInfo g = {
+        .gameId = 0, .name = "Zero", .version = "1", .hash = "h", .path = "p"};
+    ASSERT_INT_EQ(registerGame(db, &g), DB_FAIL);
+    dbClose(db);
+}
+
+static void testRegisterGameNullFields(void) {
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    GameInfo g = {
+        .gameId = 1, .name = NULL, .version = "1", .hash = "h", .path = "p"};
+    ASSERT_INT_EQ(registerGame(db, &g), DB_FAIL);
+    dbClose(db);
+}
+
+static void testRegisterGameNullDB(void) {
+    GameInfo g = {
+        .gameId = 1, .name = "X", .version = "1", .hash = "h", .path = "p"};
+    ASSERT_INT_EQ(registerGame(NULL, &g), DB_FAIL);
+}
+
+static void testRegisterGameWrongDBType(void) {
+    removeDBFiles();
+    DB *db = dbInit(RoomDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    GameInfo g = {
+        .gameId = 1, .name = "X", .version = "1", .hash = "h", .path = "p"};
+    ASSERT_INT_EQ(registerGame(db, &g), DB_FAIL);
+    dbClose(db);
+}
+
+static void testGameDbPersistence(void) {
+    enum { PersistGameId = 50 };
+    removeDBFiles();
+    DB *db = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db != NULL);
+    GameInfo g = {.gameId = PersistGameId,
+                  .name = "Persist",
+                  .version = "3.0",
+                  .hash = "phash",
+                  .path = "/persist"};
+    ASSERT_INT_EQ(registerGame(db, &g), DB_SUCC);
+    dbClose(db);
+
+    DB *db2 = dbInit(GameDB, NULL);
+    ASSERT_TRUE(db2 != NULL);
+    GameInfo out;
+    memset(&out, 0, sizeof(out));
+    ASSERT_INT_EQ(getGameById(db2, PersistGameId, &out), DB_SUCC);
+    ASSERT_STR_EQ(out.name, "Persist");
+    ASSERT_STR_EQ(out.version, "3.0");
+    gameInfoFree(&out);
+    dbClose(db2);
+}
+
+static void testGameInfoFreeNull(void) {
+    gameInfoFree(NULL);
+    gameInfoArrayFree(NULL, 0);
 }
 
 /* ═════════════════════════════ dbEncKey tests ═════════════════════════════ */
@@ -3278,11 +3557,11 @@ int main(void) {
     RUN_TEST(testRoomStmtCacheCollision);
     RUN_TEST(testChatSchemaExists);
 
-    /* ──────────────────────── GameDB: room persistence
+    /* ──────────────────────── RoomDB: room persistence
      * ──────────────────────── */
     removeDBFiles();
-    RUN_TEST(testGameDbInitBasic);
-    RUN_TEST(testGameDbInitInvalidType);
+    RUN_TEST(testRoomDbInitBasic);
+    RUN_TEST(testRoomDbInitInvalidType);
 
     /* List rooms must run first (on empty DB) */
     RUN_TEST(testListRoomsEmpty);
@@ -3307,10 +3586,34 @@ int main(void) {
     RUN_TEST(testRoomExistsNullDB);
     RUN_TEST(testRoomExistsWrongDBType);
     RUN_TEST(testRoomExistsAfterDelete);
-    RUN_TEST(testGameDBPersistence);
+    RUN_TEST(testRoomDBPersistence);
     RUN_TEST(testCreateRoomOnChatHistoryDB);
     RUN_TEST(testListRoomsAfterDelete);
     RUN_TEST(testListRoomsReallocTrigger);
+
+    /* ──────────────────────── GameDB: game registry
+     * ──────────────────────── */
+    removeDBFiles();
+    RUN_TEST(testGameDbInit);
+    RUN_TEST(testRegisterGameBasic);
+    RUN_TEST(testRegisterAndGetById);
+    RUN_TEST(testGetByIdNotFound);
+    RUN_TEST(testRegisterAndGetByName);
+    RUN_TEST(testGetByNameNotFound);
+    RUN_TEST(testUpdateGameVersionBasic);
+    RUN_TEST(testUpdateGameVersionNotFound);
+    RUN_TEST(testUnregisterGameBasic);
+    RUN_TEST(testUnregisterGameNotFound);
+    RUN_TEST(testListGamesEmpty);
+    RUN_TEST(testListGamesMultiple);
+    RUN_TEST(testRegisterDuplicateNameFails);
+    RUN_TEST(testRegisterDuplicateIdFails);
+    RUN_TEST(testRegisterGameIdZero);
+    RUN_TEST(testRegisterGameNullFields);
+    RUN_TEST(testRegisterGameNullDB);
+    RUN_TEST(testRegisterGameWrongDBType);
+    RUN_TEST(testGameDbPersistence);
+    RUN_TEST(testGameInfoFreeNull);
 
     /* ──────────────────────────────── dbEncKey
      * ──────────────────────────────── */

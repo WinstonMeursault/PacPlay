@@ -76,16 +76,16 @@ void serverRemoveClientFromRoom(Server *s, ClientSession *cs);
 /* ───────────────────────────── room handlers ────────────────────────────── */
 
 /**
- * @brief Handle MsgRoomListReq — query GameDB and return all room IDs.
+ * @brief Handle MsgRoomListReq — query RoomDB and return all room IDs.
  *
- * @param s   Server instance (must have an open GameDB).
+ * @param s   Server instance (must have an open RoomDB).
  * @param cs  Authenticated client session.
  * @return @c SERVER_SUCC on success, @c SERVER_FAIL on error.
  */
 int serverHandleRoomList(Server *s, ClientSession *cs);
 
 /**
- * @brief Handle MsgCreateRoom — persist a new room in GameDB.
+ * @brief Handle MsgCreateRoom — persist a new room in RoomDB.
  *
  * Expects a single uint32_t room ID as payload.  Sends a single-byte
  * status response (0 = success, 1 = failure).

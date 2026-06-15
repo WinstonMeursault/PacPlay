@@ -60,7 +60,14 @@ int initUserDBSchema(sqlite3 *dbHandle);
 int initChatHistoryDBSchema(sqlite3 *dbHandle);
 
 /**
- * @brief Initialize the schema for the game database.
+ * @brief Initialize the schema for the room database.
+ * @param dbHandle  Raw sqlite3 handle.
+ * @return @c DB_SUCC on success, @c DB_FAIL on failure.
+ */
+int initRoomDBSchema(sqlite3 *dbHandle);
+
+/**
+ * @brief Initialize the schema for the game metadata database.
  * @param dbHandle  Raw sqlite3 handle.
  * @return @c DB_SUCC on success, @c DB_FAIL on failure.
  */
@@ -89,6 +96,13 @@ int prepareUserStmts(DB *database);
  * @return @c DB_SUCC on success, @c DB_FAIL on failure.
  */
 int prepareChatGlobalStmts(DB *database);
+
+/**
+ * @brief Prepare cached statements for a RoomDB handle.
+ * @param database  The DB handle to populate.
+ * @return @c DB_SUCC on success, @c DB_FAIL on failure.
+ */
+int prepareRoomDBStmts(DB *database);
 
 /**
  * @brief Prepare cached statements for a GameDB handle.

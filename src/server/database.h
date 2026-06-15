@@ -45,7 +45,10 @@
 /** @brief File path for the chat history database. */
 #define CHAT_HISTORY_DB_PATH "./db/chatHistory.db"
 
-/** @brief File path for the game database. */
+/** @brief File path for the room database. */
+#define ROOM_DB_PATH "./db/room.db"
+
+/** @brief File path for the game metadata database. */
 #define GAME_DB_PATH "./db/game.db"
 
 /** @brief File path for the server key-value database. */
@@ -62,7 +65,7 @@
 /* ───────────────────────────────── types ────────────────────────────────── */
 
 /** @brief Identifies which database to open. */
-typedef enum { UserDB = 1, ChatHistoryDB, GameDB, ServerDB } DBType;
+typedef enum { UserDB = 1, ChatHistoryDB, RoomDB, ServerDB, GameDB } DBType;
 
 /* ────────────────────────── room statement cache ────────────────────────── */
 
@@ -108,11 +111,11 @@ typedef struct DB {
     sqlite3 *handle; /**< Underlying sqlite3 connection. */
     DBType type;     /**< Type of database this handle serves. */
     /* UserDB cached statements */
-    sqlite3_stmt *stmtInsert; /**< Cached INSERT statement (UserDB / GameDB). */
-    sqlite3_stmt *stmtDelete; /**< Cached DELETE statement (UserDB / GameDB). */
-    sqlite3_stmt *stmtSelect; /**< Cached SELECT statement (UserDB / GameDB). */
+    sqlite3_stmt *stmtInsert; /**< Cached INSERT statement (UserDB / RoomDB). */
+    sqlite3_stmt *stmtDelete; /**< Cached DELETE statement (UserDB / RoomDB). */
+    sqlite3_stmt *stmtSelect; /**< Cached SELECT statement (UserDB / RoomDB). */
     sqlite3_stmt *stmtRoomExists; /**< cached SELECT 1 FROM rooms WHERE roomId=?
-                                     (GameDB). */
+                                     (RoomDB). */
     sqlite3_stmt
         *stmtUidCheck; /**< Cached SELECT 1 FROM users WHERE uid=? (UserDB). */
     sqlite3_stmt *stmtSetTotpSecret; /**< Cached UPDATE totp_secret (UserDB). */
@@ -125,6 +128,10 @@ typedef struct DB {
     /* ServerDB cached statements */
     sqlite3_stmt *stmtSetKey; /**< Cached INSERT OR REPLACE (ServerDB). */
     sqlite3_stmt *stmtGetKey; /**< Cached SELECT key_value (ServerDB). */
+    /* GameDB cached statements */
+    sqlite3_stmt *stmtUpdate;       /**< Cached UPDATE statement (GameDB). */
+    sqlite3_stmt *stmtSelectById;   /**< Cached SELECT by ID (GameDB). */
+    sqlite3_stmt *stmtSelectByName; /**< Cached SELECT by name (GameDB). */
     /* Key material held in memory for the lifetime of the handle */
     uint8_t dekKey[AES_GCM_KEY_LEN];  /**< DEK for TOTP secret envelope
                                          encryption. */
@@ -415,7 +422,7 @@ int queryChatByTimeRange(DB *database, uint32_t roomId, uint32_t uid,
 int queryChatByUserAllRooms(DB *database, uint32_t uid, time_t startTime,
                             time_t endTime, Chat **out, size_t *count);
 
-/* ───────────────────────── game (room) operations ───────────────────────── */
+/* ─────────────────────── room persistence operations ────────────────────── */
 
 /**
  * @brief Create a new game room record.
@@ -423,7 +430,7 @@ int queryChatByUserAllRooms(DB *database, uint32_t uid, time_t startTime,
  * Inserts a row into the rooms table with the current UNIX timestamp.
  * @p roomId must be non-zero and must not already exist.
  *
- * @param database    An open GameDB handle.
+ * @param database    An open RoomDB handle.
  * @param roomId      The room identifier (must be > 0).
  * @param creatorUid  The uid of the user creating the room.
  * @return @c DB_SUCC on success, @c DB_FAIL if @p roomId already exists
@@ -432,19 +439,19 @@ int queryChatByUserAllRooms(DB *database, uint32_t uid, time_t startTime,
 int createRoom(DB *database, uint32_t roomId, uint32_t creatorUid);
 
 /**
- * @brief Delete a room record from the game database.
+ * @brief Delete a room record from the room database.
  *
  * Fails in strict mode: if @p roomId does not exist the call returns
  * @c DB_FAIL.
  *
- * @param database  An open GameDB handle.
+ * @param database  An open RoomDB handle.
  * @param roomId    The room to delete.
  * @return @c DB_SUCC on success, @c DB_FAIL if not found or on error.
  */
 int deleteRoom(DB *database, uint32_t roomId);
 
 /**
- * @brief List all room IDs in the game database.
+ * @brief List all room IDs in the room database.
  *
  * On success @p *outRoomIds is set to a newly allocated array of
  * @c uint32_t and @p *count is set to the number of rooms.  The caller
@@ -453,7 +460,7 @@ int deleteRoom(DB *database, uint32_t roomId);
  * An empty database is considered success: returns @c DB_SUCC with
  * @p *count = 0 and @p *outRoomIds = NULL.
  *
- * @param database    An open GameDB handle.
+ * @param database    An open RoomDB handle.
  * @param outRoomIds  Output array of room IDs. Must not be NULL.
  * @param count       Output count of rooms. Must not be NULL.
  * @return @c DB_SUCC on success, @c DB_FAIL on error.
@@ -461,12 +468,114 @@ int deleteRoom(DB *database, uint32_t roomId);
 int listRooms(DB *database, uint32_t **outRoomIds, size_t *count);
 
 /**
- * @brief Check whether a room exists in the game database.
+ * @brief Check whether a room exists in the room database.
  *
- * @param database  An open GameDB handle.
+ * @param database  An open RoomDB handle.
  * @param roomId    The room to check.
  * @return @c DB_SUCC if the room exists, @c DB_FAIL if not found or on error.
  */
 int roomExists(DB *database, uint32_t roomId);
+
+/* ──────────────────── game metadata (registry) operations ──────────────── */
+
+/**
+ * @brief Register a new game in the game metadata database.
+ *
+ * Inserts a row with the current UNIX timestamp for both createdAt and
+ * updatedAt.  @p game->gameId must be non-zero and must not already
+ * exist.  @p game->name must be unique.
+ *
+ * @param database  An open GameDB handle.
+ * @param game      Game metadata to insert. Must not be NULL.
+ * @return @c DB_SUCC on success, @c DB_FAIL on duplicate or error.
+ */
+int registerGame(DB *database, GameInfo *game);
+
+/**
+ * @brief Remove a game record from the game metadata database.
+ *
+ * Strict mode: returns @c DB_FAIL if @p gameId does not exist.
+ *
+ * @param database  An open GameDB handle.
+ * @param gameId    The game to remove.
+ * @return @c DB_SUCC on success, @c DB_FAIL if not found or on error.
+ */
+int unregisterGame(DB *database, uint32_t gameId);
+
+/**
+ * @brief Update the version and hash of an existing game.
+ *
+ * Also refreshes the updatedAt timestamp.  Returns @c DB_FAIL if the
+ * game does not exist.
+ *
+ * @param database  An open GameDB handle.
+ * @param gameId    The game to update.
+ * @param version   New version string. Must not be NULL.
+ * @param hash      New hash string. Must not be NULL.
+ * @return @c DB_SUCC on success, @c DB_FAIL if not found or on error.
+ */
+int updateGameVersion(DB *database, uint32_t gameId, const char *version,
+                      const char *hash);
+
+/**
+ * @brief Retrieve a game record by its ID.
+ *
+ * On success, string fields in @p out are allocated via strdup and must
+ * be freed by the caller (see gameInfoFree()).
+ *
+ * @param database  An open GameDB handle.
+ * @param gameId    The game to look up.
+ * @param out       Output structure. Must not be NULL.
+ * @return @c DB_SUCC on success, @c DB_FAIL if not found or on error.
+ */
+int getGameById(DB *database, uint32_t gameId, GameInfo *out);
+
+/**
+ * @brief Retrieve a game record by its unique name.
+ *
+ * On success, string fields in @p out are allocated via strdup and must
+ * be freed by the caller (see gameInfoFree()).
+ *
+ * @param database  An open GameDB handle.
+ * @param name      Game name to look up. Must not be NULL.
+ * @param out       Output structure. Must not be NULL.
+ * @return @c DB_SUCC on success, @c DB_FAIL if not found or on error.
+ */
+int getGameByName(DB *database, const char *name, GameInfo *out);
+
+/**
+ * @brief List all registered games.
+ *
+ * On success @p *out is set to a newly allocated array sorted by
+ * gameId ascending, and @p *count is set to the number of entries.
+ * An empty database returns @c DB_SUCC with @p *count = 0 and
+ * @p *out = NULL.  The caller must free the result with
+ * gameInfoArrayFree().
+ *
+ * @param database  An open GameDB handle.
+ * @param out       Output array pointer. Must not be NULL.
+ * @param count     Output count. Must not be NULL.
+ * @return @c DB_SUCC on success, @c DB_FAIL on error.
+ */
+int listRegisteredGames(DB *database, GameInfo **out, size_t *count);
+
+/**
+ * @brief Free the internal string fields of a single GameInfo.
+ *
+ * Does not free the struct itself.  Safe to call on a zeroed struct.
+ *
+ * @param info  The GameInfo to clean up.
+ */
+void gameInfoFree(GameInfo *info);
+
+/**
+ * @brief Free an array of GameInfo records returned by listRegisteredGames().
+ *
+ * Calls gameInfoFree() on each element and then frees the array.
+ *
+ * @param arr    The array to free (may be NULL).
+ * @param count  Number of elements.
+ */
+void gameInfoArrayFree(GameInfo *arr, size_t count);
 
 #endif /* SERVER_DATABASE_H */

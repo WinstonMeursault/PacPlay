@@ -188,8 +188,9 @@ static void testMessageTypeValues(void) {
     ASSERT_INT_EQ(MsgChat, 19);
     ASSERT_INT_EQ(MsgLogout, 20);
     ASSERT_INT_EQ(MsgHeartbeat, 21);
-    ASSERT_INT_EQ(MsgGameStart, 22);
-    ASSERT_INT_EQ(MsgGameStop, 23);
+    ASSERT_INT_EQ(MsgGameList, 22);
+    ASSERT_INT_EQ(MsgGameStart, 23);
+    ASSERT_INT_EQ(MsgGameStop, 24);
 }
 
 /** @brief NULL_SOCKETFD sentinel value. */
@@ -385,15 +386,15 @@ static void testPacketClearIdempotent(void) {
     ASSERT_TRUE(pkt.payload == NULL);
 }
 
-/* ═════════════════════════════ 3.5. packetInit ═════════════════════════════ */
+/* ═════════════════════════════ 3.5. packetInit ═════════════════════════════
+ */
 
 /** @brief packetInit rejects NULL packet. */
 static void testPacketInitNullPacket(void) {
     enum { TestLen = 4 };
     uint8_t data[TestLen] = {0};
-    ASSERT_INT_EQ(
-        packetInit(NULL, MsgChat, 0, PlaintextPacket, data, TestLen),
-        PROTOCOL_FAIL);
+    ASSERT_INT_EQ(packetInit(NULL, MsgChat, 0, PlaintextPacket, data, TestLen),
+                  PROTOCOL_FAIL);
 }
 
 /** @brief packetInit rejects payload that is NULL when dataLen > 0. */
@@ -410,10 +411,9 @@ static void testPacketInitExceedsMaxPayload(void) {
     Packet pkt;
     memset(&pkt, 0, sizeof(pkt));
     pkt.payload = NULL;
-    ASSERT_INT_EQ(
-        packetInit(&pkt, MsgChat, 0, PlaintextPacket, NULL,
-                   (size_t)MAX_PAYLOAD_LEN + 1),
-        PROTOCOL_FAIL);
+    ASSERT_INT_EQ(packetInit(&pkt, MsgChat, 0, PlaintextPacket, NULL,
+                             (size_t)MAX_PAYLOAD_LEN + 1),
+                  PROTOCOL_FAIL);
 }
 
 /** @brief packetInit rejects packet whose payload is not NULL on entry. */
@@ -2069,8 +2069,8 @@ static void testHexCharToNibbleInvalid(void) {
     ASSERT_INT_EQ(hexCharToNibble('\0'), InvalidReturn);
 }
 
-/** @brief MessageType enum has exactly 23 values. */
-static void testMessageTypeCount(void) { ASSERT_INT_EQ(MsgGameStop, 23); }
+/** @brief MessageType enum has exactly 24 values. */
+static void testMessageTypeCount(void) { ASSERT_INT_EQ(MsgGameStop, 24); }
 
 /* ══════════════════════════════════ main ══════════════════════════════════ */
 

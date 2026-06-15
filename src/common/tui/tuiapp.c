@@ -180,6 +180,12 @@ static void tuiAppUpdateViewArea() {
 }
 
 void tuiAppInit() {
+    tuiApp.userCursor.index = 0;
+    tuiApp.userCursor.indexOfCache = 0;
+    tuiApp.curRoot = 0;
+    tuiApp.selectingWidget = 0;
+    tuiApp.isRunning = false;
+
     if (arrayControlRegEntryInit(&tuiApp.controlRegistry,
                                  USE_DEFAULT_CAPACITY) != ContainerSucc ||
         arrayIndexInit(&tuiApp.navChainCache, USE_DEFAULT_CAPACITY) !=

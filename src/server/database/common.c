@@ -5,7 +5,7 @@
  * Implements database initialization (dbInit), teardown (dbClose), and
  * key setting (dbSetDekKey, dbSetDbEncKey).  Schema initialization and
  * statement preparation are delegated to per-database modules (userDb.c,
- * chatDb.c, gameDb.c, serverDb.c).
+ * chatDb.c, roomDb.c, serverDb.c).
  *
  * @date 2026-06-07
  * @copyright GPLv3 License
@@ -93,6 +93,9 @@ DB *dbInit(DBType dbType, const uint8_t *encKey) {
     case ChatHistoryDB:
         dbPath = CHAT_HISTORY_DB_PATH;
         break;
+    case RoomDB:
+        dbPath = ROOM_DB_PATH;
+        break;
     case GameDB:
         dbPath = GAME_DB_PATH;
         break;
@@ -163,6 +166,9 @@ DB *dbInit(DBType dbType, const uint8_t *encKey) {
     case ChatHistoryDB:
         schemaResult = initChatHistoryDBSchema(database->handle);
         break;
+    case RoomDB:
+        schemaResult = initRoomDBSchema(database->handle);
+        break;
     case GameDB:
         schemaResult = initGameDBSchema(database->handle);
         break;
@@ -197,6 +203,9 @@ DB *dbInit(DBType dbType, const uint8_t *encKey) {
             }
         }
         break;
+    case RoomDB:
+        stmtResult = prepareRoomDBStmts(database);
+        break;
     case GameDB:
         stmtResult = prepareGameDBStmts(database);
         break;
@@ -220,6 +229,9 @@ DB *dbInit(DBType dbType, const uint8_t *encKey) {
         dbFinalize(&database->stmtSetKey);
         dbFinalize(&database->stmtGetKey);
         dbFinalize(&database->stmtSeq);
+        dbFinalize(&database->stmtUpdate);
+        dbFinalize(&database->stmtSelectById);
+        dbFinalize(&database->stmtSelectByName);
         roomCacheDestroy(database->roomCache);
         sqlite3_close(database->handle);
         free(database);
@@ -248,6 +260,11 @@ void dbClose(DB *database) {
     /* Finalize ServerDB cached statements */
     dbFinalize(&database->stmtSetKey);
     dbFinalize(&database->stmtGetKey);
+
+    /* Finalize GameDB cached statements */
+    dbFinalize(&database->stmtUpdate);
+    dbFinalize(&database->stmtSelectById);
+    dbFinalize(&database->stmtSelectByName);
 
     /* Finalize ChatHistoryDB cached statements */
     dbFinalize(&database->stmtSeq);

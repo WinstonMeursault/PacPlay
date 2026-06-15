@@ -2118,37 +2118,45 @@ static const char totpURITestSecret[] = "JBSWY3DPEHPK3PXP";
 
 static void testTOTPGenerateNullSecret(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(generateOTPAuthURI(NULL, "alice", &uri), CRYPTO_FAIL);
+    size_t uriLen = 0;
+    ASSERT_INT_EQ(generateOTPAuthURI(NULL, "alice", &uri, &uriLen),
+                  CRYPTO_FAIL);
     ASSERT_TRUE(uri == NULL);
 }
 
 static void testTOTPGenerateNullUsername(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, NULL, &uri),
+    size_t uriLen = 0;
+    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, NULL, &uri, &uriLen),
                   CRYPTO_FAIL);
     ASSERT_TRUE(uri == NULL);
 }
 
 static void testTOTPGenerateNullOutURI(void) {
-    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "alice", NULL),
+    size_t uriLen = 0;
+    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "alice", NULL, &uriLen),
                   CRYPTO_FAIL);
 }
 
 static void testTOTPGenerateEmptySecret(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(generateOTPAuthURI("", "alice", &uri), CRYPTO_FAIL);
+    size_t uriLen = 0;
+    ASSERT_INT_EQ(generateOTPAuthURI("", "alice", &uri, &uriLen), CRYPTO_FAIL);
     ASSERT_TRUE(uri == NULL);
 }
 
 static void testTOTPGenerateEmptyUsername(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "", &uri), CRYPTO_FAIL);
+    size_t uriLen = 0;
+    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "", &uri, &uriLen),
+                  CRYPTO_FAIL);
     ASSERT_TRUE(uri == NULL);
 }
 
 static void testTOTPGenerateBasic(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "alice", &uri),
+    size_t uriLen = 0;
+    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "alice", &uri, &uriLen),
                   CRYPTO_SUCC);
     ASSERT_TRUE(uri != NULL);
 
@@ -2167,7 +2175,8 @@ static void testTOTPGenerateBasic(void) {
 
 static void testTOTPGenerateURISchemePrefix(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "test", &uri),
+    size_t uriLen = 0;
+    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "test", &uri, &uriLen),
                   CRYPTO_SUCC);
     /* "otpauth://totp/" must appear exactly at the beginning */
     ASSERT_UINT_EQ(strncmp(uri, "otpauth://totp/", strlen("otpauth://totp/")),
@@ -2177,8 +2186,10 @@ static void testTOTPGenerateURISchemePrefix(void) {
 
 static void testTOTPGenerateURLEncodeSpecialChars(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "alice@test", &uri),
-                  CRYPTO_SUCC);
+    size_t uriLen = 0;
+    ASSERT_INT_EQ(
+        generateOTPAuthURI(totpURITestSecret, "alice@test", &uri, &uriLen),
+        CRYPTO_SUCC);
     ASSERT_TRUE(uri != NULL);
 
     /* '@' must be percent-encoded as %40 in the user portion of the label */
@@ -2191,26 +2202,34 @@ static void testTOTPGenerateURLEncodeSpecialChars(void) {
 
 static void testTOTPGenerateInvalidSecretChars(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(generateOTPAuthURI("MY=ZXW6", "alice", &uri), CRYPTO_FAIL);
+    size_t uriLen = 0;
+    ASSERT_INT_EQ(generateOTPAuthURI("MY=ZXW6", "alice", &uri, &uriLen),
+                  CRYPTO_FAIL);
     ASSERT_TRUE(uri == NULL);
 }
 
 static void testTOTPGenerateInvalidSecretAmpersand(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(generateOTPAuthURI("MZX&W6YTB", "alice", &uri), CRYPTO_FAIL);
+    size_t uriLen = 0;
+    ASSERT_INT_EQ(generateOTPAuthURI("MZX&W6YTB", "alice", &uri, &uriLen),
+                  CRYPTO_FAIL);
     ASSERT_TRUE(uri == NULL);
 }
 
 static void testTOTPGenerateInvalidSecretQuestion(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(generateOTPAuthURI("MZXW6?YTB", "alice", &uri), CRYPTO_FAIL);
+    size_t uriLen = 0;
+    ASSERT_INT_EQ(generateOTPAuthURI("MZXW6?YTB", "alice", &uri, &uriLen),
+                  CRYPTO_FAIL);
     ASSERT_TRUE(uri == NULL);
 }
 
 static void testTOTPGenerateURLEncodeSpace(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "al ice", &uri),
-                  CRYPTO_SUCC);
+    size_t uriLen = 0;
+    ASSERT_INT_EQ(
+        generateOTPAuthURI(totpURITestSecret, "al ice", &uri, &uriLen),
+        CRYPTO_SUCC);
     ASSERT_TRUE(uri != NULL);
 
     /* Label portion after totp/ must have space encoded as %20 */
@@ -2223,8 +2242,10 @@ static void testTOTPGenerateURLEncodeSpace(void) {
 
 static void testTOTPGenerateURLEncodeColon(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "al:ice", &uri),
-                  CRYPTO_SUCC);
+    size_t uriLen = 0;
+    ASSERT_INT_EQ(
+        generateOTPAuthURI(totpURITestSecret, "al:ice", &uri, &uriLen),
+        CRYPTO_SUCC);
     ASSERT_TRUE(uri != NULL);
 
     /* Colon in username must be %3A to avoid breaking the label separator */
@@ -2235,8 +2256,10 @@ static void testTOTPGenerateURLEncodeColon(void) {
 
 static void testTOTPGenerateURLEncodeMultipleReserved(void) {
     char *uri = NULL;
-    ASSERT_INT_EQ(generateOTPAuthURI(totpURITestSecret, "a@b:c d", &uri),
-                  CRYPTO_SUCC);
+    size_t uriLen = 0;
+    ASSERT_INT_EQ(
+        generateOTPAuthURI(totpURITestSecret, "a@b:c d", &uri, &uriLen),
+        CRYPTO_SUCC);
     ASSERT_TRUE(uri != NULL);
 
     /* '@' → %40, ':' → %3A, ' ' → %20 */
@@ -2245,7 +2268,8 @@ static void testTOTPGenerateURLEncodeMultipleReserved(void) {
     free(uri);
 }
 
-/* ═══════════════ 15. Password Hashing (hashPassword / verifyPassword) ══════ */
+/* ═══════════════ 15. Password Hashing (hashPassword / verifyPassword) ══════
+ */
 
 enum {
     HashTestPwLen = 16,
@@ -2360,11 +2384,10 @@ static void testVerifyPasswordOneBitDiff(void) {
 
 /** @brief verifyPassword with corrupt hash (missing colon) fails. */
 static void testVerifyPasswordNoColon(void) {
-    ASSERT_INT_EQ(
-        verifyPassword("pw", "0123456789abcdef0123456789abcdef"
-                             "0123456789abcdef0123456789abcdef"
-                             "0123456789abcdef0123456789abcdef"),
-        CRYPTO_FAIL);
+    ASSERT_INT_EQ(verifyPassword("pw", "0123456789abcdef0123456789abcdef"
+                                       "0123456789abcdef0123456789abcdef"
+                                       "0123456789abcdef0123456789abcdef"),
+                  CRYPTO_FAIL);
 }
 
 /** @brief verifyPassword with truncated hash (short) fails. */

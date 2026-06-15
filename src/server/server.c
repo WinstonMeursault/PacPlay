@@ -30,9 +30,12 @@
 #include "server/database.h"
 #include "server/keyManager.h"
 #include "server/room.h"
+#include "server/tui/serverTUI.h"
+#include "serverLog.h"
 #include "utils.h"
 
 #include <errno.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
@@ -51,8 +54,18 @@ enum {
     RegisterHeaderSize = offsetof(RegisterRequestPayload, password)
 };
 
+/* ────────────────── signal-based graceful shutdown ──────────────────────── */
+
+static volatile sig_atomic_t gShutdownRequested;
+
+static void shutdownSignalHandler(int sig) {
+    (void)sig;
+    gShutdownRequested = 1;
+}
+
 /* ────────────────────────── forward declarations ────────────────────────── */
 
+static void *serverEventLoop(void *arg);
 static void acceptClient(Server *s);
 static int processClient(Server *s, ClientSession *cs);
 static void clientDisconnect(Server *s, int idx);
@@ -99,12 +112,13 @@ static int handleLogout(Server *s, ClientSession *cs);
 /* ═══════════════════════════════ public API ═══════════════════════════════ */
 
 int serverInit(Server *server, uint16_t port) {
+    (void)serverLogInit();
+
     SocketFD listenFd = serverSetup(port);
     if (listenFd == NULL_SOCKETFD) {
         return SERVER_FAIL;
     }
 
-    /* Open ServerDB first (plaintext, no encryption key needed) */
     DB *serverDB = dbInit(ServerDB, NULL);
     if (serverDB == NULL) {
         LOG_ERROR("serverInit: ServerDB initialization failed");
@@ -115,33 +129,47 @@ int serverInit(Server *server, uint16_t port) {
     server->listenFd = listenFd;
     server->serverDB = serverDB;
 
-    /* Load or generate all cryptographic keys from ServerDB */
-    if (serverInitKeys(server) != SERVER_SUCC) {
-        LOG_ERROR("serverInit: server key initialization failed");
-        serverCleanup(server);
-        return SERVER_FAIL;
+    bool firstRun = serverIsFirstRun(server);
+    char *mkHex = NULL;
+    if (firstRun) {
+        mkHex = serverGenerateFreshKeys(server);
+        if (mkHex == NULL) {
+            LOG_ERROR("serverInit: key generation failed");
+            serverCleanup(server);
+            return SERVER_FAIL;
+        }
+    } else {
+        if (!serverKeysAreComplete(server)) {
+            LOG_FATAL("serverInit: ServerDB key set is incomplete");
+        }
     }
+    tuiServerEntry(server, firstRun, mkHex);
+    free(mkHex);
 
-    /* On first run, remove any pre-existing plaintext database files
-     * from a pre-SQLCipher version so they are created fresh encrypted. */
+    return SERVER_SUCC;
+}
+
+int serverLaunch(Server *server) {
     if (server->freshKeysGenerated) {
         remove(USER_DB_PATH);
         remove(CHAT_HISTORY_DB_PATH);
+        remove(ROOM_DB_PATH);
         remove(GAME_DB_PATH);
     }
 
-    /* Open encrypted databases with their per-DB keys */
     DB *userDB = dbInit(UserDB, server->userDbEncKey);
     DB *chatDB = dbInit(ChatHistoryDB, server->chatDbEncKey);
+    DB *roomDB = dbInit(RoomDB, server->roomDbEncKey);
     DB *gameDB = dbInit(GameDB, server->gameDbEncKey);
-    if (userDB == NULL || chatDB == NULL || gameDB == NULL) {
-        LOG_ERROR("serverInit: encrypted database initialization failed");
-        serverCleanup(server);
+    if (userDB == NULL || chatDB == NULL || roomDB == NULL ||
+        gameDB == NULL) {
+        LOG_ERROR("serverLaunch: encrypted database initialization failed");
         return SERVER_FAIL;
     }
 
     server->userDB = userDB;
     server->chatDB = chatDB;
+    server->roomDB = roomDB;
     server->gameDB = gameDB;
 
     dbSetDekKey(server->userDB, server->dekKey);
@@ -150,8 +178,7 @@ int serverInit(Server *server, uint16_t port) {
     server->clients = (ClientSession **)calloc((size_t)server->clientCapacity,
                                                sizeof(ClientSession *));
     if (server->clients == NULL) {
-        LOG_ERROR("serverInit: calloc failed (errno=%d)", errno);
-        serverCleanup(server);
+        LOG_ERROR("serverLaunch: calloc failed (errno=%d)", errno);
         return SERVER_FAIL;
     }
 
@@ -159,17 +186,47 @@ int serverInit(Server *server, uint16_t port) {
     server->activeRooms = (ActiveRoom **)calloc(
         (size_t)server->activeRoomCapacity, sizeof(ActiveRoom *));
     if (server->activeRooms == NULL) {
-        LOG_ERROR("serverInit: calloc rooms failed (errno=%d)", errno);
-        serverCleanup(server);
+        LOG_ERROR("serverLaunch: calloc rooms failed (errno=%d)", errno);
         return SERVER_FAIL;
     }
 
-    LOG_INFO("Server listening on port %u", (unsigned int)port);
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = shutdownSignalHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    (void)sigaction(SIGINT, &sa, NULL);
+    (void)sigaction(SIGTERM, &sa, NULL);
+
+    server->running = true;
+    server->startTime = getCurrentTimestamp();
+    if (pthread_create(&server->serverThread, NULL, serverEventLoop, server) !=
+        0) {
+        LOG_ERROR("serverLaunch: pthread_create failed (errno=%d)", errno);
+        server->running = false;
+        return SERVER_FAIL;
+    }
+
+    LOG_INFO("Server event loop started");
     return SERVER_SUCC;
 }
 
-void serverRun(Server *s) {
-    for (;;) {
+void serverShutdown(Server *server) {
+    if (!server->running) {
+        return;
+    }
+    server->running = false;
+    pthread_join(server->serverThread, NULL);
+}
+
+void serverRun(Server *server) { (void)server; }
+
+/* ═════════════════════════ background event loop ═════════════════════════ */
+
+static void *serverEventLoop(void *arg) {
+    Server *s = (Server *)arg;
+
+    while (s->running && !gShutdownRequested) {
         fd_set readFds;
         FD_ZERO(&readFds);
         FD_SET(s->listenFd, &readFds);
@@ -191,29 +248,29 @@ void serverRun(Server *s) {
             if (errno == EINTR) {
                 continue;
             }
-            LOG_ERROR("serverRun: select() failed (errno=%d)", errno);
+            LOG_ERROR("serverEventLoop: select() failed (errno=%d)", errno);
             break;
         }
 
-        /* Accept new connections */
         if (FD_ISSET(s->listenFd, &readFds)) {
             acceptClient(s);
             ready--;
         }
 
-        /* Process each client that has data pending */
         for (int i = 0; i < s->clientCount && ready > 0; i++) {
             if (FD_ISSET(s->clients[i]->fd, &readFds)) {
                 ready--;
                 if (processClient(s, s->clients[i]) != SERVER_SUCC) {
                     clientDisconnect(s, i);
-                    i--; /* Reprocess index shifted by memmove */
+                    i--;
                 }
             }
         }
 
-        /* Future: tick game rooms here when games are implemented */
+        serverLogCheckAndRestart();
     }
+
+    return NULL;
 }
 
 void serverCleanup(Server *server) {
@@ -240,15 +297,18 @@ void serverCleanup(Server *server) {
     socketClose(&server->listenFd);
     dbClose(server->userDB);
     dbClose(server->chatDB);
+    dbClose(server->roomDB);
     dbClose(server->gameDB);
     dbClose(server->serverDB);
 
     OPENSSL_cleanse(server->dekKey, sizeof(server->dekKey));
     OPENSSL_cleanse(server->userDbEncKey, sizeof(server->userDbEncKey));
     OPENSSL_cleanse(server->chatDbEncKey, sizeof(server->chatDbEncKey));
+    OPENSSL_cleanse(server->roomDbEncKey, sizeof(server->roomDbEncKey));
     OPENSSL_cleanse(server->gameDbEncKey, sizeof(server->gameDbEncKey));
 
     LOG_INFO("Server shut down");
+    serverLogClose();
 }
 
 /* ══════════════════════════ connection lifecycle ══════════════════════════ */

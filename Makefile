@@ -6,7 +6,7 @@ MAKEFLAGS += -j $(shell nproc)
 ## Compiler and compilation flags
 CC := clang
 CFLAGS := -fsanitize=address -Wall -Wextra -Werror -g -Wno-unused-command-line-argument
-LDLIBS := -lssl -lcrypto -lsqlcipher -lncursesw -lpthread
+LDLIBS := -lssl -lcrypto -lsqlcipher -lncursesw -lpthread -lz-ng
 ## Compiler flags for auto-generating dependency files (modern approach, replaces the old sed method)
 DEPFLAGS = -MMD -MP -MF $(@:%.o=%.d)
 
@@ -148,7 +148,7 @@ test: $(TEST_BIN)
 	echo -e '$(C_GREEN)Running tests...$(C_RESET)'; \
 	failCount=0; totalPass=0; totalFail=0; \
 	for t in $(TEST_BIN); do \
-		log=$$((cd $$(dirname $$t) && ./$$(basename $$t) 2>&1) || true); ret=$$?; \
+		log=$$(cd $$(dirname $$t) && ./$$(basename $$t) 2>&1); ret=$$?; \
 		echo "$$log"; \
 		testPass=$$(echo "$$log" | grep -oE '^[0-9]+ passed' | tail -1 | grep -oE '[0-9]+'); \
 		testFail=$$(echo "$$log" | grep -oE '[0-9]+ failed' | tail -1 | grep -oE '[0-9]+'); \

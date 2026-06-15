@@ -1354,7 +1354,7 @@ void controlListBoxDraw(ControlListBox *self) {
          i < (size_t)self->base.height - 2 + self->viewBegin &&
          i < self->entryCnt;
          ++i) {
-        ControlListBoxEntry cur;
+        ControlListBoxEntry cur = {0};
         arrayControlListBoxEntryGet(&self->list, i, &cur);
         if (i == self->curLine) {
             wattron(self->base.windowHandler, A_REVERSE);
@@ -1381,7 +1381,7 @@ void controlListBoxAppend(ControlListBox *self, const char *disp, size_t id) {
 
 static void controlListBoxDestruct(ControlListBox *self) {
     for (size_t i = 0; i < arrayControlListBoxEntrySize(&self->list); ++i) {
-        ControlListBoxEntry cur;
+        ControlListBoxEntry cur = {0};
         arrayControlListBoxEntryGet(&self->list, i, &cur);
         free(cur.disp);
     }

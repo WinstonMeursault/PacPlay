@@ -17,6 +17,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+const char *__asan_default_options(void) {
+    return "allocator_may_return_null=1";
+}
+const char *__lsan_default_suppressions(void) {
+    return "leak:testQueuePacketDoubleInitLeak\n"
+           "leak:testArrayPacketDoubleInitLeak\n";
+}
+#endif
+#endif
+
 /* ────────────────────────── type instantiations ─────────────────────────── */
 
 typedef int Int;

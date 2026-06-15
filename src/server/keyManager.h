@@ -26,34 +26,72 @@
 #define SERVER_KEY_MANAGER_H
 
 #include "server.h"
+#include <stdbool.h>
 
 /**
- * @brief Initialise server cryptographic keys (envelope encryption).
+ * @brief Check whether this is the first server run.
  *
- * **First run** (no "DEK" key in ServerDB):
- * - Generates MK, DEK, UserDBKey, ChatHistoryDBKey, and GameDBKey via
- *   @c cryptoRandomBytes() (each 256-bit).
- * - Uses AES-256-GCM to wrap DEK and the three per-DB keys with MK,
- *   producing 60-byte envelopes stored in ServerDB.
- * - Copies plaintext keys into the Server struct.
- * - Displays MK once in hex to the administrator, then securely wipes
- *   it from memory via @c OPENSSL_cleanse().
- * - Sets @c freshKeysGenerated = true.
- *
- * **Subsequent runs** ("DEK" key exists in ServerDB):
- * - Reads all four envelopes from ServerDB and validates completeness.
- * - Prompts for the 64-character hex Master Key (masked input).
- * - Decrypts each envelope with MK and loads plaintext keys into the
- *   Server struct.
- * - Sets @c freshKeysGenerated = false.
- *
- * Internal helpers @c encryptAndStoreKey() and @c decryptAndLoadKey()
- * are static functions within @c keyManager.c and are not exposed.
+ * Returns true when the @c server_keys table in ServerDB is empty
+ * (no key envelopes have been stored yet).
  *
  * @param s  An initialised Server with @c serverDB open.
- * @return @c SERVER_SUCC on success, @c SERVER_FAIL on error (incorrect
- *         Master Key, corrupted envelope, I/O failure).
+ * @return @c true if first run, @c false otherwise.
  */
-int serverInitKeys(Server *s);
+bool serverIsFirstRun(Server *s);
+
+/**
+ * @brief Verify that all four expected key envelopes exist in ServerDB.
+ *
+ * Checks for the presence of @c "DEK", @c "UserDBKey",
+ * @c "ChatHistoryDBKey", @c "RoomDBKey", and @c "GameDBKey".  If any
+ * is missing the
+ * database is considered corrupted and the server must refuse to start.
+ *
+ * @param s  An initialised Server with @c serverDB open.
+ * @return @c true if all envelopes are present, @c false otherwise.
+ */
+bool serverKeysAreComplete(Server *s);
+
+/**
+ * @brief Generate fresh cryptographic keys and store envelopes in
+ *        ServerDB.
+ *
+ * Generates MK, DEK, UserDBKey, ChatHistoryDBKey, RoomDBKey, and
+ * GameDBKey via
+ * @c cryptoRandomBytes() (each 256-bit).  Wraps DEK and the three
+ * per-DB keys with MK using AES-256-GCM into 60-byte envelopes and
+ * stores them in ServerDB.
+ *
+ * **The derived keys are NOT populated into the Server struct.**  Call
+ * @c serverUnlockWithMK() afterwards (with the same MK) to populate
+ * them.
+ *
+ * Sets @c freshKeysGenerated = true.
+ *
+ * @param s  An initialised Server with @c serverDB open.
+ * @return A malloc'd 64-character hex string of the Master Key, or
+ *         @c NULL on failure.  The caller must @c free() the string
+ *         and @c OPENSSL_cleanse() it before freeing.
+ */
+char *serverGenerateFreshKeys(Server *s);
+
+/**
+ * @brief Unlock the server by decrypting all key envelopes with the
+ *        given Master Key.
+ *
+ * Reads the four envelopes ("DEK", "UserDBKey", "ChatHistoryDBKey",
+ * "RoomDBKey", "GameDBKey") from ServerDB, decrypts each with
+ * @p masterKeyHex via AES-256-GCM, and populates the corresponding
+ * fields in the Server struct (@c dekKey, @c userDbEncKey,
+ * @c chatDbEncKey, @c roomDbEncKey, @c gameDbEncKey).
+ *
+ * Sets @c freshKeysGenerated = false on success.
+ *
+ * @param s             An initialised Server with @c serverDB open.
+ * @param masterKeyHex  64-character hex-encoded Master Key.
+ * @return @c SERVER_SUCC on success, @c SERVER_FAIL if the MK is
+ *         incorrect or envelopes are corrupted.
+ */
+int serverUnlockWithMK(Server *s, const char *masterKeyHex);
 
 #endif /* SERVER_KEY_MANAGER_H */

@@ -10,9 +10,9 @@
  * @copyright GPLv3 License
  */
 
+#include "test_utils.h"
 #include "tui/control.h"
 #include "tui/tuimsg.h"
-#include "test_utils.h"
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -120,7 +120,7 @@ static void testControlButtonConstruct(void) {
     gClickCount = 0;
 
     controlButtonConstruct(&btn, TestHeight, TestWidth, TestY, TestX, "OK",
-                           NULL, dummyOnClick, dummyCbBtn, dummyCbBtn);
+                           NULL, dummyOnClick, dummyCbBtn, dummyCbBtn, NULL);
 
     ASSERT_TRUE(btn.base.focusable);
     ASSERT_FALSE(btn.base.isContainer);
@@ -156,9 +156,8 @@ static void testControlButtonMaxLabelLen(void) {
     memset(longText, 'X', sizeof(longText) - 1);
     longText[sizeof(longText) - 1] = '\0';
 
-    controlButtonConstruct(&btn, TestHeight, TestWidth, TestY, TestX,
-                           longText, NULL, dummyOnClick, dummyCbBtn,
-                           dummyCbBtn);
+    controlButtonConstruct(&btn, TestHeight, TestWidth, TestY, TestX, longText,
+                           NULL, dummyOnClick, dummyCbBtn, dummyCbBtn, NULL);
 
     ASSERT_NOT_NULL(btn.text);
     ASSERT_UINT_EQ(strlen(btn.text), (size_t)(BTN_LABEL_MAXLEN - 1));
@@ -174,8 +173,8 @@ static void testControlGridConstruct(void) {
     memset(&grid, 0, sizeof(grid));
 
     controlGridConstruct(&grid, TestHeight, TestWidth, TestY, TestX,
-                         LayoutVertical, TestHmargin, TestVmargin,
-                         NULL, dummyCbGrid, dummyCbGrid, NULL);
+                         LayoutVertical, TestHmargin, TestVmargin, NULL,
+                         dummyCbGrid, dummyCbGrid, NULL, NULL);
 
     ASSERT_FALSE(grid.base.focusable);
     ASSERT_TRUE(grid.base.isContainer);
@@ -208,8 +207,8 @@ static void testControlLabelConstruct(void) {
     ControlLabel label;
     memset(&label, 0, sizeof(label));
 
-    controlLabelConstruct(&label, "PacPlay", DefaultIndex, TestY, TestX,
-                          NULL, dummyCbLabel, dummyCbLabel);
+    controlLabelConstruct(&label, "PacPlay", DefaultIndex, TestY, TestX, NULL,
+                          dummyCbLabel, dummyCbLabel, NULL);
 
     ASSERT_FALSE(label.base.focusable);
     ASSERT_FALSE(label.base.isContainer);
@@ -239,9 +238,9 @@ static void testControlInputBoxConstruct(void) {
     memset(&box, 0, sizeof(box));
     gClickCount = 0;
 
-    controlInputBoxConstruct(&box, TestWidth, TestY, TestX,
-                             NULL, dummyCbInputBox, dummyCbInputBox,
-                             dummyOnSubmit, dummyCbInputBox);
+    controlInputBoxConstruct(&box, TestWidth, TestY, TestX, false,
+                             dummyCbInputBox, dummyCbInputBox, dummyOnSubmit,
+                             dummyCbInputBox, NULL);
 
     ASSERT_TRUE(box.base.focusable);
     ASSERT_FALSE(box.base.isContainer);
@@ -271,9 +270,9 @@ static void testControlInputBoxMinWidthClamp(void) {
     ControlInputBox box;
     memset(&box, 0, sizeof(box));
 
-    controlInputBoxConstruct(&box, SmallWidth, TestY, TestX,
-                             NULL, dummyCbInputBox, dummyCbInputBox,
-                             dummyOnSubmit, dummyCbInputBox);
+    controlInputBoxConstruct(&box, SmallWidth, TestY, TestX, false,
+                             dummyCbInputBox, dummyCbInputBox, dummyOnSubmit,
+                             dummyCbInputBox, NULL);
 
     ASSERT_INT_EQ(box.base.width, MinWidth);
 
@@ -285,21 +284,19 @@ static void testControlInputBoxMinWidthClamp(void) {
 static void setupInputBox(ControlInputBox *box) {
     memset(box, 0, sizeof(*box));
     gClickCount = 0;
-    controlInputBoxConstruct(box, InputMax, TestY, TestX,
-                             NULL, dummyCbInputBox, dummyCbInputBox,
-                             dummyOnSubmit, dummyCbInputBox);
+    controlInputBoxConstruct(box, InputMax, TestY, TestX, false,
+                             dummyCbInputBox, dummyCbInputBox, dummyOnSubmit,
+                             dummyCbInputBox, NULL);
 }
 
-static void teardownInputBox(ControlInputBox *box) {
-    free(box->buf);
-}
+static void teardownInputBox(ControlInputBox *box) { free(box->buf); }
 
 static void testInputBoxInsertSingle(void) {
     ControlInputBox box;
     setupInputBox(&box);
 
     TuiMsg msg = {.type = MsgInput, .arg1 = {.input = 'A'}};
-    box.base.vtable.msgHandler(&box, msg);
+    box.base.vtable.msgHandler((Control *)&box, msg);
 
     ASSERT_UINT_EQ(box.curLen, One);
     ASSERT_UINT_EQ(box.curLoc, One);
@@ -314,12 +311,12 @@ static void testInputBoxBackspace(void) {
 
     TuiMsg msgA = {.type = MsgInput, .arg1 = {.input = 'A'}};
     TuiMsg msgB = {.type = MsgInput, .arg1 = {.input = 'B'}};
-    box.base.vtable.msgHandler(&box, msgA);
-    box.base.vtable.msgHandler(&box, msgB);
+    box.base.vtable.msgHandler((Control *)&box, msgA);
+    box.base.vtable.msgHandler((Control *)&box, msgB);
     ASSERT_UINT_EQ(box.curLen, Two);
 
     TuiMsg msgBS = {.type = MsgInput, .arg1 = {.input = KEY_BACKSPACE}};
-    box.base.vtable.msgHandler(&box, msgBS);
+    box.base.vtable.msgHandler((Control *)&box, msgBS);
     ASSERT_UINT_EQ(box.curLen, One);
     ASSERT_UINT_EQ(box.curLoc, One);
     ASSERT_TRUE(box.buf[IntZero] == 'A');
@@ -333,15 +330,15 @@ static void testInputBoxDelete(void) {
 
     TuiMsg msgA = {.type = MsgInput, .arg1 = {.input = 'A'}};
     TuiMsg msgB = {.type = MsgInput, .arg1 = {.input = 'B'}};
-    box.base.vtable.msgHandler(&box, msgA);
-    box.base.vtable.msgHandler(&box, msgB);
+    box.base.vtable.msgHandler((Control *)&box, msgA);
+    box.base.vtable.msgHandler((Control *)&box, msgB);
 
     TuiMsg msgLeft = {.type = MsgInput, .arg1 = {.input = KEY_LEFT}};
-    box.base.vtable.msgHandler(&box, msgLeft);
+    box.base.vtable.msgHandler((Control *)&box, msgLeft);
     ASSERT_UINT_EQ(box.curLoc, One);
 
     TuiMsg msgDC = {.type = MsgInput, .arg1 = {.input = KEY_DC}};
-    box.base.vtable.msgHandler(&box, msgDC);
+    box.base.vtable.msgHandler((Control *)&box, msgDC);
     ASSERT_UINT_EQ(box.curLen, One);
     ASSERT_UINT_EQ(box.curLoc, One);
     ASSERT_TRUE(box.buf[IntZero] == 'A');
@@ -355,15 +352,15 @@ static void testInputBoxCursorHomeEnd(void) {
 
     TuiMsg msgA = {.type = MsgInput, .arg1 = {.input = 'A'}};
     TuiMsg msgB = {.type = MsgInput, .arg1 = {.input = 'B'}};
-    box.base.vtable.msgHandler(&box, msgA);
-    box.base.vtable.msgHandler(&box, msgB);
+    box.base.vtable.msgHandler((Control *)&box, msgA);
+    box.base.vtable.msgHandler((Control *)&box, msgB);
 
     TuiMsg msgHome = {.type = MsgInput, .arg1 = {.input = KEY_HOME}};
-    box.base.vtable.msgHandler(&box, msgHome);
+    box.base.vtable.msgHandler((Control *)&box, msgHome);
     ASSERT_UINT_EQ(box.curLoc, DefaultIndex);
 
     TuiMsg msgEnd = {.type = MsgInput, .arg1 = {.input = KEY_END}};
-    box.base.vtable.msgHandler(&box, msgEnd);
+    box.base.vtable.msgHandler((Control *)&box, msgEnd);
     ASSERT_UINT_EQ(box.curLoc, Two);
 
     teardownInputBox(&box);
@@ -375,7 +372,7 @@ static void testInputBoxBufferFull(void) {
 
     for (int i = 0; i < OverMax; i++) {
         TuiMsg msg = {.type = MsgInput, .arg1 = {.input = 'X'}};
-        box.base.vtable.msgHandler(&box, msg);
+        box.base.vtable.msgHandler((Control *)&box, msg);
     }
 
     ASSERT_UINT_EQ(box.curLen, (size_t)INPUTBOX_BUF_MAX_LEN);
@@ -389,11 +386,11 @@ static void testInputBoxNonPrintableReject(void) {
     setupInputBox(&box);
 
     TuiMsg msgCtrl = {.type = MsgInput, .arg1 = {.input = '\x01'}};
-    box.base.vtable.msgHandler(&box, msgCtrl);
+    box.base.vtable.msgHandler((Control *)&box, msgCtrl);
     ASSERT_UINT_EQ(box.curLen, DefaultIndex);
 
     TuiMsg msgDel = {.type = MsgInput, .arg1 = {.input = DelChar}};
-    box.base.vtable.msgHandler(&box, msgDel);
+    box.base.vtable.msgHandler((Control *)&box, msgDel);
     ASSERT_UINT_EQ(box.curLen, DefaultIndex);
 
     teardownInputBox(&box);
@@ -405,15 +402,15 @@ static void testInputBoxInsertMiddle(void) {
 
     TuiMsg msgA = {.type = MsgInput, .arg1 = {.input = 'A'}};
     TuiMsg msgC = {.type = MsgInput, .arg1 = {.input = 'C'}};
-    box.base.vtable.msgHandler(&box, msgA);
-    box.base.vtable.msgHandler(&box, msgC);
+    box.base.vtable.msgHandler((Control *)&box, msgA);
+    box.base.vtable.msgHandler((Control *)&box, msgC);
 
     TuiMsg msgLeft = {.type = MsgInput, .arg1 = {.input = KEY_LEFT}};
-    box.base.vtable.msgHandler(&box, msgLeft);
+    box.base.vtable.msgHandler((Control *)&box, msgLeft);
     ASSERT_UINT_EQ(box.curLoc, One);
 
     TuiMsg msgB = {.type = MsgInput, .arg1 = {.input = 'B'}};
-    box.base.vtable.msgHandler(&box, msgB);
+    box.base.vtable.msgHandler((Control *)&box, msgB);
 
     ASSERT_UINT_EQ(box.curLen, Three);
     ASSERT_UINT_EQ(box.curLoc, Two);
@@ -432,7 +429,7 @@ static void testInputBoxEscReleases(void) {
     ASSERT_TRUE(box.base.takeOverInput);
 
     TuiMsg msgEsc = {.type = MsgInput, .arg1 = {.input = '\e'}};
-    box.base.vtable.msgHandler(&box, msgEsc);
+    box.base.vtable.msgHandler((Control *)&box, msgEsc);
     ASSERT_FALSE(box.base.takeOverInput);
 
     teardownInputBox(&box);
@@ -444,7 +441,7 @@ static void testInputBoxSubmitCallback(void) {
     gClickCount = 0;
 
     TuiMsg msgEnter = {.type = MsgInput, .arg1 = {.input = '\n'}};
-    box.base.vtable.msgHandler(&box, msgEnter);
+    box.base.vtable.msgHandler((Control *)&box, msgEnter);
 
     ASSERT_INT_EQ(gClickCount, One);
     ASSERT_FALSE(box.base.takeOverInput);
@@ -452,15 +449,16 @@ static void testInputBoxSubmitCallback(void) {
     teardownInputBox(&box);
 }
 
-/* ────────────────── ControlTextBox tests ─────────────────────────────────── */
+/* ────────────────── ControlTextBox tests ───────────────────────────────────
+ */
 
 static void testControlTextBoxConstruct(void) {
     ControlTextBox box;
     memset(&box, 0, sizeof(box));
 
-    controlTextBoxConstruct(&box, TextBoxTestHeight, TextBoxTestWidth,
-                            TestY, TestX, "Hello World",
-                            NULL, dummyCbTextBox, dummyCbTextBox);
+    controlTextBoxConstruct(&box, TextBoxTestHeight, TextBoxTestWidth, TestY,
+                            TestX, "Hello World", NULL, dummyCbTextBox,
+                            dummyCbTextBox, NULL);
 
     ASSERT_TRUE(box.base.focusable);
     ASSERT_FALSE(box.base.isContainer);
@@ -493,8 +491,8 @@ static void testControlTextBoxMinSizeClamp(void) {
     memset(&box, 0, sizeof(box));
 
     /* height < 3 and width < 3 should be clamped */
-    controlTextBoxConstruct(&box, IntOne, IntOne, TestY, TestX, "A",
-                            NULL, dummyCbTextBox, dummyCbTextBox);
+    controlTextBoxConstruct(&box, IntOne, IntOne, TestY, TestX, "A", NULL,
+                            dummyCbTextBox, dummyCbTextBox, NULL);
 
     ASSERT_INT_EQ(box.base.height, TextBoxMinH);
     ASSERT_INT_EQ(box.base.width, TextBoxMinW);
@@ -510,9 +508,9 @@ static void testControlTextBoxMaxTextLen(void) {
     memset(longText, 'X', sizeof(longText) - 1);
     longText[sizeof(longText) - 1] = '\0';
 
-    controlTextBoxConstruct(&box, TextBoxTestHeight, TextBoxTestWidth,
-                            TestY, TestX, longText,
-                            NULL, dummyCbTextBox, dummyCbTextBox);
+    controlTextBoxConstruct(&box, TextBoxTestHeight, TextBoxTestWidth, TestY,
+                            TestX, longText, NULL, dummyCbTextBox,
+                            dummyCbTextBox, NULL);
 
     ASSERT_NOT_NULL(box.text);
     ASSERT_UINT_EQ(strlen(box.text), (size_t)(TEXTBOX_TEXT_MAXLEN - 1));
@@ -525,9 +523,9 @@ static void testControlTextBoxEmptyText(void) {
     ControlTextBox box;
     memset(&box, 0, sizeof(box));
 
-    controlTextBoxConstruct(&box, TextBoxTestHeight, TextBoxTestWidth,
-                            TestY, TestX, "",
-                            NULL, dummyCbTextBox, dummyCbTextBox);
+    controlTextBoxConstruct(&box, TextBoxTestHeight, TextBoxTestWidth, TestY,
+                            TestX, "", NULL, dummyCbTextBox, dummyCbTextBox,
+                            NULL);
 
     ASSERT_NOT_NULL(box.text);
     ASSERT_UINT_EQ(box.textLen, DefaultIndex);
@@ -538,9 +536,9 @@ static void testControlTextBoxEmptyText(void) {
 
 static void setupTextBox(ControlTextBox *box, const char *text) {
     memset(box, 0, sizeof(*box));
-    controlTextBoxConstruct(box, TextBoxTestHeight, TextBoxTestWidth,
-                            TestY, TestX, text,
-                            NULL, dummyCbTextBox, dummyCbTextBox);
+    controlTextBoxConstruct(box, TextBoxTestHeight, TextBoxTestWidth, TestY,
+                            TestX, text, NULL, dummyCbTextBox, dummyCbTextBox,
+                            NULL);
 }
 
 static void teardownTextBox(ControlTextBox *box) { free(box->text); }
@@ -552,7 +550,7 @@ static void testTextBoxScrollDownBoundary(void) {
     setupTextBox(&box, "short");
 
     TuiMsg msgDown = {.type = MsgInput, .arg1 = {.input = KEY_DOWN}};
-    box.base.vtable.msgHandler(&box, msgDown);
+    box.base.vtable.msgHandler((Control *)&box, msgDown);
     ASSERT_UINT_EQ(box.viewBegin, DefaultIndex);
 
     teardownTextBox(&box);
@@ -565,12 +563,12 @@ static void testTextBoxScrollDownMulti(void) {
     setupTextBox(&box, "line1\nline2\nline3\nline4\nline5");
 
     TuiMsg msgDown = {.type = MsgInput, .arg1 = {.input = KEY_DOWN}};
-    box.base.vtable.msgHandler(&box, msgDown);
+    box.base.vtable.msgHandler((Control *)&box, msgDown);
     ASSERT_UINT_EQ(box.viewBegin, One);
-    box.base.vtable.msgHandler(&box, msgDown);
+    box.base.vtable.msgHandler((Control *)&box, msgDown);
     ASSERT_UINT_EQ(box.viewBegin, TwoLines);
     /* At boundary — no change */
-    box.base.vtable.msgHandler(&box, msgDown);
+    box.base.vtable.msgHandler((Control *)&box, msgDown);
     ASSERT_UINT_EQ(box.viewBegin, TwoLines);
 
     teardownTextBox(&box);
@@ -581,17 +579,17 @@ static void testTextBoxScrollUpBoundary(void) {
     setupTextBox(&box, "line1\nline2\nline3\nline4\nline5");
 
     TuiMsg msgDown = {.type = MsgInput, .arg1 = {.input = KEY_DOWN}};
-    box.base.vtable.msgHandler(&box, msgDown);
-    box.base.vtable.msgHandler(&box, msgDown);
+    box.base.vtable.msgHandler((Control *)&box, msgDown);
+    box.base.vtable.msgHandler((Control *)&box, msgDown);
     ASSERT_UINT_EQ(box.viewBegin, TwoLines);
 
     TuiMsg msgUp = {.type = MsgInput, .arg1 = {.input = KEY_UP}};
-    box.base.vtable.msgHandler(&box, msgUp);
+    box.base.vtable.msgHandler((Control *)&box, msgUp);
     ASSERT_UINT_EQ(box.viewBegin, One);
-    box.base.vtable.msgHandler(&box, msgUp);
+    box.base.vtable.msgHandler((Control *)&box, msgUp);
     ASSERT_UINT_EQ(box.viewBegin, DefaultIndex);
     /* At upper boundary — no change */
-    box.base.vtable.msgHandler(&box, msgUp);
+    box.base.vtable.msgHandler((Control *)&box, msgUp);
     ASSERT_UINT_EQ(box.viewBegin, DefaultIndex);
 
     teardownTextBox(&box);
@@ -604,16 +602,16 @@ static void testTextBoxPageUpDown(void) {
 
     /* Page down by 3 */
     TuiMsg msgPgDn = {.type = MsgInput, .arg1 = {.input = KEY_NPAGE}};
-    box.base.vtable.msgHandler(&box, msgPgDn);
+    box.base.vtable.msgHandler((Control *)&box, msgPgDn);
     ASSERT_UINT_EQ(box.viewBegin, (size_t)TextBoxVisibleLines);
 
     /* Another page down to maxView (6) */
-    box.base.vtable.msgHandler(&box, msgPgDn);
+    box.base.vtable.msgHandler((Control *)&box, msgPgDn);
     ASSERT_UINT_EQ(box.viewBegin, (size_t)(TextBoxVisibleLines * TwoLines));
 
     /* Page up back to 3 */
     TuiMsg msgPgUp = {.type = MsgInput, .arg1 = {.input = KEY_PPAGE}};
-    box.base.vtable.msgHandler(&box, msgPgUp);
+    box.base.vtable.msgHandler((Control *)&box, msgPgUp);
     ASSERT_UINT_EQ(box.viewBegin, (size_t)TextBoxVisibleLines);
 
     teardownTextBox(&box);
@@ -625,11 +623,11 @@ static void testTextBoxHomeEnd(void) {
     setupTextBox(&box, "line1\nline2\nline3\nline4\nline5");
 
     TuiMsg msgEnd = {.type = MsgInput, .arg1 = {.input = KEY_END}};
-    box.base.vtable.msgHandler(&box, msgEnd);
+    box.base.vtable.msgHandler((Control *)&box, msgEnd);
     ASSERT_UINT_EQ(box.viewBegin, TwoLines);
 
     TuiMsg msgHome = {.type = MsgInput, .arg1 = {.input = KEY_HOME}};
-    box.base.vtable.msgHandler(&box, msgHome);
+    box.base.vtable.msgHandler((Control *)&box, msgHome);
     ASSERT_UINT_EQ(box.viewBegin, DefaultIndex);
 
     teardownTextBox(&box);
@@ -641,12 +639,12 @@ static void testTextBoxMouseScrollUp(void) {
 
     /* Scroll down first */
     TuiMsg msgEnd = {.type = MsgInput, .arg1 = {.input = KEY_END}};
-    box.base.vtable.msgHandler(&box, msgEnd);
+    box.base.vtable.msgHandler((Control *)&box, msgEnd);
     ASSERT_UINT_EQ(box.viewBegin, TwoLines);
 
     /* Mouse scroll up */
     TuiMsg msgMouseUp = {.type = MsgMouse, .arg2 = {.input = BUTTON4_PRESSED}};
-    box.base.vtable.msgHandler(&box, msgMouseUp);
+    box.base.vtable.msgHandler((Control *)&box, msgMouseUp);
     ASSERT_UINT_EQ(box.viewBegin, One);
 
     teardownTextBox(&box);
@@ -658,7 +656,7 @@ static void testTextBoxMouseScrollDown(void) {
 
     /* Mouse scroll down from top */
     TuiMsg msgMouseDn = {.type = MsgMouse, .arg2 = {.input = BUTTON5_PRESSED}};
-    box.base.vtable.msgHandler(&box, msgMouseDn);
+    box.base.vtable.msgHandler((Control *)&box, msgMouseDn);
     ASSERT_UINT_EQ(box.viewBegin, One);
 
     teardownTextBox(&box);
@@ -674,7 +672,7 @@ static void testTextBoxVisualLineWordWrap(void) {
 
     /* END should set viewBegin to maxView = 0 */
     TuiMsg msgEnd = {.type = MsgInput, .arg1 = {.input = KEY_END}};
-    box.base.vtable.msgHandler(&box, msgEnd);
+    box.base.vtable.msgHandler((Control *)&box, msgEnd);
     ASSERT_UINT_EQ(box.viewBegin, ZeroLines);
 
     teardownTextBox(&box);
@@ -687,7 +685,7 @@ static void testTextBoxVisualLineHardBreak(void) {
     setupTextBox(&box, "abcdefghijklmnop");
 
     TuiMsg msgEnd = {.type = MsgInput, .arg1 = {.input = KEY_END}};
-    box.base.vtable.msgHandler(&box, msgEnd);
+    box.base.vtable.msgHandler((Control *)&box, msgEnd);
     ASSERT_UINT_EQ(box.viewBegin, ZeroLines);
 
     teardownTextBox(&box);
@@ -698,11 +696,11 @@ static void testTextBoxFocusToggle(void) {
     setupTextBox(&box, "text");
 
     TuiMsg msgEnter = {.type = MsgFocusEnter};
-    box.base.vtable.msgHandler(&box, msgEnter);
+    box.base.vtable.msgHandler((Control *)&box, msgEnter);
     ASSERT_TRUE(box.base.focused);
 
     TuiMsg msgLeave = {.type = MsgFocusLeave};
-    box.base.vtable.msgHandler(&box, msgLeave);
+    box.base.vtable.msgHandler((Control *)&box, msgLeave);
     ASSERT_FALSE(box.base.focused);
 
     teardownTextBox(&box);
@@ -718,7 +716,7 @@ static void testTextBoxSelectionPressStart(void) {
                        .arg2 = {.input = BUTTON1_PRESSED},
                        .mouseY = SelY1,
                        .mouseX = SelX1};
-    box.base.vtable.msgHandler(&box, msgPress);
+    box.base.vtable.msgHandler((Control *)&box, msgPress);
     ASSERT_TRUE(box.base.selection.active);
     ASSERT_UINT_EQ(box.base.selection.startByte, Zero);
     ASSERT_UINT_EQ(box.base.selection.endByte, Zero);
@@ -734,7 +732,7 @@ static void testTextBoxSelectionPressSecondLine(void) {
                        .arg2 = {.input = BUTTON1_PRESSED},
                        .mouseY = SelY2,
                        .mouseX = SelX1};
-    box.base.vtable.msgHandler(&box, msgPress);
+    box.base.vtable.msgHandler((Control *)&box, msgPress);
     ASSERT_TRUE(box.base.selection.active);
     ASSERT_UINT_EQ(box.base.selection.startByte, SelByteLine2Start);
 
@@ -750,7 +748,7 @@ static void testTextBoxSelectionPressPastEnd(void) {
                        .arg2 = {.input = BUTTON1_PRESSED},
                        .mouseY = SelY1,
                        .mouseX = SelX6};
-    box.base.vtable.msgHandler(&box, msgPress);
+    box.base.vtable.msgHandler((Control *)&box, msgPress);
     ASSERT_TRUE(box.base.selection.active);
     ASSERT_UINT_EQ(box.base.selection.startByte, SelByteLine1End);
 
@@ -766,7 +764,7 @@ static void testTextBoxSelectionDragUpdate(void) {
                        .arg2 = {.input = BUTTON1_PRESSED},
                        .mouseY = SelY1,
                        .mouseX = SelX1};
-    box.base.vtable.msgHandler(&box, msgPress);
+    box.base.vtable.msgHandler((Control *)&box, msgPress);
     ASSERT_UINT_EQ(box.base.selection.startByte, Zero);
 
     /* Drag to end of line1 */
@@ -774,7 +772,7 @@ static void testTextBoxSelectionDragUpdate(void) {
                        .arg2 = {.input = REPORT_MOUSE_POSITION},
                        .mouseY = SelY1,
                        .mouseX = SelX6};
-    box.base.vtable.msgHandler(&box, msgDrag1);
+    box.base.vtable.msgHandler((Control *)&box, msgDrag1);
     ASSERT_TRUE(box.base.selection.active);
     ASSERT_UINT_EQ(box.base.selection.endByte, SelByteLine1End);
 
@@ -783,7 +781,7 @@ static void testTextBoxSelectionDragUpdate(void) {
                        .arg2 = {.input = REPORT_MOUSE_POSITION},
                        .mouseY = SelY2,
                        .mouseX = SelX6};
-    box.base.vtable.msgHandler(&box, msgDrag2);
+    box.base.vtable.msgHandler((Control *)&box, msgDrag2);
     ASSERT_TRUE(box.base.selection.active);
     ASSERT_UINT_EQ(box.base.selection.endByte, SelByteLine2End);
 
@@ -792,7 +790,7 @@ static void testTextBoxSelectionDragUpdate(void) {
                        .arg2 = {.input = REPORT_MOUSE_POSITION},
                        .mouseY = SelY3,
                        .mouseX = SelX6};
-    box.base.vtable.msgHandler(&box, msgDrag3);
+    box.base.vtable.msgHandler((Control *)&box, msgDrag3);
     ASSERT_TRUE(box.base.selection.active);
     ASSERT_UINT_EQ(box.base.selection.endByte, SelByteLine3End);
 
@@ -808,19 +806,19 @@ static void testTextBoxSelectionReleaseClears(void) {
                        .arg2 = {.input = BUTTON1_PRESSED},
                        .mouseY = SelY1,
                        .mouseX = SelX1};
-    box.base.vtable.msgHandler(&box, msgPress);
+    box.base.vtable.msgHandler((Control *)&box, msgPress);
 
     TuiMsg msgDrag = {.type = MsgMouse,
                       .arg2 = {.input = REPORT_MOUSE_POSITION},
                       .mouseY = SelY1,
                       .mouseX = SelX5};
-    box.base.vtable.msgHandler(&box, msgDrag);
+    box.base.vtable.msgHandler((Control *)&box, msgDrag);
 
     TuiMsg msgRelease = {.type = MsgMouse,
                          .arg2 = {.input = BUTTON1_RELEASED},
                          .mouseY = SelY1,
                          .mouseX = SelX5};
-    box.base.vtable.msgHandler(&box, msgRelease);
+    box.base.vtable.msgHandler((Control *)&box, msgRelease);
     ASSERT_FALSE(box.base.selection.active);
 
     teardownTextBox(&box);
@@ -835,14 +833,14 @@ static void testTextBoxSelectionReverseNormalize(void) {
                        .arg2 = {.input = BUTTON1_PRESSED},
                        .mouseY = SelY1,
                        .mouseX = SelX5};
-    box.base.vtable.msgHandler(&box, msgPress);
+    box.base.vtable.msgHandler((Control *)&box, msgPress);
     ASSERT_UINT_EQ(box.base.selection.startByte, SelByteLine1End - 1);
 
     TuiMsg msgDrag = {.type = MsgMouse,
                       .arg2 = {.input = REPORT_MOUSE_POSITION},
                       .mouseY = SelY1,
                       .mouseX = SelX1};
-    box.base.vtable.msgHandler(&box, msgDrag);
+    box.base.vtable.msgHandler((Control *)&box, msgDrag);
     /* endByte should be less than startByte for reverse selection */
     ASSERT_UINT_EQ(box.base.selection.endByte, Zero);
     ASSERT_TRUE(box.base.selection.startByte > box.base.selection.endByte);
@@ -852,7 +850,7 @@ static void testTextBoxSelectionReverseNormalize(void) {
                          .arg2 = {.input = BUTTON1_RELEASED},
                          .mouseY = SelY1,
                          .mouseX = SelX1};
-    box.base.vtable.msgHandler(&box, msgRelease);
+    box.base.vtable.msgHandler((Control *)&box, msgRelease);
     ASSERT_FALSE(box.base.selection.active);
 
     teardownTextBox(&box);
@@ -866,7 +864,7 @@ static void testTextBoxSelectionEmptyText(void) {
                        .arg2 = {.input = BUTTON1_PRESSED},
                        .mouseY = SelY1,
                        .mouseX = SelX1};
-    box.base.vtable.msgHandler(&box, msgPress);
+    box.base.vtable.msgHandler((Control *)&box, msgPress);
     /* Empty text: selection should not activate or should be zero-length */
     ASSERT_UINT_EQ(box.base.selection.startByte, Zero);
     ASSERT_UINT_EQ(box.base.selection.endByte, Zero);
@@ -875,7 +873,7 @@ static void testTextBoxSelectionEmptyText(void) {
                          .arg2 = {.input = BUTTON1_RELEASED},
                          .mouseY = SelY1,
                          .mouseX = SelX1};
-    box.base.vtable.msgHandler(&box, msgRelease);
+    box.base.vtable.msgHandler((Control *)&box, msgRelease);
     ASSERT_FALSE(box.base.selection.active);
 
     teardownTextBox(&box);
@@ -890,7 +888,7 @@ static void testTextBoxSelectionSingleChar(void) {
                        .arg2 = {.input = BUTTON1_PRESSED},
                        .mouseY = SelY1,
                        .mouseX = SelX1};
-    box.base.vtable.msgHandler(&box, msgPress);
+    box.base.vtable.msgHandler((Control *)&box, msgPress);
     ASSERT_TRUE(box.base.selection.active);
     ASSERT_UINT_EQ(box.base.selection.startByte, Zero);
 
@@ -898,7 +896,7 @@ static void testTextBoxSelectionSingleChar(void) {
                          .arg2 = {.input = BUTTON1_RELEASED},
                          .mouseY = SelY1,
                          .mouseX = SelX1};
-    box.base.vtable.msgHandler(&box, msgRelease);
+    box.base.vtable.msgHandler((Control *)&box, msgRelease);
     ASSERT_FALSE(box.base.selection.active);
 
     teardownTextBox(&box);
@@ -908,15 +906,16 @@ static void testScrollTextBoxSelectionPress(void) {
     ControlScrollTextBox box;
     memset(&box, 0, sizeof(box));
     controlScrollTextBoxConstruct(&box, TextBoxTestHeight, TextBoxTestWidth,
-                                  TestY, TestX, ScrollTextBoxDefMax,
-                                  NULL, dummyCbScrollTextBox, dummyCbScrollTextBox);
+                                  TestY, TestX, ScrollTextBoxDefMax, NULL,
+                                  dummyCbScrollTextBox, dummyCbScrollTextBox,
+                                  NULL);
     controlScrollTextBoxAppend(&box, "hello\nworld");
 
     TuiMsg msgPress = {.type = MsgMouse,
                        .arg2 = {.input = BUTTON1_PRESSED},
                        .mouseY = SelY1,
                        .mouseX = SelX1};
-    box.base.base.vtable.msgHandler(&box, msgPress);
+    box.base.base.vtable.msgHandler((Control *)&box, msgPress);
     ASSERT_TRUE(box.base.base.selection.active);
     ASSERT_UINT_EQ(box.base.base.selection.startByte, Zero);
 
@@ -925,7 +924,7 @@ static void testScrollTextBoxSelectionPress(void) {
                          .arg2 = {.input = BUTTON1_RELEASED},
                          .mouseY = SelY1,
                          .mouseX = SelX1};
-    box.base.base.vtable.msgHandler(&box, msgRelease);
+    box.base.base.vtable.msgHandler((Control *)&box, msgRelease);
     ASSERT_FALSE(box.base.base.selection.active);
 
     free(box.base.text);
@@ -937,11 +936,11 @@ static void testButtonMouseClickFiresOnClick(void) {
     gClickCount = 0;
 
     controlButtonConstruct(&btn, TestHeight, TestWidth, TestY, TestX, "OK",
-                           NULL, dummyOnClick, dummyCbBtn, dummyCbBtn);
+                           NULL, dummyOnClick, dummyCbBtn, dummyCbBtn, NULL);
 
     TuiMsg msgClick = {.type = MsgMouse,
                        .arg2 = {.input = BUTTON1_RELEASED | BUTTON1_CLICKED}};
-    btn.base.vtable.msgHandler(&btn, msgClick);
+    btn.base.vtable.msgHandler((Control *)&btn, msgClick);
     ASSERT_INT_EQ(gClickCount, IntOne);
 
     free(btn.text);
@@ -953,11 +952,10 @@ static void testButtonMouseDragNoClick(void) {
     gClickCount = 0;
 
     controlButtonConstruct(&btn, TestHeight, TestWidth, TestY, TestX, "OK",
-                           NULL, dummyOnClick, dummyCbBtn, dummyCbBtn);
+                           NULL, dummyOnClick, dummyCbBtn, dummyCbBtn, NULL);
 
-    TuiMsg msgRelease = {.type = MsgMouse,
-                         .arg2 = {.input = BUTTON1_RELEASED}};
-    btn.base.vtable.msgHandler(&btn, msgRelease);
+    TuiMsg msgRelease = {.type = MsgMouse, .arg2 = {.input = BUTTON1_RELEASED}};
+    btn.base.vtable.msgHandler((Control *)&btn, msgRelease);
     ASSERT_INT_EQ(gClickCount, IntZero);
 
     free(btn.text);
@@ -972,7 +970,7 @@ static void testTextBoxMouseClickSwitchesFocus(void) {
                        .arg2 = {.input = BUTTON1_PRESSED},
                        .mouseY = SelY1,
                        .mouseX = SelX1};
-    box.base.vtable.msgHandler(&box, msgPress);
+    box.base.vtable.msgHandler((Control *)&box, msgPress);
     ASSERT_TRUE(box.base.selection.active);
 
     /* Release with BUTTON1_CLICKED: no drag → no copy, but active cleared */
@@ -981,7 +979,7 @@ static void testTextBoxMouseClickSwitchesFocus(void) {
         .arg2 = {.input = BUTTON1_RELEASED | BUTTON1_CLICKED},
         .mouseY = SelY1,
         .mouseX = SelX1};
-    box.base.vtable.msgHandler(&box, msgClickRelease);
+    box.base.vtable.msgHandler((Control *)&box, msgClickRelease);
     ASSERT_FALSE(box.base.selection.active);
 
     teardownTextBox(&box);
@@ -992,8 +990,8 @@ static void testTextBoxMouseClickSwitchesFocus(void) {
 static void testControlButtonDestructDoubleSafe(void) {
     ControlButton btn;
     memset(&btn, 0, sizeof(btn));
-    controlButtonConstruct(&btn, TestHeight, TestWidth, TestY, TestX, "X",
-                           NULL, dummyOnClick, dummyCbBtn, dummyCbBtn);
+    controlButtonConstruct(&btn, TestHeight, TestWidth, TestY, TestX, "X", NULL,
+                           dummyOnClick, dummyCbBtn, dummyCbBtn, NULL);
     free(btn.text);
     btn.text = NULL;
 }
@@ -1001,8 +999,8 @@ static void testControlButtonDestructDoubleSafe(void) {
 static void testControlLabelDestructDoubleSafe(void) {
     ControlLabel label;
     memset(&label, 0, sizeof(label));
-    controlLabelConstruct(&label, "X", DefaultIndex, TestY, TestX,
-                          NULL, dummyCbLabel, dummyCbLabel);
+    controlLabelConstruct(&label, "X", DefaultIndex, TestY, TestX, NULL,
+                          dummyCbLabel, dummyCbLabel, NULL);
     free(label.text);
     label.text = NULL;
 }
@@ -1010,9 +1008,9 @@ static void testControlLabelDestructDoubleSafe(void) {
 static void testControlInputBoxDestructDoubleSafe(void) {
     ControlInputBox box;
     memset(&box, 0, sizeof(box));
-    controlInputBoxConstruct(&box, TestWidth, TestY, TestX,
-                             NULL, dummyCbInputBox, dummyCbInputBox,
-                             dummyOnSubmit, dummyCbInputBox);
+    controlInputBoxConstruct(&box, TestWidth, TestY, TestX, false,
+                             dummyCbInputBox, dummyCbInputBox, dummyOnSubmit,
+                             dummyCbInputBox, NULL);
     free(box.buf);
     box.buf = NULL;
 }
@@ -1020,14 +1018,15 @@ static void testControlInputBoxDestructDoubleSafe(void) {
 static void testControlTextBoxDestructDoubleSafe(void) {
     ControlTextBox box;
     memset(&box, 0, sizeof(box));
-    controlTextBoxConstruct(&box, TextBoxTestHeight, TextBoxTestWidth,
-                            TestY, TestX, "OK",
-                            NULL, dummyCbTextBox, dummyCbTextBox);
+    controlTextBoxConstruct(&box, TextBoxTestHeight, TextBoxTestWidth, TestY,
+                            TestX, "OK", NULL, dummyCbTextBox, dummyCbTextBox,
+                            NULL);
     free(box.text);
     box.text = NULL;
 }
 
-/* ────────────────── ControlScrollTextBox tests ───────────────────────────── */
+/* ────────────────── ControlScrollTextBox tests ─────────────────────────────
+ */
 
 enum {
     ScrollTestWidth = 30,
@@ -1049,8 +1048,8 @@ static void testScrollTextBoxConstruct(void) {
     memset(&box, 0, sizeof(box));
 
     controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
-                                  TestY, TestX, ScrollMaxLines,
-                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+                                  TestY, TestX, ScrollMaxLines, NULL,
+                                  dummyCbScrollBox, dummyCbScrollBox, NULL);
 
     ASSERT_TRUE(box.base.base.focusable);
     ASSERT_FALSE(box.base.base.isContainer);
@@ -1083,8 +1082,8 @@ static void testScrollTextBoxMinSizeClamp(void) {
     memset(&box, 0, sizeof(box));
 
     controlScrollTextBoxConstruct(&box, IntOne, IntOne, TestY, TestX,
-                                  ScrollMaxLines,
-                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+                                  ScrollMaxLines, NULL, dummyCbScrollBox,
+                                  dummyCbScrollBox, NULL);
 
     ASSERT_INT_EQ(box.base.base.height, ScrollMinH);
     ASSERT_INT_EQ(box.base.base.width, ScrollMinW);
@@ -1097,8 +1096,8 @@ static void testScrollTextBoxMaxLinesZero(void) {
     memset(&box, 0, sizeof(box));
 
     controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
-                                  TestY, TestX, IntZero,
-                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+                                  TestY, TestX, IntZero, NULL, dummyCbScrollBox,
+                                  dummyCbScrollBox, NULL);
 
     ASSERT_UINT_EQ(box.maxLines, (size_t)ScrollDefaultMax);
 
@@ -1110,8 +1109,8 @@ static void testScrollTextBoxAppendEmpty(void) {
     memset(&box, 0, sizeof(box));
 
     controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
-                                  TestY, TestX, ScrollMaxLines,
-                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+                                  TestY, TestX, ScrollMaxLines, NULL,
+                                  dummyCbScrollBox, dummyCbScrollBox, NULL);
 
     controlScrollTextBoxAppend(&box, "");
     ASSERT_UINT_EQ(box.base.textLen, DefaultIndex);
@@ -1128,8 +1127,8 @@ static void testScrollTextBoxAppendSimple(void) {
     memset(&box, 0, sizeof(box));
 
     controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
-                                  TestY, TestX, ScrollMaxLines,
-                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+                                  TestY, TestX, ScrollMaxLines, NULL,
+                                  dummyCbScrollBox, dummyCbScrollBox, NULL);
 
     controlScrollTextBoxAppend(&box, "hello");
     ASSERT_STR_EQ(box.base.text, "hello");
@@ -1143,8 +1142,8 @@ static void testScrollTextBoxAppendAccumulate(void) {
     memset(&box, 0, sizeof(box));
 
     controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
-                                  TestY, TestX, ScrollMaxLines,
-                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+                                  TestY, TestX, ScrollMaxLines, NULL,
+                                  dummyCbScrollBox, dummyCbScrollBox, NULL);
 
     controlScrollTextBoxAppend(&box, "hello");
     controlScrollTextBoxAppend(&box, " world");
@@ -1158,8 +1157,8 @@ static void testScrollTextBoxAppendNewlines(void) {
     memset(&box, 0, sizeof(box));
 
     controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
-                                  TestY, TestX, ScrollMaxLines,
-                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+                                  TestY, TestX, ScrollMaxLines, NULL,
+                                  dummyCbScrollBox, dummyCbScrollBox, NULL);
 
     controlScrollTextBoxAppend(&box, "line1\nline2\nline3");
     ASSERT_STR_EQ(box.base.text, "line1\nline2\nline3");
@@ -1172,8 +1171,8 @@ static void testScrollTextBoxAppendExceedMaxLines(void) {
     memset(&box, 0, sizeof(box));
 
     controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
-                                  TestY, TestX, ScrollMaxLines,
-                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+                                  TestY, TestX, ScrollMaxLines, NULL,
+                                  dummyCbScrollBox, dummyCbScrollBox, NULL);
 
     controlScrollTextBoxAppend(&box, "a\nb\nc\nd\ne");
     ASSERT_STR_EQ(box.base.text, "c\nd\ne");
@@ -1186,8 +1185,8 @@ static void testScrollTextBoxAppendExactMaxLines(void) {
     memset(&box, 0, sizeof(box));
 
     controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
-                                  TestY, TestX, ScrollMaxLines,
-                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+                                  TestY, TestX, ScrollMaxLines, NULL,
+                                  dummyCbScrollBox, dummyCbScrollBox, NULL);
 
     controlScrollTextBoxAppend(&box, "a\nb\nc");
     ASSERT_STR_EQ(box.base.text, "a\nb\nc");
@@ -1200,8 +1199,8 @@ static void testScrollTextBoxAppendIncrementalTrim(void) {
     memset(&box, 0, sizeof(box));
 
     controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
-                                  TestY, TestX, ScrollMaxLinesSmall,
-                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+                                  TestY, TestX, ScrollMaxLinesSmall, NULL,
+                                  dummyCbScrollBox, dummyCbScrollBox, NULL);
 
     controlScrollTextBoxAppend(&box, "line1\n");
     ASSERT_STR_EQ(box.base.text, "line1\n");
@@ -1220,8 +1219,8 @@ static void testScrollTextBoxAppendOnlyNewlines(void) {
     memset(&box, 0, sizeof(box));
 
     controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
-                                  TestY, TestX, ScrollMaxLines,
-                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+                                  TestY, TestX, ScrollMaxLines, NULL,
+                                  dummyCbScrollBox, dummyCbScrollBox, NULL);
 
     controlScrollTextBoxAppend(&box, "\n\n\n");
     ASSERT_UINT_EQ(box.base.textLen, (size_t)ScrollMaxLines);
@@ -1237,8 +1236,8 @@ static void testScrollTextBoxDestructDoubleSafe(void) {
     memset(&box, 0, sizeof(box));
 
     controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
-                                  TestY, TestX, ScrollMaxLines,
-                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+                                  TestY, TestX, ScrollMaxLines, NULL,
+                                  dummyCbScrollBox, dummyCbScrollBox, NULL);
     free(box.base.text);
     box.base.text = NULL;
 }
@@ -1248,16 +1247,15 @@ static void testScrollTextBoxAppendVeryLongLine(void) {
     memset(&box, 0, sizeof(box));
 
     controlScrollTextBoxConstruct(&box, ScrollTestHeight, ScrollTestWidth,
-                                  TestY, TestX, ScrollMaxLinesSmall,
-                                  NULL, dummyCbScrollBox, dummyCbScrollBox);
+                                  TestY, TestX, ScrollMaxLinesSmall, NULL,
+                                  dummyCbScrollBox, dummyCbScrollBox, NULL);
 
     char longBuf[ScrollBuf65536 + (size_t)IntOne];
     memset(longBuf, 'X', ScrollBuf65536);
     longBuf[ScrollBuf65536] = '\0';
 
     controlScrollTextBoxAppend(&box, longBuf);
-    ASSERT_UINT_EQ(box.base.textLen,
-                   (size_t)(SCROLLTEXTBOX_TEXT_MAXLEN - 1));
+    ASSERT_UINT_EQ(box.base.textLen, (size_t)(SCROLLTEXTBOX_TEXT_MAXLEN - 1));
     ASSERT_TRUE(box.base.text[0] == 'X');
 
     free(box.base.text);

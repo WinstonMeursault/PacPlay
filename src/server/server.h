@@ -28,6 +28,7 @@
 #include "crypto.h"
 #include "protocol.h"
 
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
@@ -89,6 +90,17 @@ typedef struct {
     time_t timestamp; /**< UNIX timestamp (seconds since epoch, UTC). */
 } Chat;
 
+/** @brief Metadata record for a registered game on the platform. */
+typedef struct {
+    uint32_t gameId;
+    char *name;
+    char *version;
+    char *hash;
+    char *path;
+    time_t createdAt;
+    time_t updatedAt;
+} GameInfo;
+
 /** @brief Per-connection lifecycle states. */
 typedef enum {
     SessionKeyExchange = 0, /**< Awaiting MsgKeyExchangeReq. */
@@ -109,7 +121,7 @@ typedef struct {
 } ClientSession;
 
 /** @brief In-memory room with currently-connected members (used for
- *         broadcasting).  Persisted room existence is managed by GameDB. */
+ *         broadcasting).  Persisted room existence is managed by RoomDB. */
 typedef struct {
     uint32_t roomId;
     ClientSession *members[MAX_CLIENTS_PER_ROOM];
@@ -127,42 +139,28 @@ typedef struct {
     int activeRoomCapacity;
     struct DB *userDB; /**< Opaque DB handle (full def in database.h). */
     struct DB *chatDB;
+    struct DB *roomDB;
     struct DB *gameDB;
     struct DB *serverDB;     /**< Server key-value store. */
     bool freshKeysGenerated; /**< True if keys were freshly generated (first
                                 run). */
+    volatile bool running;   /**< Event loop continues while true. */
+    pthread_t serverThread;  /**< Background event-loop thread handle. */
+    time_t startTime;        /**< Server launch timestamp (UNIX epoch). */
     uint8_t dekKey[AES_GCM_KEY_LEN];      /**< Decrypted DEK, available after
-                                             serverInitKeys. */
+                                              serverInitKeys. */
     uint8_t userDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted UserDBKey, loaded at
-                                             startup. */
+                                              startup. */
     uint8_t chatDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted ChatHistoryDBKey. */
+    uint8_t roomDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted RoomDBKey. */
     uint8_t gameDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted GameDBKey. */
 } Server;
 
 /* ─────────────────────────────── public API ─────────────────────────────── */
 
 /**
- * @brief Initialise server cryptographic keys (envelope encryption).
- *
- * If no encrypted DEK exists in ServerDB, generates fresh AES-256 MK and
- * DEK, wraps DEK with MK via AES-256-GCM into an envelope, stores the
- * envelope in the database, displays MK once to the administrator, then
- * securely wipes MK from memory.
- *
- * If the DEK envelope already exists, prompts the administrator for the
- * Master Key, decrypts the DEK, and loads it into the server's memory.
- * The decrypted DEK is available in @c s->dekKey and is securely wiped
- * when @c serverCleanup() is called.  MK is never stored on disk in
- * either path.
- *
- * @param s  An initialised Server with @c serverDB open.
- * @return @c SERVER_SUCC on success, @c SERVER_FAIL on error (incorrect
- *         Master Key, corrupted envelope, I/O failure).
- */
-int serverInitKeys(Server *s);
-
-/**
- * @brief Initialise the server — creates listen socket and opens databases.
+ * @brief Initialise the server — creates listen socket, opens ServerDB,
+ *        and runs the TUI unlock phase (blocks until MK is provided).
  *
  * @param server  Must be zero-initialised or freshly allocated.
  * @param port    TCP port to listen on.
@@ -171,11 +169,33 @@ int serverInitKeys(Server *s);
 int serverInit(Server *server, uint16_t port);
 
 /**
- * @brief Enter the main event loop (select()-based).
+ * @brief Launch the server event loop in a background thread.
  *
- * Blocks until the process is terminated.
+ * Opens encrypted databases, allocates session/room arrays, installs
+ * signal handlers, and spawns the event-loop thread.
  *
- * @param server  A fully-initialised Server.
+ * @param server  A server that has completed the unlock phase.
+ * @return @c SERVER_SUCC or @c SERVER_FAIL.
+ */
+int serverLaunch(Server *server);
+
+/**
+ * @brief Stop the background event-loop thread and wait for it to exit.
+ *
+ * Sets the running flag to false and joins the server thread.
+ *
+ * @param server  A launched server.
+ */
+void serverShutdown(Server *server);
+
+/**
+ * @brief Enter the server main page (TUI) and background event loop.
+ *
+ * Calls serverLaunch() to start the event loop in a background thread,
+ * then enters the TUI main page (blocking). Returns after the user
+ * issues the 'exit' command (which internally calls serverShutdown).
+ *
+ * @param server  A fully-initialised Server (unlock phase complete).
  */
 void serverRun(Server *server);
 
