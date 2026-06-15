@@ -2,6 +2,7 @@
 #define TUIMSG_H
 
 #include <stddef.h>
+typedef struct Control Control;
 
 typedef enum {
     MsgCursorPrev = 1,
@@ -18,7 +19,7 @@ typedef enum {
 typedef union {
     size_t index;
     int input;
-    void (*fetchRecv)(void *self, void *child);
+    void (*fetchRecv)(Control *self, Control *child);
 } MsgArg;
 
 typedef struct {

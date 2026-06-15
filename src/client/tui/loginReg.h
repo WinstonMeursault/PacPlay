@@ -1,8 +1,8 @@
 /**
- * @file main.c
- * @brief PacPlay client entrypoint.
+ * @file loginReg.h
+ * @brief
  *
- * @date 2026-05-16
+ * @date 2026-06-11
  * @copyright GPLv3 License
  * @section LICENSE
  * PacPlay
@@ -22,23 +22,9 @@
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
-#include "client.h"
-#include "tui/clientTUI.h"
+#ifndef LOGINREG_H
+#define LOGINREG_H
 
-enum { ServerPort = 12345 };
+void tuiClientLoginRegInit();
 
-// static const char *serverAddr = "127.0.0.1";
-
-int main(void) {
-    Client clientInstance;
-    memset(&clientInstance, 0, sizeof(clientInstance));
-
-    // if (clientConnect(&clientInstance, serverAddr, ServerPort) != CLIENT_SUCC) {
-    //     return 1;
-    // }
-
-    tuiClientEntry(&clientInstance);
-
-    clientDisconnect(&clientInstance);
-    return 0;
-}
+#endif // LOGINREG_H

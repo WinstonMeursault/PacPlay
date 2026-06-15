@@ -1,8 +1,8 @@
 /**
- * @file main.c
- * @brief PacPlay client entrypoint.
+ * @file client_tui.h
+ * @brief
  *
- * @date 2026-05-16
+ * @date 2026-06-09
  * @copyright GPLv3 License
  * @section LICENSE
  * PacPlay
@@ -22,23 +22,37 @@
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
-#include "client.h"
-#include "tui/clientTUI.h"
+#ifndef CLIENTTUI_H
+#define CLIENTTUI_H
 
-enum { ServerPort = 12345 };
+#include "../client.h"
+#include "tui/tuiapp.h"
 
-// static const char *serverAddr = "127.0.0.1";
+#define TUI_BTN_HEIGHT 3
+#define TUI_BTN_WIDTH 13
 
-int main(void) {
-    Client clientInstance;
-    memset(&clientInstance, 0, sizeof(clientInstance));
+// Client pointer
+extern Client *client;
 
-    // if (clientConnect(&clientInstance, serverAddr, ServerPort) != CLIENT_SUCC) {
-    //     return 1;
-    // }
+extern ControlPage connectPage;
+extern ControlPage loginPage;
+extern ControlPage homePage;
 
-    tuiClientEntry(&clientInstance);
+typedef enum TuiClientColor {
+    ColorRed = 1,
+    ColorGreen,
+    ColorStableBlack,
+    ColorStableWhite
+} TuiClientColor;
 
-    clientDisconnect(&clientInstance);
-    return 0;
-}
+typedef enum TuiClientColorAttr {
+    ColorAttrDefault = 0,
+    ColorAttrRed = 1,
+    ColorAttrGreen,
+    ColorAttrStableBlack,
+    ColorAttrStableWhite
+} TuiClientColorAttr;
+
+void tuiClientEntry(Client *clientInstance);
+
+#endif // CLIENTTUI_H

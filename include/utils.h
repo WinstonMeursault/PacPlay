@@ -91,4 +91,6 @@ time_t getCurrentTimestamp(void);
  */
 size_t readPasswordMasked(char *buf, size_t bufsize);
 
+int clamp(int v, int min, int max);
+
 #endif /* UTILS_H */

@@ -32,9 +32,15 @@
 #define SCROLLTEXTBOX_TEXT_MAXLEN 65536
 #define SCROLLTEXTBOX_DEFAULT_MAX_LINES 100
 
+#include "container.h"
 #include "ncurses_wrapper.h"
 #include "tuimsg.h"
+#include <errno.h>
 #include <stdbool.h>
+#include <string.h>
+
+typedef char *Str;
+ARRAY_DEFINE(Str);
 
 typedef struct ControlVTable ControlVTable;
 typedef struct ControlCommonMsgHandlers ControlCommonHandlers;
@@ -46,18 +52,19 @@ typedef struct ControlLabel ControlLabel;
 typedef struct ControlInputBox ControlInputBox;
 typedef struct ControlTextBox ControlTextBox;
 typedef struct ControlScrollTextBox ControlScrollTextBox;
+typedef struct ControlListBox ControlListBox;
 
 struct ControlVTable {
-    void (*destruct)(void *self);
-    void (*draw)(void *self);
-    void (*msgHandler)(void *self, TuiMsg msg);
-    const char *(*getSelectableText)(void *self, size_t *outLen);
-    size_t (*coordToByteOffset)(void *self, int localY, int localX);
+    void (*destruct)(Control *self);
+    void (*draw)(Control *self);
+    void (*msgHandler)(Control *self, TuiMsg msg);
+    const char *(*getSelectableText)(Control *self, size_t *outLen);
+    size_t (*coordToByteOffset)(Control *self, int localY, int localX);
 };
 
 struct ControlCommonMsgHandlers {
-    void (*resize)(void *self);
-    void (*refresh)(void *self);
+    void (*resize)(Control *self);
+    void (*refresh)(Control *self);
 };
 
 struct Control {
@@ -106,7 +113,7 @@ struct ControlGrid {
     size_t layoutCounter;
     size_t layoutAccCol;
     size_t layoutAccRow;
-    void (*layout)(void *self, void *child);
+    void (*layout)(ControlGrid *self, Control *child);
 };
 
 struct ControlLabel {
@@ -136,6 +143,21 @@ struct ControlScrollTextBox {
     size_t maxLines;
 };
 
+struct ControlListBox {
+    Control base;
+    ArrayStr list;
+    size_t entryCnt;
+    size_t viewBegin;
+    size_t curLine;
+};
+
+void customBox(WINDOW *handler, const wchar_t *lsRaw, const wchar_t *rsRaw,
+               const wchar_t *tsRaw, const wchar_t *bsRaw, const wchar_t *tlRaw,
+               const wchar_t *trRaw, const wchar_t *blRaw,
+               const wchar_t *brRaw);
+#define DOUBLE_BOX(handler)                                                    \
+    customBox((handler), L"║", L"║", L"═", L"═", L"╔", L"╗", L"╚", L"╝")
+
 void controlInstantiate(Control *self, Control *parent);
 void controlDeinstantiate(Control *self);
 
@@ -143,47 +165,58 @@ void controlPageConstruct(ControlPage *self);
 
 void controlButtonConstruct(ControlButton *self, int height, int width, int y,
                             int x, const char *text,
-                            void (*draw)(ControlButton *),
+                            void (*draw)(ControlButton *self),
                             void (*onClick)(ControlButton *self),
                             void (*resize)(ControlButton *self),
                             void (*refresh)(ControlButton *self));
-void controlButtonDraw(void *self);
+void controlButtonDraw(ControlButton *self);
 
 void controlGridConstruct(ControlGrid *self, int height, int width, int y,
                           int x, GridLayoutMethod layoutMethod, size_t hmargin,
-                          size_t vmargin, void (*draw)(ControlGrid *),
+                          size_t vmargin, void (*draw)(ControlGrid *self),
                           void (*resize)(ControlGrid *self),
                           void (*refresh)(ControlGrid *self),
-                          void (*layout)(void *self, void *child));
-void controlGridDraw(void *self);
+                          void (*layout)(ControlGrid *self, Control *child));
+void controlGridDraw(ControlGrid *self);
 
-void controlLabelConstruct(ControlLabel *self, const char *text, size_t maxWidth,
-                           int y, int x, void (*draw)(ControlLabel *),
+void controlLabelConstruct(ControlLabel *self, const char *text,
+                           size_t maxWidth, int y, int x,
+                           void (*draw)(ControlLabel *self),
                            void (*resize)(ControlLabel *self),
                            void (*refresh)(ControlLabel *self));
-void controlLabelDraw(void *self);
+void controlLabelDraw(ControlLabel *self);
 
 void controlInputBoxConstruct(ControlInputBox *self, int width, int y, int x,
-                              bool hideContent, void (*draw)(ControlInputBox *),
+                              bool hideContent,
+                              void (*draw)(ControlInputBox *self),
                               void (*resize)(ControlInputBox *self),
                               void (*submit)(ControlInputBox *self),
                               void (*refresh)(ControlInputBox *self));
-void controlInputBoxDraw(void *self);
+void controlInputBoxDraw(ControlInputBox *self);
 
-void controlTextBoxConstruct(ControlTextBox *self, int height, int width,
-                             int y, int x, const char *text,
-                             void (*draw)(ControlTextBox *),
+void controlTextBoxConstruct(ControlTextBox *self, int height, int width, int y,
+                             int x, const char *text,
+                             void (*draw)(ControlTextBox *self),
                              void (*resize)(ControlTextBox *self),
                              void (*refresh)(ControlTextBox *self));
-void controlTextBoxDraw(void *self);
+void controlTextBoxDraw(ControlTextBox *self);
 
 void controlScrollTextBoxConstruct(ControlScrollTextBox *self, int height,
                                    int width, int y, int x, size_t maxLines,
-                                   void (*draw)(ControlScrollTextBox *),
+                                   void (*draw)(ControlScrollTextBox *self),
                                    void (*resize)(ControlScrollTextBox *self),
                                    void (*refresh)(ControlScrollTextBox *self));
 void controlScrollTextBoxAppend(ControlScrollTextBox *self, const char *text);
 
 bool controlSelectionHandleMouse(Control *self, TuiMsg msg);
+
+void controlListBoxConstruct(ControlListBox *self, int height, int width, int y,
+                             int x, void (*draw)(ControlListBox *self),
+                             void (*resize)(ControlListBox *self),
+                             void (*refresh)(ControlListBox *self));
+
+void controlListBoxDraw(ControlListBox *self);
+
+void controlListBoxAppend(ControlListBox *self, const char *entry);
 
 #endif // CONTROL_H

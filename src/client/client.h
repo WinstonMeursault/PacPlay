@@ -63,43 +63,6 @@ typedef struct Client {
 int clientConnect(Client *client, const char *addr, uint16_t port);
 
 /**
- * @brief Authenticate the user to the server.
- *
- * The login flow proceeds in up to five stages:
- *  1. Prompt for username and password via stdin.
- *  2. Validate field lengths; build a @c LoginRequestPayload and send it as
- *     @c MsgLoginReq.
- *  3. If the server responds with @c MsgTOTPVerifyReq (TOTP is enabled on
- *     this account), prompt for the 6-digit code and send it as
- *     @c MsgTOTPVerifyResp.
- *  4. Validate the (final) @c MsgLoginResp — on success @c client->uid is
- *     set and the nickname is printed.
- *  5. Request the per-user encryption key via @c MsgDBKeyReq /
- *     @c MsgDBKeyResp and use it to initialise the encrypted local database
- *     (@c clientInitDB).  The key is wiped from memory immediately afterwards.
- *
- * @param client  Connected client (key exchange must have completed).
- * @return @c CLIENT_SUCC on successful login and database initialisation,
- *         @c CLIENT_FAIL on any error (I/O, auth failure, crypto, etc.).
- */
-int clientLogin(Client *client);
-
-/**
- * @brief Register a new account with the server.
- *
- * Collects a username, nickname, and password from the user via stdin,
- * validates field lengths against the protocol limits, builds a
- * @c RegisterRequestPayload with {username, nickname, password} as FAM, and
- * sends it as @c MsgRegisterReq.  The server responds with a single-byte
- * status code: 0 = success, 1 = username already taken.
- *
- * @param client  Connected client (key exchange must have completed).
- * @return @c CLIENT_SUCC if registration was accepted by the server,
- *         @c CLIENT_FAIL on error or if the server rejected the request.
- */
-int clientRegister(Client *client);
-
-/**
  * @brief Enter the room lobby — list rooms, offer create / join options.
  *
  * @param client  Authenticated client.
@@ -115,23 +78,6 @@ int clientRoomMenu(Client *client);
  * @return @c CLIENT_SUCC on clean exit (/exit), @c CLIENT_FAIL on error.
  */
 int clientChatLoop(Client *client);
-
-/**
- * @brief Set up TOTP two-factor authentication for the current user.
- *
- * Sends @c MsgTOTPSetupReq to the server.  On success, receives a
- * @c TOTPSetupRespPayload containing a Base32-encoded (RFC 4648, no padding)
- * 160-bit TOTP shared secret.  The secret is displayed to the user along
- * with an @c otpauth:// URI QR code (if URI generation succeeds) for
- * importing into an authenticator app.  If the secret is empty the server
- * reports that TOTP is already enabled — this is not treated as an error.
- *
- * @param client  Connected client (must be already logged in, as
- *                @c client->uid is used to construct the URI username).
- * @return @c CLIENT_SUCC (even if TOTP was already enabled; only I/O or
- *         protocol errors produce @c CLIENT_FAIL).
- */
-int clientTOTPSetup(Client *client);
 
 /**
  * @brief Disconnect and clean up client resources.

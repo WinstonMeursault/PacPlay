@@ -139,3 +139,11 @@ size_t readPasswordMasked(char *buf, size_t bufsize) {
     return len;
 #endif
 }
+
+int clamp(int v, int min, int max) {
+    if (v < min)
+        return min;
+    if (v > max)
+        return max;
+    return v;
+}

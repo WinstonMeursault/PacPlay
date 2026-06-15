@@ -943,7 +943,7 @@ static char *urlEncode(const char *str) {
 }
 
 int generateOTPAuthURI(const char *secret, const char *username,
-                       char **outURI) {
+                       char **outURI, size_t *outURILen) {
     if (secret == NULL || username == NULL || outURI == NULL) {
         LOG_ERROR("generateOTPAuthURI: NULL argument "
                   "(secret=%p, username=%p, outURI=%p)",
@@ -1010,6 +1010,7 @@ int generateOTPAuthURI(const char *secret, const char *username,
     free(encUser);
 
     *outURI = uri;
+    *outURILen = uriLen;
     return CRYPTO_SUCC;
 }
 

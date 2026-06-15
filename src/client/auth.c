@@ -42,159 +42,96 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ──────────────────────────── local constants ───────────────────────────── */
-
-/**
- * @brief Maximum characters accepted from the user for password input.
- *
- * Chosen to be large enough for any reasonable passphrase while keeping the
- * stack buffer manageable.  Shared by login and registration.
- */
 enum { MaxInputLen = 512 };
 
-/**
- * @brief Byte offset of the flexible password field within each payload struct.
- *
- * Used to compute the variable-length payload size as
- * @c HeaderSize @c + @c strlen(password) @c + @c 1 (NUL terminator).
- */
 enum {
     LoginHeaderSize = offsetof(LoginRequestPayload, password),
     RegisterHeaderSize = offsetof(RegisterRequestPayload, password)
 };
 
-int clientLogin(Client *client) {
-    /* ────────────────────── stage 1: collect credentials
-     * ────────────────────── */
+static int clientLoadDB(Client *client, char *response);
 
-    char username[LOGIN_USERNAME_LEN];
-    char password[MaxInputLen];
-
-    printf("Username: ");
-    fflush(stdout);
-    if (fgets(username, (int)sizeof(username), stdin) == NULL) {
-        return CLIENT_FAIL;
-    }
-    username[strcspn(username, "\n")] = '\0';
-
-    printf("Password: ");
-    fflush(stdout);
-    if (readPasswordMasked(password, sizeof(password)) == 0) {
-        OPENSSL_cleanse(password, sizeof(password));
-        return CLIENT_FAIL;
-    }
-    printf("\n");
-
-    /* ──────── stage 2: validate lengths, build and send login request
-     * ───────── */
-
-    size_t usernameLen = strlen(username);
+int clientLogin(Client *client, char *username, char *password, char *response,
+                bool *totpEnabled, bool *totpRequest, char *outNickname) {
     size_t pwLen = strlen(password);
 
-    if (usernameLen >= LOGIN_USERNAME_LEN) {
-        LOG_ERROR("clientLogin: username too long (%zu >= %d)", usernameLen,
-                  LOGIN_USERNAME_LEN);
-        OPENSSL_cleanse(password, sizeof(password));
-        return CLIENT_FAIL;
-    }
-
-    /* Build login payload — username(32) + password(FAM). No uid or
-     * nickname; the server returns those on success. */
+    // Build login payload — username(32) + password(FAM).
+    // No uid or nickname; the server returns those on success.
     size_t payloadLen = LoginHeaderSize + pwLen + 1;
-    LoginRequestPayload *login = calloc(1, payloadLen);
-    if (login == NULL) {
-        OPENSSL_cleanse(password, sizeof(password));
+    LoginRequestPayload *loginPayload = calloc(1, payloadLen);
+    if (loginPayload == NULL) {
         return CLIENT_FAIL;
     }
 
-    memcpy(login->username, username, usernameLen + 1);
-    memcpy(login->password, password, pwLen + 1);
+    memcpy(loginPayload->username, username, strlen(username) + 1);
+    memcpy(loginPayload->password, password, pwLen + 1);
     OPENSSL_cleanse(password, sizeof(password));
 
-    if (clientSendEncryptedPacket(client, MsgLoginReq, login, payloadLen) !=
-        CLIENT_SUCC) {
-        OPENSSL_cleanse(login, payloadLen);
-        free(login);
+    if (clientSendEncryptedPacket(client, MsgLoginReq, loginPayload,
+                                  payloadLen) != CLIENT_SUCC) {
+        strcpy(response, "Error when sending packet");
+        LOG_ERROR("clientLogin: Cannot send packet");
+        OPENSSL_cleanse(loginPayload, payloadLen);
+        free(loginPayload);
         return CLIENT_FAIL;
     }
-    OPENSSL_cleanse(login, payloadLen);
-    free(login);
+    OPENSSL_cleanse(loginPayload, payloadLen);
+    free(loginPayload);
 
-    /* ──────── stage 3: wait for login response (may be TOTP challenge)
-     * ──────── */
+    // wait for login response
 
     Packet respPkt;
     memset(&respPkt, 0, sizeof(respPkt));
     if (clientRecvEncryptedPacket(client, &respPkt) != PROTOCOL_SUCC) {
-        LOG_ERROR("clientLogin: no response from server");
+        strcpy(response, "No response from server");
+        LOG_ERROR("clientLogin: No response from server");
+        packetClear(&respPkt);
         return CLIENT_FAIL;
     }
 
     if (respPkt.header.messageType == MsgTOTPVerifyReq) {
-        /* ─────────────────── stage 3a: TOTP challenge sub-flow
-         * ──────────────────── */
+        *totpRequest = true;
+        *totpEnabled = true;
         packetClear(&respPkt);
-        char codeBuf[TOTP_SETUP_SECRET_LEN];
-        printf("TOTP code: ");
-        fflush(stdout);
-        if (fgets(codeBuf, (int)sizeof(codeBuf), stdin) == NULL) {
-            return CLIENT_FAIL;
-        }
-        /* strtol returns 0 on parse failure, filtered by range check. */
-        enum { DecBase = 10, MinCode = 0, MaxCode = 999999 };
-        long codeVal = strtol(codeBuf, NULL, DecBase);
-        if (codeVal < MinCode || codeVal > MaxCode) {
-            printf("Invalid TOTP code.\n");
-            return CLIENT_FAIL;
-        }
-
-        TOTPVerifyPayload tvp;
-        tvp.code = (uint32_t)codeVal;
-        if (clientSendEncryptedPacket(client, MsgTOTPVerifyResp, &tvp,
-                                      sizeof(tvp)) != CLIENT_SUCC) {
-            return CLIENT_FAIL;
-        }
-
-        /* ──────────────── stage 3b: wait for final login response
-         * ───────────────── */
-        memset(&respPkt, 0, sizeof(respPkt));
-        if (clientRecvEncryptedPacket(client, &respPkt) != PROTOCOL_SUCC) {
-            LOG_ERROR("clientLogin: no response after TOTP");
-            return CLIENT_FAIL;
-        }
+        return CLIENT_SUCC;
+    } else {
+        *totpRequest = false;
     }
 
     if (respPkt.header.messageType != MsgLoginResp ||
         respPkt.header.payloadLength < sizeof(LoginResponsePayload)) {
-        LOG_ERROR("clientLogin: invalid login response (type=%d, len=%u)",
+        LOG_ERROR("clientLogin: Invalid login response (type=%d, len=%u)",
                   (int)respPkt.header.messageType,
                   respPkt.header.payloadLength);
+        strcpy(response, "Invalid response");
         packetClear(&respPkt);
         return CLIENT_FAIL;
     }
 
-    /* ──────────────────── stage 4: validate login response
-     * ──────────────────── */
+    // validate login response
     LoginResponsePayload *resp = (LoginResponsePayload *)respPkt.payload;
     if (resp->uid == 0) {
         packetClear(&respPkt);
-        printf("Login failed.\n");
+        strcpy(response, "Incorrect password or unknown user");
+        LOG_ERROR("clientLogin: Failed to login");
         return CLIENT_FAIL;
     }
 
     client->uid = resp->uid;
-    printf("Login successful. Welcome, %s!\n", resp->nickname);
-    if (resp->totpEnabled == 0) {
-        printf("Security tip: enable TOTP with [t]otp setup for "
-               "stronger account protection.\n");
-    }
+    *totpEnabled = resp->totpEnabled;
 
-    /* ───── stage 5: request per-user encryption key, init local database
-     * ────── */
+    strcpy(outNickname, resp->nickname);
+
+    packetClear(&respPkt);
+    return clientLoadDB(client, response);
+}
+
+static int clientLoadDB(Client *client, char *response) {
+    // request per-user encryption key, init local database
     if (clientSendEncryptedPacket(client, MsgDBKeyReq, NULL, 0) !=
         PROTOCOL_SUCC) {
         LOG_ERROR("clientLogin: send MsgDBKeyReq failed");
-        packetClear(&respPkt);
+        strcpy(response, "Send MsgDBKeyReq failed");
         return CLIENT_FAIL;
     }
 
@@ -202,7 +139,7 @@ int clientLogin(Client *client) {
     memset(&dbKeyPkt, 0, sizeof(dbKeyPkt));
     if (clientRecvEncryptedPacket(client, &dbKeyPkt) != PROTOCOL_SUCC) {
         LOG_ERROR("clientLogin: recv MsgDBKeyResp failed");
-        packetClear(&respPkt);
+        strcpy(response, "Auth failed (maybe wrong TOTP code)");
         return CLIENT_FAIL;
     }
     if (dbKeyPkt.header.messageType != MsgDBKeyResp ||
@@ -210,95 +147,49 @@ int clientLogin(Client *client) {
         LOG_ERROR("clientLogin: invalid MsgDBKeyResp (mt=%d, len=%u)",
                   (int)dbKeyPkt.header.messageType,
                   dbKeyPkt.header.payloadLength);
+        strcpy(response, "Invalid response");
         packetClear(&dbKeyPkt);
-        packetClear(&respPkt);
         return CLIENT_FAIL;
     }
     memcpy(client->cdbkey, dbKeyPkt.payload, CLIENT_DB_KEY_LEN);
     packetClear(&dbKeyPkt);
 
-    /* Initialise the encrypted local database with the CDBKey. */
+    // Initialise the encrypted local database with the CDBKey.
     if (clientInitDB(client) != CLIENT_DB_SUCC) {
         LOG_ERROR("clientLogin: clientInitDB failed");
+        strcpy(response, "ClientInitDB failed");
         OPENSSL_cleanse(client->cdbkey, sizeof(client->cdbkey));
-        packetClear(&respPkt);
         return CLIENT_FAIL;
     }
 
-    /* CDBKey transferred to ClientDB — wipe plaintext copy. */
+    // CDBKey transferred to ClientDB — wipe plaintext copy.
     OPENSSL_cleanse(client->cdbkey, sizeof(client->cdbkey));
 
-    packetClear(&respPkt);
     return CLIENT_SUCC;
 }
 
-int clientRegister(Client *client) {
-    /* ────────────────────── stage 1: collect credentials
-     * ────────────────────── */
-
-    char username[LOGIN_USERNAME_LEN];
-    char nickname[LOGIN_NICKNAME_LEN];
-    char password[MaxInputLen];
-
-    printf("Choose username: ");
-    fflush(stdout);
-    if (fgets(username, (int)sizeof(username), stdin) == NULL) {
-        return CLIENT_FAIL;
-    }
-    username[strcspn(username, "\n")] = '\0';
-
-    printf("Choose nickname: ");
-    fflush(stdout);
-    if (fgets(nickname, (int)sizeof(nickname), stdin) == NULL) {
-        return CLIENT_FAIL;
-    }
-    nickname[strcspn(nickname, "\n")] = '\0';
-
-    printf("Choose password: ");
-    fflush(stdout);
-    if (readPasswordMasked(password, sizeof(password)) == 0) {
-        OPENSSL_cleanse(password, sizeof(password));
-        return CLIENT_FAIL;
-    }
-    printf("\n");
-
-    /* ─────── stage 2: validate lengths, build and send register request
-     * ─────── */
-
-    size_t usernameLen = strlen(username);
-    size_t nicknameLen = strlen(nickname);
+int clientRegister(Client *client, char *username, char *nickname,
+                   char *password, char *response) {
     size_t pwLen = strlen(password);
 
-    if (usernameLen >= LOGIN_USERNAME_LEN) {
-        LOG_ERROR("clientRegister: username too long (%zu >= %d)", usernameLen,
-                  LOGIN_USERNAME_LEN);
-        OPENSSL_cleanse(password, sizeof(password));
-        return CLIENT_FAIL;
-    }
-
-    if (nicknameLen >= LOGIN_NICKNAME_LEN) {
-        LOG_ERROR("clientRegister: nickname too long (%zu >= %d)", nicknameLen,
-                  LOGIN_NICKNAME_LEN);
-        OPENSSL_cleanse(password, sizeof(password));
-        return CLIENT_FAIL;
-    }
-
-    /* Build register payload — username(32) + nickname(32) + password(FAM).
-     * UID is server-assigned; the client does not send one. */
+    // Build register payload — username(32) + nickname(32) + password(FAM).
+    // UID is server-assigned; the client does not send one.
     size_t payloadLen = RegisterHeaderSize + pwLen + 1;
     RegisterRequestPayload *reg = calloc(1, payloadLen);
     if (reg == NULL) {
-        OPENSSL_cleanse(password, sizeof(password));
+        strcpy(response, "Error when allocating memory");
+        LOG_ERROR("clientRegister:  Cannot allocate memory");
         return CLIENT_FAIL;
     }
 
-    memcpy(reg->username, username, usernameLen + 1);
-    memcpy(reg->nickname, nickname, nicknameLen + 1);
+    memcpy(reg->username, username, strlen(username) + 1);
+    memcpy(reg->nickname, nickname, strlen(nickname) + 1);
     memcpy(reg->password, password, pwLen + 1);
-    OPENSSL_cleanse(password, sizeof(password));
 
     if (clientSendEncryptedPacket(client, MsgRegisterReq, reg, payloadLen) !=
         CLIENT_SUCC) {
+        strcpy(response, "Error when sending packet");
+        LOG_ERROR("clientRegister:  Cannot send packet");
         OPENSSL_cleanse(reg, payloadLen);
         free(reg);
         return CLIENT_FAIL;
@@ -306,38 +197,42 @@ int clientRegister(Client *client) {
     OPENSSL_cleanse(reg, payloadLen);
     free(reg);
 
-    /* ───────────── stage 3: receive and interpret server response
-     * ───────────── */
+    // receive and interpret server response
     int status = clientRecvStatusResponse(client, MsgRegisterResp);
     if (status < 0) {
-        LOG_ERROR("clientRegister: no response from server");
+        strcpy(response, "No response from server");
+        LOG_ERROR("clientRegister:  No response from server");
         return CLIENT_FAIL;
     }
 
     if (status == 1) {
-        printf("Registration failed. Username may already exist.\n");
+        strcpy(response, "Username may already exist");
+        LOG_ERROR("clientRegister:  Username already exist");
         return CLIENT_FAIL;
     }
 
-    printf("Registration successful. You can now login.\n");
+    strcpy(response, "Successful, now you can login");
     return CLIENT_SUCC;
 }
 
-int clientTOTPSetup(Client *client) {
-    /* ──────────────── stage 1: request TOTP secret from server
-     * ──────────────── */
+// need to free uri after called
+int clientTOTPSetup(Client *client, char *response, char *secret, char **uri,
+                    bool *uriSucc, size_t *uriLen) {
+    // request TOTP secret from server
     if (clientSendEncryptedPacket(client, MsgTOTPSetupReq, NULL, 0) !=
         PROTOCOL_SUCC) {
         LOG_ERROR("clientTOTPSetup: failed to send request");
+        strcpy(response, "Failed to send request");
         return CLIENT_FAIL;
     }
 
-    /* ───────────────── stage 2: receive and validate response
-     * ───────────────── */
+    // receive and validate response
     Packet resp;
     memset(&resp, 0, sizeof(resp));
+
     if (clientRecvEncryptedPacket(client, &resp) != PROTOCOL_SUCC) {
         LOG_ERROR("clientTOTPSetup: no response from server");
+        strcpy(response, "No response from server");
         return CLIENT_FAIL;
     }
 
@@ -345,38 +240,73 @@ int clientTOTPSetup(Client *client) {
         resp.header.payloadLength < sizeof(TOTPSetupRespPayload)) {
         LOG_ERROR("clientTOTPSetup: invalid response (type=%d, len=%u)",
                   (int)resp.header.messageType, resp.header.payloadLength);
+        strcpy(response, "Invalid response");
         packetClear(&resp);
         return CLIENT_FAIL;
     }
 
     TOTPSetupRespPayload *payload = (TOTPSetupRespPayload *)resp.payload;
 
-    /* Empty secret means TOTP is already enabled; not an error. */
+    // Empty secret means TOTP is already enabled; not an error.
     if (payload->secret[0] == '\0') {
-        printf("TOTP is already enabled or setup failed.\n");
         packetClear(&resp);
         return CLIENT_SUCC;
     }
 
-    /* ─────────────── stage 3: display secret and otpauth:// URI
-     * ─────────────── */
-    char *uri = NULL;
+    strcpy(secret, payload->secret);
+
+    // display secret and otpauth:// URI
     char username[TOTP_SETUP_SECRET_LEN];
     snprintf(username, sizeof(username), "user%u", client->uid);
-    if (generateOTPAuthURI(payload->secret, username, &uri) == CRYPTO_SUCC) {
-        printf("\n--- TOTP Secret ---\n");
-        printf("Base32: %s\n", payload->secret);
-        printf("URI:    %s\n", uri);
-        printf("--------------------\n");
-        printf("Scan the URI with your authenticator app.\n");
-        free(uri);
-    } else {
-        printf("\n--- TOTP Secret ---\n");
-        printf("Base32: %s\n", payload->secret);
-        printf("--------------------\n");
-        printf("Manually enter this secret into your authenticator app.\n");
-    }
+    *uriSucc = generateOTPAuthURI(payload->secret, username, uri, uriLen) ==
+               CRYPTO_SUCC;
 
     packetClear(&resp);
     return CLIENT_SUCC;
+}
+
+int clientTOTPVerify(Client *client, char *code, char *response, char *outNickname) {
+    Packet respPkt;
+    memset(&respPkt, 0, sizeof(respPkt));
+
+    packetClear(&respPkt);
+
+    // strtol returns 0 on parse failure, filtered by range check
+    enum { DecBase = 10, MinCode = 0, MaxCode = 999999 };
+    long codeVal = strtol(code, NULL, DecBase);
+    if (codeVal < MinCode || codeVal > MaxCode) {
+        strcpy(response, "Invalid TOTP code");
+        return CLIENT_FAIL;
+    }
+
+    TOTPVerifyPayload tvp;
+    tvp.code = (uint32_t)codeVal;
+    if (clientSendEncryptedPacket(client, MsgTOTPVerifyResp, &tvp,
+                                  sizeof(tvp)) != CLIENT_SUCC) {
+        LOG_ERROR("clientTOTPVerify: failed to send packet");
+        strcpy(response, "Failed to send packet");
+        return CLIENT_FAIL;
+    }
+
+    // wait for final login response
+    memset(&respPkt, 0, sizeof(respPkt));
+    if (clientRecvEncryptedPacket(client, &respPkt) != PROTOCOL_SUCC) {
+        LOG_ERROR("clientTOTPVerify: no response after TOTP");
+        strcpy(response, "No response after TOTP");
+        return CLIENT_FAIL;
+    }
+
+    // validate login response
+    LoginResponsePayload *resp = (LoginResponsePayload *)respPkt.payload;
+    if (resp->uid == 0) {
+        packetClear(&respPkt);
+        strcpy(response, "Incorrect TOTP code");
+        LOG_ERROR("clientTOTPVerify: Failed to login");
+        return CLIENT_FAIL;
+    }
+
+    strcpy(outNickname, resp->nickname);
+
+    packetClear(&respPkt);
+    return clientLoadDB(client, response);
 }

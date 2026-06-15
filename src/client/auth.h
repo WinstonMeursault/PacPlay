@@ -31,4 +31,13 @@
 
 #include "client.h"
 
+int clientLogin(Client *client, char *username, char *password, char *response,
+                bool *totpEnabled, bool *totpRequest, char *outNickname);
+int clientRegister(Client *client, char *username, char *nickname,
+                   char *password, char *response);
+int clientTOTPSetup(Client *client, char *response, char *secret, char **uri,
+                    bool *uriSucc, size_t *uriLen);
+int clientTOTPVerify(Client *client, char *code, char *response,
+                     char *outNickname);
+
 #endif /* CLIENT_AUTH_H */

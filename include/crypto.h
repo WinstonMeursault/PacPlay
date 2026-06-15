@@ -387,7 +387,7 @@ int verifyTOTPCode(const char *secret, int *code);
  * @return @c CRYPTO_SUCC on success, @c CRYPTO_FAIL on invalid input
  *         or allocation failure.
  */
-int generateOTPAuthURI(const char *secret, const char *username, char **outURI);
+int generateOTPAuthURI(const char *secret, const char *username, char **outURI, size_t *outURILen);
 
 /* ──────────────────────────────── utility ───────────────────────────────── */
 

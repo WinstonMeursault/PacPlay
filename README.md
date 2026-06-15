@@ -34,3 +34,11 @@ cd ./PacPlay
   License: MIT License
 
   原始许可证文本包含在: [rxi/log.c LICENSE](https://github.com/rxi/log.c/blob/master/LICENSE)
+
+- [QR-Code-generator](https://github.com/nayuki/QR-Code-generator)
+
+  Copyright © 2025 Project Nayuki
+
+  License: MIT License
+
+  原始许可证文本包含在: [nayuki/QR-Code-generator Readme.markdown](https://github.com/nayuki/QR-Code-generator/blob/master/Readme.markdown)

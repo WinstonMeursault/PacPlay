@@ -158,7 +158,7 @@ refresh:
             return CLIENT_SUCC;
 
         } else if (strcmp(choice, "t") == 0) {
-            clientTOTPSetup(client);
+            // clientTOTPSetup(client);
 
         } else if (strcmp(choice, "r") == 0) {
             /* Refresh: re-request room list (goto label above) */

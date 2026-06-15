@@ -187,7 +187,8 @@ int serverHandleTOTPVerify(Server *s, ClientSession *cs, const Packet *pkt) {
         LoginResponsePayload fr;
         memset(&fr, 0, sizeof(fr));
         serverSendEncryptedPacket(cs, MsgLoginResp, &fr, sizeof(fr));
-        return SERVER_FAIL;
+        cs->state = SessionLogin;
+        return SERVER_SUCC;
     }
     cs->state = SessionRoom;
     LoginResponsePayload sr;

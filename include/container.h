@@ -178,6 +178,12 @@ typedef enum { ContainerSucc = 0, ContainerFail = -1 } ContainerRes;
         }                                                                      \
         self->head = (self->head + 1) % self->capacity;                        \
         return ContainerSucc;                                                  \
+    }                                                                          \
+    FUNC_UNUSED static inline size_t queue##T##Size(const Queue##T *self) {    \
+        if (self->capacity == 0) {                                             \
+            return 0;                                                          \
+        }                                                                      \
+        return (self->tail - self->head + self->capacity) % self->capacity;    \
     }
 
 /**

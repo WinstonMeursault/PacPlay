@@ -1,8 +1,8 @@
 /**
- * @file main.c
- * @brief PacPlay client entrypoint.
+ * @file mainPage.h
+ * @brief
  *
- * @date 2026-05-16
+ * @date 2026-06-13
  * @copyright GPLv3 License
  * @section LICENSE
  * PacPlay
@@ -22,23 +22,10 @@
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
-#include "client.h"
-#include "tui/clientTUI.h"
+#ifndef MAINPAGE_H
+#define MAINPAGE_H
 
-enum { ServerPort = 12345 };
+void tuiClientMainPageInit();
+void homePageInitUpdate(char *nickname, char *username);
 
-// static const char *serverAddr = "127.0.0.1";
-
-int main(void) {
-    Client clientInstance;
-    memset(&clientInstance, 0, sizeof(clientInstance));
-
-    // if (clientConnect(&clientInstance, serverAddr, ServerPort) != CLIENT_SUCC) {
-    //     return 1;
-    // }
-
-    tuiClientEntry(&clientInstance);
-
-    clientDisconnect(&clientInstance);
-    return 0;
-}
+#endif // MAINPAGE_H

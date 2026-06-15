@@ -50,6 +50,8 @@ enum {
     IdInputLen = 32
 };
 
+
+
 /* ─────────────────────────────── public API ─────────────────────────────── */
 
 int clientConnect(Client *client, const char *addr, uint16_t port) {

@@ -25,7 +25,6 @@
 #include "tui/tuiapp.h"
 #include "clipboard.h"
 #include "log.h"
-#include "tui/ncurses_wrapper.h"
 #include "tui/tuimsg.h"
 #include <errno.h>
 #include <locale.h>
@@ -95,6 +94,7 @@ static void ensureRenderStkCap(size_t need) {
     }
 }
 
+static void tuiAppUpdateViewArea();
 static void tuiAppDeinit();
 static void tuiAppMainLoop();
 static void tuiAppInput();
@@ -123,39 +123,59 @@ struct {
     } userCursor;
 
     Index curRoot;
-
     Index selectingWidget;
 
     ArrayControlRegEntry controlRegistry;
     ArrayIndex navChainCache;
     QueueTuiMsg msgQueue;
     pthread_mutex_t msgQueueLock;
-} tuiApp = {
-    .options = {.fps = 24},        // NOLINT(readability-magic-numbers)
-    .constants = {.escDelay = 25}, // NOLINT(readability-magic-numbers)
-    .selectingWidget = 0,
-};
+
+    ViewArea viewArea;
+
+    bool fastRefresh;
+} tuiApp = {.options = {.fps = 60},        // NOLINT(readability-magic-numbers)
+            .constants = {.escDelay = 25}, // NOLINT(readability-magic-numbers)
+            .selectingWidget = 0,
+            .viewArea = {.x = 0, .y = 0}};
+
+ViewArea *pViewArea;
 
 void tuiAppChangePage(ControlPage *entry) {
-    if (entry == NULL) {
-        clear();
-        tuiAppChangeRoot(0);
-        tuiAppPushMessage((TuiMsg){.type = MsgResize});
-        return;
-    }
     if (!entry->isPage) {
         LOG_ERROR("Cannot change page: Dest control is not a page");
         return;
     }
-    clear();
-    tuiAppChangeRoot(entry->index);
+    tuiAppUpdateViewArea();
     tuiAppPushMessage((TuiMsg){.type = MsgResize});
+    tuiAppMsgHandle();
+    tuiAppChangeRoot(entry->index);
+    clear();
 }
 
 void tuiAppPushMessage(TuiMsg msg) {
     pthread_mutex_lock(&tuiApp.msgQueueLock);
     queueTuiMsgPush(&tuiApp.msgQueue, msg);
     pthread_mutex_unlock(&tuiApp.msgQueueLock);
+}
+
+static void tuiAppUpdateViewArea() {
+    int destHeight = COLS * 9 / 32; // NOLINT
+    int destWidth = LINES * 32 / 9; // NOLINT
+    if (destHeight < LINES) {
+        pViewArea->height = destHeight;
+        pViewArea->width = COLS;
+        pViewArea->y = LINES / 2 - pViewArea->height / 2;
+        pViewArea->x = 0;
+    } else {
+        pViewArea->height = LINES;
+        pViewArea->width = destWidth;
+        pViewArea->y = 0;
+        pViewArea->x = COLS / 2 - pViewArea->width / 2;
+    }
+    delwin(pViewArea->windowHandler);
+    pViewArea->windowHandler = newwin(pViewArea->height, pViewArea->width,
+                                      pViewArea->y, pViewArea->x);
+    clear();
 }
 
 void tuiAppInit() {
@@ -203,6 +223,13 @@ void tuiAppInit() {
     }
     clipboardInit();
     clipboardWriteRaw("\033[?1002h");
+
+    pViewArea = &tuiApp.viewArea;
+    tuiAppUpdateViewArea();
+    tuiApp.viewArea.windowHandler =
+        newwin(pViewArea->height, pViewArea->width, pViewArea->x, pViewArea->y);
+
+    tuiApp.fastRefresh = false;
 }
 
 // parent must be already registered and it must be a container or a page.
@@ -284,6 +311,7 @@ static void tuiAppDeinit() {
     queueTuiMsgDeinit(&tuiApp.msgQueue);
     clipboardWriteRaw("\033[?1002l");
     clipboardDeinit();
+    delwin(tuiApp.viewArea.windowHandler);
     endwin();
 }
 
@@ -293,7 +321,9 @@ static void tuiAppMainLoop() {
         tuiAppInput();
         tuiAppMsgHandle();
         tuiAppRender();
-        usleep(A_SEC / tuiApp.options.fps);
+        if (!tuiApp.fastRefresh) {
+            usleep(A_SEC / tuiApp.options.fps);
+        }
     }
 }
 
@@ -304,7 +334,26 @@ static void tuiAppInput() {
         return;
     }
 
-    if (ch == KEY_MOUSE) {
+    ControlRegEntry *cur;
+    CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, tuiApp.userCursor.index,
+                           &cur);
+    if (ch != KEY_MOUSE &&
+        (cur->ptr != NULL && cur->ptr->takeOverInput && ch != KEY_RESIZE)) {
+        tuiAppPushMessage((TuiMsg){.type = MsgInput, .arg1 = {.input = ch}});
+        return;
+    }
+
+    switch (ch) {
+    case '\t':
+        tuiAppPushMessage((TuiMsg){.type = MsgCursorNext});
+        break;
+    case KEY_BTAB:
+        tuiAppPushMessage((TuiMsg){.type = MsgCursorPrev});
+        break;
+    case KEY_RESIZE:
+        tuiAppPushMessage((TuiMsg){.type = MsgResize});
+        break;
+    case KEY_MOUSE: {
         MEVENT event;
         if (getmouse(&event) == OK) {
             int bstate = event.bstate;
@@ -347,9 +396,10 @@ static void tuiAppInput() {
                     target = tuiApp.selectingWidget;
                     tuiApp.selectingWidget = 0;
                     /* Synthesize BUTTON1_CLICKED when the release lands on
-                       the same widget that received the press.  Most terminal
-                       emulators never report BUTTON1_CLICKED natively, so we
-                       compose it here to guarantee button onClick fires. */
+                       the same widget that received the press.  Most
+                       terminal emulators never report BUTTON1_CLICKED
+                       natively, so we compose it here to guarantee button
+                       onClick fires. */
                     Index releaseTarget = findWidgetAtMouse(event.y, event.x);
                     if (releaseTarget == target) {
                         bstate |= BUTTON1_CLICKED;
@@ -413,25 +463,6 @@ static void tuiAppInput() {
         }
         return;
     }
-
-    ControlRegEntry *cur;
-    CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, tuiApp.userCursor.index,
-                           &cur);
-    if (cur->ptr != NULL && cur->ptr->takeOverInput && ch != KEY_RESIZE) {
-        tuiAppPushMessage((TuiMsg){.type = MsgInput, .arg1 = {.input = ch}});
-        return;
-    }
-
-    switch (ch) {
-    case '\t':
-        tuiAppPushMessage((TuiMsg){.type = MsgCursorNext});
-        break;
-    case KEY_BTAB:
-        tuiAppPushMessage((TuiMsg){.type = MsgCursorPrev});
-        break;
-    case KEY_RESIZE:
-        tuiAppPushMessage((TuiMsg){.type = MsgResize});
-        break;
     default:
         tuiAppPushMessage((TuiMsg){.type = MsgInput, .arg1 = {.input = ch}});
         break;
@@ -439,6 +470,12 @@ static void tuiAppInput() {
 }
 
 static void tuiAppRender() {
+
+    // DEBUG:
+    werase(pViewArea->windowHandler);
+    box(pViewArea->windowHandler, 0, 0);
+    wnoutrefresh(pViewArea->windowHandler);
+
     ControlRegEntry *curEntry;
     ensureRenderStkCap(0);
     gRenderStk.size = 0;
@@ -449,8 +486,8 @@ static void tuiAppRender() {
                                 &curIndex);
         arrayIndexPopBack(&gRenderStk);
         CHECKED_REGENTRY_INDEX(&tuiApp.controlRegistry, curIndex, &curEntry);
-        if (curIndex != 0 && curEntry->ptr->vtable.draw != NULL &&
-            curEntry->ptr->visible) {
+        if (curIndex != 0 && curEntry->ptr->windowHandler != NULL &&
+            curEntry->ptr->vtable.draw != NULL && curEntry->ptr->visible) {
             curEntry->ptr->vtable.draw(curEntry->ptr);
         }
         if (curIndex != tuiApp.curRoot && curEntry->sibling != 0) {
@@ -461,13 +498,21 @@ static void tuiAppRender() {
             arrayIndexPushBack(&gRenderStk, curEntry->child);
         }
     }
+
     doupdate();
+
 }
 
 static void tuiAppMsgHandle() {
     TuiMsg msg;
     pthread_mutex_lock(&tuiApp.msgQueueLock);
-    while (!queueTuiMsgIsEmpty(&tuiApp.msgQueue)) {
+
+    size_t queueCurFrameSize = queueTuiMsgSize(&tuiApp.msgQueue);
+
+    for (size_t i = 0; i < queueCurFrameSize; ++i) {
+        if (queueTuiMsgIsEmpty(&tuiApp.msgQueue)) {
+            break;
+        }
         CHECKED_QUEUE_TUI_MSG_FRONT(&tuiApp.msgQueue, &msg);
         queueTuiMsgPop(&tuiApp.msgQueue);
         switch (msg.type) {
@@ -507,6 +552,8 @@ static void tuiAppMsgHandle() {
         }
         case MsgRefresh:
         case MsgResize: {
+            tuiAppUpdateViewArea();
+
             ControlRegEntry *curEntry;
             ensureRenderStkCap(
                 arrayControlRegEntrySize(&tuiApp.controlRegistry));
@@ -547,6 +594,11 @@ static void tuiAppMsgHandle() {
         }
         default:
             break;
+        }
+        if (msg.type == MsgRefresh || msg.type == MsgResize) {
+            tuiApp.fastRefresh = true;
+        } else {
+            tuiApp.fastRefresh = false;
         }
     }
     pthread_mutex_unlock(&tuiApp.msgQueueLock);
@@ -637,8 +689,13 @@ static void tuiAppRefreshNavChain() {
     // correct the real index to registry
     Index tmp;
     bool found = false;
-    CHECKED_ARRAY_INDEX_GET(&tuiApp.navChainCache,
-                            tuiApp.userCursor.indexOfCache, &tmp);
+    if (tuiApp.userCursor.indexOfCache <
+        arrayIndexSize(&tuiApp.navChainCache)) {
+        CHECKED_ARRAY_INDEX_GET(&tuiApp.navChainCache,
+                                tuiApp.userCursor.indexOfCache, &tmp);
+    } else {
+        tmp = 0;
+    }
     if (tmp != tuiApp.userCursor.index) {
         ControlRegEntry *cur;
         // The root is the only entry who has NULL ptr

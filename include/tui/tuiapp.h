@@ -29,6 +29,16 @@
 #include "ncurses_wrapper.h"
 #include "tuimsg.h"
 
+typedef struct {
+    WINDOW *windowHandler;
+    int width;
+    int height;
+    int x;
+    int y;
+} ViewArea;
+
+extern ViewArea *pViewArea;
+
 void tuiAppInit();
 void tuiAppControlRegister(Control *entry, Control *parent);
 void tuiAppStart(ControlPage *orgPage);

@@ -27,101 +27,115 @@
 #include "log.h"
 #include "tui/tuiapp.h"
 #include <ctype.h>
+#include "utils.h"
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 
-static void customBox(WINDOW *handler, const wchar_t *lsRaw,
-                      const wchar_t *rsRaw, const wchar_t *tsRaw,
-                      const wchar_t *bsRaw, const wchar_t *tlRaw,
-                      const wchar_t *trRaw, const wchar_t *blRaw,
-                      const wchar_t *brRaw);
-#define DOUBLE_BOX(handler)                                                    \
-    customBox((handler), L"║", L"║", L"═", L"═", L"╔", L"╗", L"╚", L"╝")
-
 static void controlConstruct(Control *self, int height, int width, int y, int x,
                              bool focusable, bool isContainer);
 
-static void controlPageMsgHandler(void *self, TuiMsg msg);
-static void controlPageRefreshChild(void *self, void *child);
+static void controlPageMsgHandler(ControlPage *self, TuiMsg msg);
+static void controlPageRefreshChild(ControlPage *self, Control *child);
 
-static void controlButtonDestruct(void *self);
-static void controlButtonMsgHandler(void *self, TuiMsg msg);
+static void controlButtonDestruct(ControlButton *self);
+static void controlButtonMsgHandler(ControlButton *self, TuiMsg msg);
 
-static void controlGridMsgHandler(void *self, TuiMsg msg);
-static void controlGridLayout(void *self, void *child);
+static void controlGridMsgHandler(ControlGrid *self, TuiMsg msg);
+static void controlGridLayout(ControlGrid *self, Control *child);
 
-static void controlLabelDestruct(void *self);
-static void controlLabelMsgHandler(void *self, TuiMsg msg);
+static void controlLabelDestruct(ControlLabel *self);
+static void controlLabelMsgHandler(ControlLabel *self, TuiMsg msg);
 
-static void controlInputBoxDestruct(void *self);
-static void controlInputBoxMsgHandler(void *self, TuiMsg msg);
+static void controlInputBoxDestruct(ControlInputBox *self);
+static void controlInputBoxMsgHandler(ControlInputBox *self, TuiMsg msg);
 
-static void controlTextBoxDestruct(void *self);
-static void controlTextBoxMsgHandler(void *self, TuiMsg msg);
+static void controlTextBoxDestruct(ControlTextBox *self);
+static void controlTextBoxMsgHandler(ControlTextBox *self, TuiMsg msg);
 static size_t textBoxAdvanceVisualLine(const char *text, size_t textLen,
                                        size_t start, int availWidth,
                                        bool *isBreakOut);
 static size_t textBoxCountVisualLines(const char *text, size_t textLen,
-                                       int availWidth);
+                                      int availWidth);
 
-static const char *labelGetSelectableText(void *self, size_t *outLen);
-static size_t labelCoordToByteOffset(void *self, int localY, int localX);
+static const char *labelGetSelectableText(ControlLabel *self, size_t *outLen);
+static size_t labelCoordToByteOffset(ControlLabel *self, int localY,
+                                     int localX);
 
-static const char *inputBoxGetSelectableText(void *self, size_t *outLen);
-static size_t inputBoxCoordToByteOffset(void *self, int localY, int localX);
+static const char *inputBoxGetSelectableText(ControlInputBox *self,
+                                             size_t *outLen);
+static size_t inputBoxCoordToByteOffset(ControlInputBox *self, int localY,
+                                        int localX);
 
-static const char *textBoxGetSelectableText(void *self, size_t *outLen);
-static size_t textBoxCoordToByteOffset(void *self, int localY, int localX);
+static const char *textBoxGetSelectableText(ControlTextBox *self,
+                                            size_t *outLen);
+static size_t textBoxCoordToByteOffset(ControlTextBox *self, int localY,
+                                       int localX);
 
-const static ControlVTable defaultCtrlVtable = {
-    .destruct = NULL,
-    .draw = NULL,
-    .msgHandler = NULL,
-    .getSelectableText = NULL,
-    .coordToByteOffset = NULL};
+static void controlListBoxDestruct(ControlListBox *self);
+static void controlListBoxMsgHandler(ControlListBox *self, TuiMsg msg);
+
+const static ControlVTable defaultCtrlVtable = {.destruct = NULL,
+                                                .draw = NULL,
+                                                .msgHandler = NULL,
+                                                .getSelectableText = NULL,
+                                                .coordToByteOffset = NULL};
 const static ControlVTable defaultBtnVtable = {
-    .destruct = controlButtonDestruct,
-    .draw = controlButtonDraw,
-    .msgHandler = controlButtonMsgHandler,
+    .destruct = (void (*)(Control *))controlButtonDestruct,
+    .draw = (void (*)(Control *))controlButtonDraw,
+    .msgHandler = (void (*)(Control *, TuiMsg))controlButtonMsgHandler,
     .getSelectableText = NULL,
     .coordToByteOffset = NULL};
 const static ControlVTable defaultGridVtable = {
     .destruct = NULL,
-    .draw = controlGridDraw,
-    .msgHandler = controlGridMsgHandler,
+    .draw = (void (*)(Control *))controlGridDraw,
+    .msgHandler = (void (*)(Control *, TuiMsg))controlGridMsgHandler,
     .getSelectableText = NULL,
     .coordToByteOffset = NULL};
 const static ControlVTable defaultLabelVtable = {
-    .destruct = controlLabelDestruct,
-    .draw = controlLabelDraw,
-    .msgHandler = controlLabelMsgHandler,
-    .getSelectableText = labelGetSelectableText,
-    .coordToByteOffset = labelCoordToByteOffset};
+    .destruct = (void (*)(Control *))controlLabelDestruct,
+    .draw = (void (*)(Control *))controlLabelDraw,
+    .msgHandler = (void (*)(Control *, TuiMsg))controlLabelMsgHandler,
+    .getSelectableText =
+        (const char *(*)(Control *, size_t *))labelGetSelectableText,
+    .coordToByteOffset =
+        (size_t (*)(Control *, int, int))labelCoordToByteOffset};
 const static ControlVTable defaultInputBoxVtable = {
-    .destruct = controlInputBoxDestruct,
-    .draw = controlInputBoxDraw,
-    .msgHandler = controlInputBoxMsgHandler,
-    .getSelectableText = inputBoxGetSelectableText,
-    .coordToByteOffset = inputBoxCoordToByteOffset};
+    .destruct = (void (*)(Control *))controlInputBoxDestruct,
+    .draw = (void (*)(Control *))controlInputBoxDraw,
+    .msgHandler = (void (*)(Control *, TuiMsg))controlInputBoxMsgHandler,
+    .getSelectableText =
+        (const char *(*)(Control *, size_t *))inputBoxGetSelectableText,
+    .coordToByteOffset =
+        (size_t (*)(Control *, int, int))inputBoxCoordToByteOffset};
 const static ControlVTable defaultTextBoxVtable = {
-    .destruct = controlTextBoxDestruct,
-    .draw = controlTextBoxDraw,
-    .msgHandler = controlTextBoxMsgHandler,
-    .getSelectableText = textBoxGetSelectableText,
-    .coordToByteOffset = textBoxCoordToByteOffset};
+    .destruct = (void (*)(Control *))controlTextBoxDestruct,
+    .draw = (void (*)(Control *))controlTextBoxDraw,
+    .msgHandler = (void (*)(Control *, TuiMsg))controlTextBoxMsgHandler,
+    .getSelectableText =
+        (const char *(*)(Control *, size_t *))textBoxGetSelectableText,
+    .coordToByteOffset =
+        (size_t (*)(Control *, int, int))textBoxCoordToByteOffset};
 const static ControlVTable defaultScrollTextBoxVtable = {
-    .destruct = controlTextBoxDestruct,
-    .draw = controlTextBoxDraw,
-    .msgHandler = controlTextBoxMsgHandler,
-    .getSelectableText = textBoxGetSelectableText,
-    .coordToByteOffset = textBoxCoordToByteOffset};
+    .destruct = (void (*)(Control *))controlTextBoxDestruct,
+    .draw = (void (*)(Control *))controlTextBoxDraw,
+    .msgHandler = (void (*)(Control *, TuiMsg))controlTextBoxMsgHandler,
+    .getSelectableText =
+        (const char *(*)(Control *, size_t *))textBoxGetSelectableText,
+    .coordToByteOffset =
+        (size_t (*)(Control *, int, int))textBoxCoordToByteOffset};
 
-static void customBox(WINDOW *handler, const wchar_t *lsRaw,
-                      const wchar_t *rsRaw, const wchar_t *tsRaw,
-                      const wchar_t *bsRaw, const wchar_t *tlRaw,
-                      const wchar_t *trRaw, const wchar_t *blRaw,
-                      const wchar_t *brRaw) {
+const static ControlVTable defaultListBoxVtable = {
+    .destruct = (void (*)(Control *))controlListBoxDestruct,
+    .draw = (void (*)(Control *))controlListBoxDraw,
+    .msgHandler = (void (*)(Control *, TuiMsg))controlListBoxMsgHandler,
+    .getSelectableText = NULL,
+    .coordToByteOffset = NULL};
+
+void customBox(WINDOW *handler, const wchar_t *lsRaw, const wchar_t *rsRaw,
+               const wchar_t *tsRaw, const wchar_t *bsRaw, const wchar_t *tlRaw,
+               const wchar_t *trRaw, const wchar_t *blRaw,
+               const wchar_t *brRaw) {
     cchar_t ls, rs, ts, bs, tl, tr, bl, br;
     setcchar(&ls, lsRaw, A_NORMAL, 0, NULL);
     setcchar(&rs, rsRaw, A_NORMAL, 0, NULL);
@@ -137,11 +151,12 @@ static void customBox(WINDOW *handler, const wchar_t *lsRaw,
 // parent == NULL to use stdscr
 void controlInstantiate(Control *self, Control *parent) {
     if (parent == NULL) {
-        self->windowHandler =
-            subwin(stdscr, self->height, self->width, self->y, self->x);
+        self->windowHandler = derwin(pViewArea->windowHandler, self->height,
+                                     self->width, self->y, self->x);
     } else {
         // If parent is a derived structure, it also works. Because the base
         // member is always at the first in derived structure.
+        // Failed to fetch handler when the control exceeds the bound of parent
         self->windowHandler =
             derwin(((Control *)parent)->windowHandler, self->height,
                    self->width, self->y, self->x);
@@ -183,25 +198,27 @@ void controlPageConstruct(ControlPage *self) {
     self->vtable.msgHandler = controlPageMsgHandler;
 }
 
-static void controlPageMsgHandler(void *self, TuiMsg msg) {
+static void controlPageMsgHandler(Control *self, TuiMsg msg) {
     ControlPage *page = (ControlPage *)self;
     switch (msg.type) {
     case MsgResize:
     case MsgRefresh:
-        tuiAppPushMessage(
-            (TuiMsg){.type = MsgFetch,
-                     .arg1 = {.index = page->index},
-                     .arg2 = {.fetchRecv = controlPageRefreshChild}});
+        controlDeinstantiate(self);
+        controlInstantiate(self, NULL);
+        tuiAppPushMessage((TuiMsg){
+            .type = MsgFetch,
+            .arg1 = {.index = page->index},
+            .arg2 = {.fetchRecv = (void (*)(
+                         Control *, Control *))controlPageRefreshChild}});
         break;
     default:
         break;
     }
 }
 
-static void controlPageRefreshChild(void *self, void *child) {
-    ControlPage *page = (ControlPage *)self;
+static void controlPageRefreshChild(ControlPage *self, Control *child) {
     controlDeinstantiate((Control *)child);
-    controlInstantiate((Control *)child, (Control *)page);
+    controlInstantiate((Control *)child, (Control *)self);
 }
 
 bool controlSelectionHandleMouse(Control *self, TuiMsg msg) {
@@ -281,11 +298,11 @@ void controlButtonConstruct(ControlButton *self, int height, int width, int y,
     controlConstruct((Control *)self, height, width, y, x, true, false);
     self->base.vtable = defaultBtnVtable;
     if (draw != NULL) {
-        self->base.vtable.draw = (void (*)(void *))draw;
+        self->base.vtable.draw = (void (*)(Control *))draw;
     }
     self->onClick = onClick;
-    self->base.commonMsgHandlers.resize = (void (*)(void *))resize;
-    self->base.commonMsgHandlers.refresh = (void (*)(void *))refresh;
+    self->base.commonMsgHandlers.resize = (void (*)(Control *))resize;
+    self->base.commonMsgHandlers.refresh = (void (*)(Control *))refresh;
     self->text = malloc(sizeof(char) * BTN_LABEL_MAXLEN);
     if (self->text == NULL) {
         LOG_ERROR("malloc failed for button text");
@@ -295,55 +312,49 @@ void controlButtonConstruct(ControlButton *self, int height, int width, int y,
     self->text[BTN_LABEL_MAXLEN - 1] = '\0';
 }
 
-static void controlButtonDestruct(void *self) {
-    ControlButton *btn = (ControlButton *)self;
-    free(btn->text);
-}
+static void controlButtonDestruct(ControlButton *self) { free(self->text); }
 
-void controlButtonDraw(void *self) {
-    ControlButton *btn = (ControlButton *)self;
-    werase(btn->base.windowHandler);
+void controlButtonDraw(ControlButton *self) {
+    werase(self->base.windowHandler);
 
-    if (btn->base.focused) {
-        DOUBLE_BOX(btn->base.windowHandler);
+    if (self->base.focused) {
+        DOUBLE_BOX(self->base.windowHandler);
     } else {
-        box(btn->base.windowHandler, 0, 0);
+        box(self->base.windowHandler, 0, 0);
     }
 
-    if (btn->text != NULL) {
-        size_t textLen = strlen(btn->text);
-        mvwprintw(btn->base.windowHandler, btn->base.height / 2,
-                  btn->base.width / 2 - textLen / 2, "%s", btn->text);
+    if (self->text != NULL) {
+        size_t textLen = strlen(self->text);
+        mvwprintw(self->base.windowHandler, self->base.height / 2,
+                  self->base.width / 2 - textLen / 2, "%s", self->text);
     }
 
-    wnoutrefresh(btn->base.windowHandler);
+    wnoutrefresh(self->base.windowHandler);
 }
 
-static void controlButtonMsgHandler(void *self, TuiMsg msg) {
-    ControlButton *btn = (ControlButton *)self;
+static void controlButtonMsgHandler(ControlButton *self, TuiMsg msg) {
     switch (msg.type) {
     case MsgInput: {
         if ((msg.arg1.input == '\n' || msg.arg1.input == '\r' ||
              msg.arg1.input == KEY_ENTER) &&
-            btn->onClick != NULL) {
-            btn->onClick(btn);
+            self->onClick != NULL) {
+            self->onClick(self);
         }
         break;
     }
     case MsgRefresh:
-        if (btn->base.commonMsgHandlers.refresh != NULL) {
-            btn->base.commonMsgHandlers.refresh(btn);
+        if (self->base.commonMsgHandlers.refresh != NULL) {
+            self->base.commonMsgHandlers.refresh((Control *)self);
         }
         break;
     case MsgResize:
-        if (btn->base.commonMsgHandlers.resize != NULL) {
-            btn->base.commonMsgHandlers.resize(btn);
+        if (self->base.commonMsgHandlers.resize != NULL) {
+            self->base.commonMsgHandlers.resize((Control *)self);
         }
         break;
     case MsgMouse:
-        if ((msg.arg2.input & BUTTON1_CLICKED) != 0 &&
-            btn->onClick != NULL) {
-            btn->onClick(btn);
+        if ((msg.arg2.input & BUTTON1_CLICKED) != 0 && self->onClick != NULL) {
+            self->onClick(self);
         }
         break;
     default:
@@ -356,7 +367,7 @@ void controlGridConstruct(ControlGrid *self, int height, int width, int y,
                           size_t vmargin, void (*draw)(ControlGrid *),
                           void (*resize)(ControlGrid *self),
                           void (*refresh)(ControlGrid *self),
-                          void (*layout)(void *, void *)) {
+                          void (*layout)(ControlGrid *, Control *)) {
     controlConstruct((Control *)self, height, width, y, x, false, true);
     self->base.vtable = defaultGridVtable;
     self->layoutMethod = layoutMethod;
@@ -366,10 +377,10 @@ void controlGridConstruct(ControlGrid *self, int height, int width, int y,
     self->layoutAccCol = 0;
     self->layoutAccRow = 0;
     if (draw != NULL) {
-        self->base.vtable.draw = (void (*)(void *))draw;
+        self->base.vtable.draw = (void (*)(Control *))draw;
     }
-    self->base.commonMsgHandlers.resize = (void (*)(void *))resize;
-    self->base.commonMsgHandlers.refresh = (void (*)(void *))refresh;
+    self->base.commonMsgHandlers.resize = (void (*)(Control *))resize;
+    self->base.commonMsgHandlers.refresh = (void (*)(Control *))refresh;
     if (layout != NULL) {
         self->layout = layout;
     } else {
@@ -377,74 +388,72 @@ void controlGridConstruct(ControlGrid *self, int height, int width, int y,
     }
 }
 
-void controlGridDraw(void *self) {
-    ControlGrid *grid = (ControlGrid *)self;
-    werase(grid->base.windowHandler);
+void controlGridDraw(ControlGrid *self) {
+    werase(self->base.windowHandler);
 
-    box(grid->base.windowHandler, 0, 0);
+    box(self->base.windowHandler, 0, 0);
 
-    wnoutrefresh(grid->base.windowHandler);
+    wnoutrefresh(self->base.windowHandler);
 }
 
-static void controlGridMsgHandler(void *self, TuiMsg msg) {
-    ControlGrid *grid = (ControlGrid *)self;
+static void controlGridMsgHandler(ControlGrid *self, TuiMsg msg) {
     switch (msg.type) {
     case MsgRefresh:
-        if (grid->base.commonMsgHandlers.refresh != NULL) {
-            grid->base.commonMsgHandlers.refresh(grid);
+        if (self->base.commonMsgHandlers.refresh != NULL) {
+            self->base.commonMsgHandlers.refresh((Control *)self);
         }
         break;
     case MsgResize:
-        if (grid->base.commonMsgHandlers.resize != NULL) {
-            grid->base.commonMsgHandlers.resize(grid);
+        if (self->base.commonMsgHandlers.resize != NULL) {
+            self->base.commonMsgHandlers.resize((Control *)self);
         }
-        tuiAppPushMessage(
-            (TuiMsg){.type = MsgFetch,
-                     .arg1 = {.index = grid->base.index},
-                     .arg2 = {.fetchRecv = ((ControlGrid *)self)->layout}});
+        tuiAppPushMessage((TuiMsg){
+            .type = MsgFetch,
+            .arg1 = {.index = self->base.index},
+            .arg2 = {.fetchRecv =
+                         (void (*)(Control *, Control *))self->layout}});
         break;
     default:
         break;
     }
 }
 
-static void controlGridLayout(void *self, void *child) {
-    ControlGrid *grid = (ControlGrid *)self;
+static void controlGridLayout(ControlGrid *self, Control *child) {
     Control *ch = (Control *)child;
-    if (grid->layoutCounter == 0) {
-        grid->layoutAccCol = grid->margin.horizontal;
-        grid->layoutAccRow = grid->margin.vertical;
+    if (self->layoutCounter == 0) {
+        self->layoutAccCol = self->margin.horizontal;
+        self->layoutAccRow = self->margin.vertical;
     }
-    switch (grid->layoutMethod) {
+    switch (self->layoutMethod) {
     case LayoutHorizontal: {
-        if (grid->layoutAccCol + ch->width >
-            (size_t)grid->base.width - grid->margin.horizontal) {
-            grid->layoutAccCol = grid->margin.horizontal;
-            grid->layoutAccRow += grid->margin.vertical + ch->height;
+        if (self->layoutAccCol + ch->width >
+            (size_t)self->base.width - self->margin.horizontal) {
+            self->layoutAccCol = self->margin.horizontal;
+            self->layoutAccRow += self->margin.vertical + ch->height;
         }
-        ch->x = (int)grid->layoutAccCol;
-        ch->y = (int)grid->layoutAccRow;
-        grid->layoutAccCol += (size_t)ch->width;
+        ch->x = (int)self->layoutAccCol;
+        ch->y = (int)self->layoutAccRow;
+        self->layoutAccCol += (size_t)ch->width;
         break;
     }
     case LayoutVertical: {
-        if (grid->layoutAccRow + ch->height >
-            (size_t)grid->base.height - grid->margin.vertical) {
-            grid->layoutAccRow = grid->margin.vertical;
-            grid->layoutAccCol += grid->margin.horizontal + ch->width;
+        if (self->layoutAccRow + ch->height >
+            (size_t)self->base.height - self->margin.vertical) {
+            self->layoutAccRow = self->margin.vertical;
+            self->layoutAccCol += self->margin.horizontal + ch->width;
         }
-        ch->x = (int)grid->layoutAccCol;
-        ch->y = (int)grid->layoutAccRow;
-        grid->layoutAccRow += (size_t)ch->height;
+        ch->x = (int)self->layoutAccCol;
+        ch->y = (int)self->layoutAccRow;
+        self->layoutAccRow += (size_t)ch->height;
         break;
     }
     default:
         break;
     }
     controlDeinstantiate(ch);
-    controlInstantiate(ch, (Control *)grid);
-    if (grid->base.childCount > 0) {
-        grid->layoutCounter = (grid->layoutCounter + 1) % grid->base.childCount;
+    controlInstantiate(ch, (Control *)self);
+    if (self->base.childCount > 0) {
+        self->layoutCounter = (self->layoutCounter + 1) % self->base.childCount;
     }
 }
 
@@ -459,28 +468,27 @@ void controlLabelConstruct(ControlLabel *self, const char *text,
                      false, false);
     self->base.vtable = defaultLabelVtable;
     if (draw != NULL) {
-        self->base.vtable.draw = (void (*)(void *))draw;
+        self->base.vtable.draw = (void (*)(Control *))draw;
     }
-    self->base.commonMsgHandlers.resize = (void (*)(void *))resize;
-    self->base.commonMsgHandlers.refresh = (void (*)(void *))refresh;
+    self->base.commonMsgHandlers.resize = (void (*)(Control *))resize;
+    self->base.commonMsgHandlers.refresh = (void (*)(Control *))refresh;
     self->text = malloc(sizeof(char) * LABEL_TEXT_MAXLEN);
     if (self->text == NULL) {
-        LOG_ERROR("malloc failed for label text");
+        LOG_ERROR("malloc failed for self text");
         return;
     }
     strncpy(self->text, text, LABEL_TEXT_MAXLEN);
     self->text[LABEL_TEXT_MAXLEN - 1] = '\0';
 }
 
-void controlLabelDraw(void *self) {
-    ControlLabel *label = (ControlLabel *)self;
-    werase(label->base.windowHandler);
+void controlLabelDraw(ControlLabel *self) {
+    werase(self->base.windowHandler);
 
-    if (label->text != NULL) {
-        size_t textLen = strlen(label->text);
-        if (label->base.selection.active && textLen > 0) {
-            size_t selStart = label->base.selection.startByte;
-            size_t selEnd = label->base.selection.endByte;
+    if (self->text != NULL) {
+        size_t textLen = strlen(self->text);
+        if (self->base.selection.active && textLen > 0) {
+            size_t selStart = self->base.selection.startByte;
+            size_t selEnd = self->base.selection.endByte;
 
             if (selStart > selEnd) {
                 size_t tmp = selStart;
@@ -495,73 +503,68 @@ void controlLabelDraw(void *self) {
             }
 
             if (selStart > 0) {
-                mvwprintw(label->base.windowHandler, 0, 0, "%.*s",
-                          (int)selStart, label->text);
+                mvwprintw(self->base.windowHandler, 0, 0, "%.*s", (int)selStart,
+                          self->text);
             }
             if (selEnd > selStart) {
-                wattron(label->base.windowHandler, A_REVERSE);
-                mvwprintw(label->base.windowHandler, 0, (int)selStart, "%.*s",
-                          (int)(selEnd - selStart), label->text + selStart);
-                wattroff(label->base.windowHandler, A_REVERSE);
+                wattron(self->base.windowHandler, A_REVERSE);
+                mvwprintw(self->base.windowHandler, 0, (int)selStart, "%.*s",
+                          (int)(selEnd - selStart), self->text + selStart);
+                wattroff(self->base.windowHandler, A_REVERSE);
             }
             if (selEnd < textLen) {
-                mvwprintw(label->base.windowHandler, 0, (int)selEnd, "%.*s",
-                          (int)(textLen - selEnd), label->text + selEnd);
+                mvwprintw(self->base.windowHandler, 0, (int)selEnd, "%.*s",
+                          (int)(textLen - selEnd), self->text + selEnd);
             }
         } else {
-            mvwprintw(label->base.windowHandler, 0, 0, "%s", label->text);
+            mvwprintw(self->base.windowHandler, 0, 0, "%s", self->text);
         }
     }
 
-    wnoutrefresh(label->base.windowHandler);
+    wnoutrefresh(self->base.windowHandler);
 }
 
-static void controlLabelDestruct(void *self) {
-    ControlLabel *label = (ControlLabel *)self;
-    free(label->text);
-}
+static void controlLabelDestruct(ControlLabel *self) { free(self->text); }
 
-static void controlLabelMsgHandler(void *self, TuiMsg msg) {
-    ControlLabel *label = (ControlLabel *)self;
+static void controlLabelMsgHandler(ControlLabel *self, TuiMsg msg) {
     switch (msg.type) {
     case MsgResize:
-        if (label->base.commonMsgHandlers.resize != NULL) {
-            label->base.commonMsgHandlers.resize(label);
+        if (self->base.commonMsgHandlers.resize != NULL) {
+            self->base.commonMsgHandlers.resize((Control *)self);
         }
         break;
     case MsgRefresh:
-        if (label->base.commonMsgHandlers.refresh != NULL) {
-            label->base.commonMsgHandlers.refresh(label);
+        if (self->base.commonMsgHandlers.refresh != NULL) {
+            self->base.commonMsgHandlers.refresh((Control *)self);
         }
         break;
     case MsgMouse:
-        controlSelectionHandleMouse((Control *)label, msg);
+        controlSelectionHandleMouse((Control *)self, msg);
         break;
     default:
         break;
     }
 }
 
-static const char *labelGetSelectableText(void *self, size_t *outLen) {
-    ControlLabel *label = (ControlLabel *)self;
-    if (label->text == NULL) {
+static const char *labelGetSelectableText(ControlLabel *self, size_t *outLen) {
+    if (self->text == NULL) {
         *outLen = 0;
         return NULL;
     }
-    *outLen = strlen(label->text);
-    return label->text;
+    *outLen = strlen(self->text);
+    return self->text;
 }
 
-static size_t labelCoordToByteOffset(void *self, int localY, int localX) {
-    ControlLabel *label = (ControlLabel *)self;
+static size_t labelCoordToByteOffset(ControlLabel *self, int localY,
+                                     int localX) {
     size_t textLen;
     size_t offset;
     (void)localY;
 
-    if (label->text == NULL) {
+    if (self->text == NULL) {
         return 0;
     }
-    textLen = strlen(label->text);
+    textLen = strlen(self->text);
     if (localX < 0) {
         return 0;
     }
@@ -584,13 +587,13 @@ void controlInputBoxConstruct(ControlInputBox *self, int width, int y, int x,
                      false);
     self->base.vtable = defaultInputBoxVtable;
     if (draw != NULL) {
-        self->base.vtable.draw = (void (*)(void *))draw;
+        self->base.vtable.draw = (void (*)(Control *))draw;
     }
-    self->base.commonMsgHandlers.resize = (void (*)(void *))resize;
-    self->base.commonMsgHandlers.refresh = (void (*)(void *))refresh;
+    self->base.commonMsgHandlers.resize = (void (*)(Control *))resize;
+    self->base.commonMsgHandlers.refresh = (void (*)(Control *))refresh;
     self->buf = malloc(sizeof(char) * INPUTBOX_BUF_MAX_LEN);
     if (self->buf == NULL) {
-        LOG_ERROR("malloc failed for input box buffer");
+        LOG_ERROR("malloc failed for input self buffer");
         return;
     }
     self->curLen = 0;
@@ -600,143 +603,148 @@ void controlInputBoxConstruct(ControlInputBox *self, int width, int y, int x,
     self->submit = submit;
 }
 
-void controlInputBoxDraw(void *self) {
-    ControlInputBox *box = (ControlInputBox *)self;
-    werase(box->base.windowHandler);
+void controlInputBoxDraw(ControlInputBox *self) {
+    werase(self->base.windowHandler);
 
-    if (box->base.focused) {
-        if (box->base.takeOverInput) {
-            DOUBLE_BOX(box->base.windowHandler);
+    if (self->base.focused) {
+        if (self->base.takeOverInput) {
+            DOUBLE_BOX(self->base.windowHandler);
         } else {
-            customBox(box->base.windowHandler, L"┊", L"┊", L"╌", L"╌", L"┌",
+            customBox(self->base.windowHandler, L"┊", L"┊", L"╌", L"╌", L"┌",
                       L"┐", L"└", L"┘");
         }
     } else {
-        box(box->base.windowHandler, 0, 0);
+        box(self->base.windowHandler, 0, 0);
     }
 
-    if (box->buf != NULL) {
-        size_t selStart = box->base.selection.startByte;
-        size_t selEnd = box->base.selection.endByte;
+    if (self->buf != NULL) {
+        size_t selStart = self->base.selection.startByte;
+        size_t selEnd = self->base.selection.endByte;
         if (selStart > selEnd) {
             size_t tmp = selStart;
             selStart = selEnd;
             selEnd = tmp;
         }
 
-        for (size_t i = box->viewBegin;
-             i <= box->viewBegin + (size_t)box->base.width - 3 &&
-             i <= box->curLen;
+        for (size_t i = self->viewBegin;
+             i <= self->viewBegin + (size_t)self->base.width - 3 &&
+             i <= self->curLen;
              ++i) {
-            int curX = 1 + (int)i - (int)box->viewBegin;
-            char dest = box->hideContent ? '*' : box->buf[i];
+            int curX = 1 + (int)i - (int)self->viewBegin;
+            char dest = self->hideContent ? '*' : self->buf[i];
             attr_t attr = 0;
 
-            if (i == box->curLoc && box->base.focused) {
+            if (i == self->curLoc && self->base.focused) {
                 attr |= A_REVERSE;
             }
-            if (box->base.selection.active && i >= selStart && i < selEnd) {
+            if (self->base.selection.active && i >= selStart && i < selEnd) {
                 attr |= A_REVERSE;
             }
 
-            if (i == box->curLoc) {
-                mvwaddch(box->base.windowHandler, 1, curX,
-                         (chtype)(i == box->curLen ? ' ' : dest) | attr);
-            } else if (i < box->curLen) {
-                mvwaddch(box->base.windowHandler, 1, curX, (chtype)dest | attr);
+            if (i == self->curLoc) {
+                mvwaddch(self->base.windowHandler, 1, curX,
+                         (chtype)(i == self->curLen ? ' ' : dest) | attr);
+            } else if (i < self->curLen) {
+                mvwaddch(self->base.windowHandler, 1, curX,
+                         (chtype)dest | attr);
             }
         }
     }
 
-    wnoutrefresh(box->base.windowHandler);
+    wnoutrefresh(self->base.windowHandler);
 }
 
-static void controlInputBoxDestruct(void *self) {
-    ControlInputBox *box = (ControlInputBox *)self;
-    free(box->buf);
-}
+static void controlInputBoxDestruct(ControlInputBox *self) { free(self->buf); }
 
-static void controlInputBoxMsgHandler(void *self, TuiMsg msg) {
-    ControlInputBox *box = (ControlInputBox *)self;
+static void controlInputBoxMsgHandler(ControlInputBox *self, TuiMsg msg) {
     switch (msg.type) {
     case MsgResize:
-        if (box->base.commonMsgHandlers.resize != NULL) {
-            box->base.commonMsgHandlers.resize(box);
+        if (self->base.commonMsgHandlers.resize != NULL) {
+            self->base.commonMsgHandlers.resize((Control *)self);
         }
         break;
     case MsgRefresh:
-        if (box->base.commonMsgHandlers.refresh != NULL) {
-            box->base.commonMsgHandlers.refresh(box);
+        if (self->base.commonMsgHandlers.refresh != NULL) {
+            self->base.commonMsgHandlers.refresh((Control *)self);
         }
         break;
     case MsgFocusEnter:
-        box->base.takeOverInput = true;
+        self->base.takeOverInput = true;
         break;
     case MsgInput: {
         switch (msg.arg1.input) {
         case '\n':
         case '\r':
         case KEY_ENTER:
-            if (box->submit != NULL) {
-                box->submit(box);
+            if (self->submit != NULL) {
+                self->submit(self);
+            } else {
+                tuiAppPushMessage((TuiMsg){.type = MsgCursorNext});
             }
-            box->base.takeOverInput = false;
+            self->base.takeOverInput = false;
             break;
         case '\e':
-            box->base.takeOverInput = false;
+            self->base.takeOverInput = false;
+            break;
+        case '\t':
+            tuiAppPushMessage((TuiMsg){.type = MsgCursorNext});
+            break;
+        case KEY_BTAB:
+            tuiAppPushMessage((TuiMsg){.type = MsgCursorPrev});
             break;
         case KEY_LEFT:
-            if (box->curLoc > 0) {
-                --box->curLoc;
+            if (self->curLoc > 0) {
+                --self->curLoc;
             }
             break;
         case KEY_RIGHT:
-            if (box->curLoc < box->curLen) {
-                ++box->curLoc;
+            if (self->curLoc < self->curLen) {
+                ++self->curLoc;
             }
             break;
         case KEY_UP:
         case KEY_HOME:
-            box->curLoc = 0;
+            self->curLoc = 0;
             break;
         case KEY_DOWN:
         case KEY_END:
-            box->curLoc = box->curLen;
+            self->curLoc = self->curLen;
             break;
         default: {
-            box->base.takeOverInput = true;
+            self->base.takeOverInput = true;
             if (msg.arg1.input == KEY_BACKSPACE) {
-                if (box->curLoc > 0) {
-                    if (box->curLoc < box->curLen) {
-                        memmove(box->buf + box->curLoc - 1,
-                                box->buf + box->curLoc,
-                                box->curLen - box->curLoc);
+                if (self->curLoc > 0) {
+                    if (self->curLoc < self->curLen) {
+                        memmove(self->buf + self->curLoc - 1,
+                                self->buf + self->curLoc,
+                                self->curLen - self->curLoc);
                     }
-                    --box->curLoc;
-                    --box->curLen;
+                    --self->curLoc;
+                    --self->curLen;
                 }
             } else if (msg.arg1.input == KEY_DC) {
-                if (box->curLoc < box->curLen) {
-                    memmove(box->buf + box->curLoc, box->buf + box->curLoc + 1,
-                            box->curLen - box->curLoc - 1);
-                    --box->curLen;
+                if (self->curLoc < self->curLen) {
+                    memmove(self->buf + self->curLoc,
+                            self->buf + self->curLoc + 1,
+                            self->curLen - self->curLoc - 1);
+                    --self->curLen;
                 }
             } else {
                 if (msg.arg1.input < ' ' || msg.arg1.input > '~') {
                     break;
                 }
-                if (box->curLen < INPUTBOX_BUF_MAX_LEN) {
-                    if (box->curLoc == box->curLen) {
-                        box->buf[box->curLoc] = (char)msg.arg1.input;
-                        ++box->curLoc;
+                if (self->curLen < INPUTBOX_BUF_MAX_LEN) {
+                    if (self->curLoc == self->curLen) {
+                        self->buf[self->curLoc] = (char)msg.arg1.input;
+                        ++self->curLoc;
                     } else {
-                        memmove(box->buf + box->curLoc + 1,
-                                box->buf + box->curLoc,
-                                box->curLen - box->curLoc);
-                        box->buf[box->curLoc] = (char)msg.arg1.input;
-                        ++box->curLoc;
+                        memmove(self->buf + self->curLoc + 1,
+                                self->buf + self->curLoc,
+                                self->curLen - self->curLoc);
+                        self->buf[self->curLoc] = (char)msg.arg1.input;
+                        ++self->curLoc;
                     }
-                    ++box->curLen;
+                    ++self->curLen;
                 }
             }
             break;
@@ -745,42 +753,42 @@ static void controlInputBoxMsgHandler(void *self, TuiMsg msg) {
         break;
     }
     case MsgMouse:
-        controlSelectionHandleMouse((Control *)box, msg);
+        controlSelectionHandleMouse((Control *)self, msg);
         break;
     default:
         break;
     }
-    if (box->curLoc >= ((size_t)box->base.width - 2) + box->viewBegin) {
-        box->viewBegin = box->curLoc - ((size_t)box->base.width - 2) + 1;
-    } else if (box->viewBegin > 0 && box->curLoc <= box->viewBegin) {
-        box->viewBegin = box->curLoc > 0 ? box->curLoc - 1 : 0;
+    if (self->curLoc >= ((size_t)self->base.width - 2) + self->viewBegin) {
+        self->viewBegin = self->curLoc - ((size_t)self->base.width - 2) + 1;
+    } else if (self->viewBegin > 0 && self->curLoc <= self->viewBegin) {
+        self->viewBegin = self->curLoc > 0 ? self->curLoc - 1 : 0;
     }
 }
 
-static const char *inputBoxGetSelectableText(void *self, size_t *outLen) {
-    ControlInputBox *box = (ControlInputBox *)self;
-    if (box->buf == NULL || box->hideContent) {
+static const char *inputBoxGetSelectableText(ControlInputBox *self,
+                                             size_t *outLen) {
+    if (self->buf == NULL || self->hideContent) {
         *outLen = 0;
         return NULL;
     }
-    *outLen = box->curLen;
-    return box->buf;
+    *outLen = self->curLen;
+    return self->buf;
 }
 
-static size_t inputBoxCoordToByteOffset(void *self, int localY, int localX) {
-    ControlInputBox *box = (ControlInputBox *)self;
+static size_t inputBoxCoordToByteOffset(ControlInputBox *self, int localY,
+                                        int localX) {
     size_t offset;
     (void)localY;
 
     if (localX <= 1) {
-        return box->viewBegin;
+        return self->viewBegin;
     }
-    offset = box->viewBegin + (size_t)(localX - 1);
-    return (offset > box->curLen) ? box->curLen : offset;
+    offset = self->viewBegin + (size_t)(localX - 1);
+    return (offset > self->curLen) ? self->curLen : offset;
 }
 
-void controlTextBoxConstruct(ControlTextBox *self, int height, int width,
-                             int y, int x, const char *text,
+void controlTextBoxConstruct(ControlTextBox *self, int height, int width, int y,
+                             int x, const char *text,
                              void (*draw)(ControlTextBox *),
                              void (*resize)(ControlTextBox *self),
                              void (*refresh)(ControlTextBox *self)) {
@@ -794,13 +802,13 @@ void controlTextBoxConstruct(ControlTextBox *self, int height, int width,
     controlConstruct((Control *)self, height, width, y, x, true, false);
     self->base.vtable = defaultTextBoxVtable;
     if (draw != NULL) {
-        self->base.vtable.draw = (void (*)(void *))draw;
+        self->base.vtable.draw = (void (*)(Control *))draw;
     }
-    self->base.commonMsgHandlers.resize = (void (*)(void *))resize;
-    self->base.commonMsgHandlers.refresh = (void (*)(void *))refresh;
+    self->base.commonMsgHandlers.resize = (void (*)(Control *))resize;
+    self->base.commonMsgHandlers.refresh = (void (*)(Control *))refresh;
     self->text = malloc(sizeof(char) * TEXTBOX_TEXT_MAXLEN);
     if (self->text == NULL) {
-        LOG_ERROR("malloc failed for text box text");
+        LOG_ERROR("malloc failed for text self text");
         return;
     }
     strncpy(self->text, text, TEXTBOX_TEXT_MAXLEN);
@@ -809,14 +817,14 @@ void controlTextBoxConstruct(ControlTextBox *self, int height, int width,
     self->viewBegin = 0;
 }
 
-static const char *textBoxGetSelectableText(void *self, size_t *outLen) {
-    ControlTextBox *box = (ControlTextBox *)self;
-    if (box->text == NULL) {
+static const char *textBoxGetSelectableText(ControlTextBox *self,
+                                            size_t *outLen) {
+    if (self->text == NULL) {
         *outLen = 0;
         return NULL;
     }
-    *outLen = box->textLen;
-    return box->text;
+    *outLen = self->textLen;
+    return self->text;
 }
 
 static size_t textBoxAdvanceVisualLine(const char *text, size_t textLen,
@@ -869,16 +877,16 @@ static size_t textBoxCountVisualLines(const char *text, size_t textLen,
     return count;
 }
 
-static bool textBoxGetVisualLineRange(const ControlTextBox *box,
+static bool textBoxGetVisualLineRange(const ControlTextBox *self,
                                       size_t visualLineIdx, size_t *outStart,
                                       size_t *outEnd) {
-    int availWidth = box->base.width - 2;
+    int availWidth = self->base.width - 2;
     size_t offset;
     bool isContinuation;
     size_t curLine;
     size_t renderStart;
 
-    if (availWidth < 1 || box->text == NULL) {
+    if (availWidth < 1 || self->text == NULL) {
         return false;
     }
 
@@ -886,31 +894,31 @@ static bool textBoxGetVisualLineRange(const ControlTextBox *box,
     isContinuation = false;
     curLine = 0;
 
-    while (curLine < visualLineIdx && offset < box->textLen) {
-        offset = textBoxAdvanceVisualLine(box->text, box->textLen, offset,
+    while (curLine < visualLineIdx && offset < self->textLen) {
+        offset = textBoxAdvanceVisualLine(self->text, self->textLen, offset,
                                           availWidth, &isContinuation);
         curLine++;
     }
 
-    if (offset >= box->textLen) {
+    if (offset >= self->textLen) {
         return false;
     }
 
     renderStart = offset;
     if (isContinuation) {
-        while (renderStart < box->textLen && box->text[renderStart] == ' ') {
+        while (renderStart < self->textLen && self->text[renderStart] == ' ') {
             renderStart++;
         }
     }
 
-    offset = textBoxAdvanceVisualLine(box->text, box->textLen, offset,
+    offset = textBoxAdvanceVisualLine(self->text, self->textLen, offset,
                                       availWidth, &isContinuation);
 
     *outEnd = offset;
-    if (*outEnd > renderStart && box->text[*outEnd - 1] == '\n') {
+    if (*outEnd > renderStart && self->text[*outEnd - 1] == '\n') {
         (*outEnd)--;
     }
-    while (*outEnd > renderStart && box->text[*outEnd - 1] == ' ') {
+    while (*outEnd > renderStart && self->text[*outEnd - 1] == ' ') {
         (*outEnd)--;
     }
 
@@ -918,8 +926,8 @@ static bool textBoxGetVisualLineRange(const ControlTextBox *box,
     return true;
 }
 
-static size_t textBoxCoordToByteOffset(void *self, int localY, int localX) {
-    ControlTextBox *box = (ControlTextBox *)self;
+static size_t textBoxCoordToByteOffset(ControlTextBox *self, int localY,
+                                       int localX) {
     int availWidth;
     int visibleLines;
     size_t visualLineIdx;
@@ -928,10 +936,10 @@ static size_t textBoxCoordToByteOffset(void *self, int localY, int localX) {
     size_t charOff;
     size_t result;
 
-    availWidth = box->base.width - 2;
-    visibleLines = box->base.height - 2;
-    if (availWidth < 1 || visibleLines < 1 || box->text == NULL ||
-        box->textLen == 0) {
+    availWidth = self->base.width - 2;
+    visibleLines = self->base.height - 2;
+    if (availWidth < 1 || visibleLines < 1 || self->text == NULL ||
+        self->textLen == 0) {
         return 0;
     }
 
@@ -939,10 +947,10 @@ static size_t textBoxCoordToByteOffset(void *self, int localY, int localX) {
         localY = 1;
     }
 
-    visualLineIdx = box->viewBegin + (size_t)(localY - 1);
+    visualLineIdx = self->viewBegin + (size_t)(localY - 1);
 
-    if (!textBoxGetVisualLineRange(box, visualLineIdx, &lineStart, &lineEnd)) {
-        return box->textLen;
+    if (!textBoxGetVisualLineRange(self, visualLineIdx, &lineStart, &lineEnd)) {
+        return self->textLen;
     }
 
     if (localX < 1) {
@@ -957,20 +965,19 @@ static size_t textBoxCoordToByteOffset(void *self, int localY, int localX) {
     return result;
 }
 
-void controlTextBoxDraw(void *self) {
-    ControlTextBox *box = (ControlTextBox *)self;
-    werase(box->base.windowHandler);
+void controlTextBoxDraw(ControlTextBox *self) {
+    werase(self->base.windowHandler);
 
-    if (box->base.focused) {
-        DOUBLE_BOX(box->base.windowHandler);
+    if (self->base.focused) {
+        DOUBLE_BOX(self->base.windowHandler);
     } else {
-        box(box->base.windowHandler, 0, 0);
+        box(self->base.windowHandler, 0, 0);
     }
 
-    int availWidth = box->base.width - 2;
-    int visibleLines = box->base.height - 2;
-    if (availWidth < 1 || visibleLines < 1 || box->text == NULL) {
-        wnoutrefresh(box->base.windowHandler);
+    int availWidth = self->base.width - 2;
+    int visibleLines = self->base.height - 2;
+    if (availWidth < 1 || visibleLines < 1 || self->text == NULL) {
+        wnoutrefresh(self->base.windowHandler);
         return;
     }
 
@@ -978,30 +985,30 @@ void controlTextBoxDraw(void *self) {
     bool isContinuation = false;
     size_t visualLine = 0;
 
-    while (visualLine < box->viewBegin && offset < box->textLen) {
-        offset = textBoxAdvanceVisualLine(box->text, box->textLen, offset,
+    while (visualLine < self->viewBegin && offset < self->textLen) {
+        offset = textBoxAdvanceVisualLine(self->text, self->textLen, offset,
                                           availWidth, &isContinuation);
         visualLine++;
     }
 
     int curY = 1;
-    while (curY <= visibleLines && offset < box->textLen) {
+    while (curY <= visibleLines && offset < self->textLen) {
         size_t renderStart = offset;
         if (isContinuation) {
-            while (renderStart < box->textLen &&
-                   box->text[renderStart] == ' ') {
+            while (renderStart < self->textLen &&
+                   self->text[renderStart] == ' ') {
                 renderStart++;
             }
         }
 
-        offset = textBoxAdvanceVisualLine(box->text, box->textLen, offset,
+        offset = textBoxAdvanceVisualLine(self->text, self->textLen, offset,
                                           availWidth, &isContinuation);
 
         size_t end = offset;
-        if (end > renderStart && box->text[end - 1] == '\n') {
+        if (end > renderStart && self->text[end - 1] == '\n') {
             end--;
         }
-        while (end > renderStart && box->text[end - 1] == ' ') {
+        while (end > renderStart && self->text[end - 1] == ' ') {
             end--;
         }
 
@@ -1010,9 +1017,9 @@ void controlTextBoxDraw(void *self) {
             continue;
         }
 
-        if (box->base.selection.active) {
-            size_t selStart = box->base.selection.startByte;
-            size_t selEnd = box->base.selection.endByte;
+        if (self->base.selection.active) {
+            size_t selStart = self->base.selection.startByte;
+            size_t selEnd = self->base.selection.endByte;
 
             if (selStart > selEnd) {
                 size_t tmp = selStart;
@@ -1028,130 +1035,126 @@ void controlTextBoxDraw(void *self) {
                 hlEnd = (selEnd < end) ? selEnd : end;
 
                 if (hlStart > renderStart) {
-                    mvwprintw(box->base.windowHandler, curY, 1, "%.*s",
+                    mvwprintw(self->base.windowHandler, curY, 1, "%.*s",
                               (int)(hlStart - renderStart),
-                              box->text + renderStart);
+                              self->text + renderStart);
                 }
-                wattron(box->base.windowHandler, A_REVERSE);
-                mvwprintw(box->base.windowHandler,
-                          curY, 1 + (int)(hlStart - renderStart), "%.*s",
-                          (int)(hlEnd - hlStart), box->text + hlStart);
-                wattroff(box->base.windowHandler, A_REVERSE);
+                wattron(self->base.windowHandler, A_REVERSE);
+                mvwprintw(self->base.windowHandler, curY,
+                          1 + (int)(hlStart - renderStart), "%.*s",
+                          (int)(hlEnd - hlStart), self->text + hlStart);
+                wattroff(self->base.windowHandler, A_REVERSE);
                 if (hlEnd < end) {
-                    mvwprintw(box->base.windowHandler,
-                              curY, 1 + (int)(hlEnd - renderStart), "%.*s",
-                              (int)(end - hlEnd), box->text + hlEnd);
+                    mvwprintw(self->base.windowHandler, curY,
+                              1 + (int)(hlEnd - renderStart), "%.*s",
+                              (int)(end - hlEnd), self->text + hlEnd);
                 }
             } else {
-                mvwprintw(box->base.windowHandler, curY, 1, "%.*s",
-                          (int)(end - renderStart), box->text + renderStart);
+                mvwprintw(self->base.windowHandler, curY, 1, "%.*s",
+                          (int)(end - renderStart), self->text + renderStart);
             }
         } else {
-            mvwprintw(box->base.windowHandler, curY, 1, "%.*s",
-                      (int)(end - renderStart), box->text + renderStart);
+            mvwprintw(self->base.windowHandler, curY, 1, "%.*s",
+                      (int)(end - renderStart), self->text + renderStart);
         }
         curY++;
     }
 
-    wnoutrefresh(box->base.windowHandler);
+    wnoutrefresh(self->base.windowHandler);
 }
 
-static void controlTextBoxDestruct(void *self) {
-    ControlTextBox *box = (ControlTextBox *)self;
-    free(box->text);
-}
+static void controlTextBoxDestruct(ControlTextBox *self) { free(self->text); }
 
-static void controlTextBoxMsgHandler(void *self, TuiMsg msg) {
-    ControlTextBox *box = (ControlTextBox *)self;
+static void controlTextBoxMsgHandler(ControlTextBox *self, TuiMsg msg) {
     switch (msg.type) {
     case MsgResize:
-        if (box->base.commonMsgHandlers.resize != NULL) {
-            box->base.commonMsgHandlers.resize(box);
+        if (self->base.commonMsgHandlers.resize != NULL) {
+            self->base.commonMsgHandlers.resize((Control *)self);
         }
         break;
     case MsgRefresh:
-        if (box->base.commonMsgHandlers.refresh != NULL) {
-            box->base.commonMsgHandlers.refresh(box);
+        if (self->base.commonMsgHandlers.refresh != NULL) {
+            self->base.commonMsgHandlers.refresh((Control *)self);
         }
         break;
     case MsgFocusEnter:
-        box->base.focused = true;
+        self->base.focused = true;
         break;
     case MsgFocusLeave:
-        box->base.focused = false;
+        self->base.focused = false;
         break;
     case MsgInput: {
-        int availWidth = box->base.width - 2;
-        int visibleLines = box->base.height - 2;
-        if (availWidth < 1 || visibleLines < 1 || box->text == NULL) {
+        int availWidth = self->base.width - 2;
+        int visibleLines = self->base.height - 2;
+        if (availWidth < 1 || visibleLines < 1 || self->text == NULL) {
             break;
         }
-        size_t totalLines = textBoxCountVisualLines(box->text, box->textLen,
-                                                     availWidth);
+        size_t totalLines =
+            textBoxCountVisualLines(self->text, self->textLen, availWidth);
         size_t maxView = (totalLines > (size_t)visibleLines)
                              ? totalLines - (size_t)visibleLines
                              : 0;
         switch (msg.arg1.input) {
         case KEY_UP:
-            if (box->viewBegin > 0) {
-                box->viewBegin--;
+            if (self->viewBegin > 0) {
+                self->viewBegin--;
             }
             break;
         case KEY_DOWN:
-            if (box->viewBegin < maxView) {
-                box->viewBegin++;
+            if (self->viewBegin < maxView) {
+                self->viewBegin++;
             }
             break;
         case KEY_PPAGE:
-            if (box->viewBegin > (size_t)visibleLines) {
-                box->viewBegin -= (size_t)visibleLines;
+            if (self->viewBegin > (size_t)visibleLines) {
+                self->viewBegin -= (size_t)visibleLines;
             } else {
-                box->viewBegin = 0;
+                self->viewBegin = 0;
             }
             break;
         case KEY_NPAGE:
-            if (box->viewBegin + (size_t)visibleLines < maxView) {
-                box->viewBegin += (size_t)visibleLines;
+            if (self->viewBegin + (size_t)visibleLines < maxView) {
+                self->viewBegin += (size_t)visibleLines;
             } else {
-                box->viewBegin = maxView;
+                self->viewBegin = maxView;
             }
             break;
         case KEY_HOME:
-            box->viewBegin = 0;
+            self->viewBegin = 0;
             break;
         case KEY_END:
-            box->viewBegin = maxView;
+            self->viewBegin = maxView;
             break;
         }
         break;
     }
     case MsgMouse: {
-        int availWidth = box->base.width - 2;
-        int visibleLines = box->base.height - 2;
+        int availWidth = self->base.width - 2;
+        int visibleLines = self->base.height - 2;
         int input;
 
-        if (availWidth < 1 || visibleLines < 1 || box->text == NULL) {
+        if (availWidth < 1 || visibleLines < 1 || self->text == NULL) {
             break;
         }
 
-        if (controlSelectionHandleMouse((Control *)box, msg)) {
+        if (controlSelectionHandleMouse((Control *)self, msg)) {
             break;
         }
 
         input = msg.arg2.input;
         if (input == BUTTON4_PRESSED || input == BUTTON5_PRESSED) {
-            size_t totalLines = textBoxCountVisualLines(box->text, box->textLen,
-                                                         availWidth);
+            size_t totalLines =
+                textBoxCountVisualLines(self->text, self->textLen, availWidth);
             size_t maxView = (totalLines > (size_t)visibleLines)
                                  ? totalLines - (size_t)visibleLines
                                  : 0;
             if (input == BUTTON4_PRESSED) {
-                if (box->viewBegin > 0) {
-                    box->viewBegin--;
+                if (self->viewBegin > 0) {
+                    self->viewBegin--;
                 }
             } else {
-                if (box->viewBegin < maxView) {
-                    box->viewBegin++;
+                if (self->viewBegin < maxView) {
+                    self->viewBegin++;
                 }
             }
         }
@@ -1162,15 +1165,12 @@ static void controlTextBoxMsgHandler(void *self, TuiMsg msg) {
     }
 }
 
-void controlScrollTextBoxConstruct(ControlScrollTextBox *self, int height,
-                                   int width, int y, int x, size_t maxLines,
-                                   void (*draw)(ControlScrollTextBox *),
-                                   void (*resize)(ControlScrollTextBox *self),
-                                   void (*refresh)(ControlScrollTextBox *self)) {
-    enum {
-        ScrollTextBoxMinHeight = 3,
-        ScrollTextBoxMinWidth = 3
-    };
+void controlScrollTextBoxConstruct(
+    ControlScrollTextBox *self, int height, int width, int y, int x,
+    size_t maxLines, void (*draw)(ControlScrollTextBox *),
+    void (*resize)(ControlScrollTextBox *self),
+    void (*refresh)(ControlScrollTextBox *self)) {
+    enum { ScrollTextBoxMinHeight = 3, ScrollTextBoxMinWidth = 3 };
     if (height < ScrollTextBoxMinHeight) {
         height = ScrollTextBoxMinHeight;
     }
@@ -1180,13 +1180,13 @@ void controlScrollTextBoxConstruct(ControlScrollTextBox *self, int height,
     controlConstruct((Control *)self, height, width, y, x, true, false);
     self->base.base.vtable = defaultScrollTextBoxVtable;
     if (draw != NULL) {
-        self->base.base.vtable.draw = (void (*)(void *))draw;
+        self->base.base.vtable.draw = (void (*)(Control *))draw;
     }
-    self->base.base.commonMsgHandlers.resize = (void (*)(void *))resize;
-    self->base.base.commonMsgHandlers.refresh = (void (*)(void *))refresh;
+    self->base.base.commonMsgHandlers.resize = (void (*)(Control *))resize;
+    self->base.base.commonMsgHandlers.refresh = (void (*)(Control *))refresh;
     self->base.text = malloc(sizeof(char) * SCROLLTEXTBOX_TEXT_MAXLEN);
     if (self->base.text == NULL) {
-        LOG_ERROR("malloc failed for scroll text box text");
+        LOG_ERROR("malloc failed for scroll text self text");
         return;
     }
     self->base.text[0] = '\0';
@@ -1197,7 +1197,7 @@ void controlScrollTextBoxConstruct(ControlScrollTextBox *self, int height,
 }
 
 void controlScrollTextBoxAppend(ControlScrollTextBox *self, const char *text) {
-    ControlTextBox *box = &self->base;
+    ControlTextBox *textBox = &self->base;
     size_t appendLen;
 
     if (text == NULL || text[0] == '\0') {
@@ -1206,24 +1206,24 @@ void controlScrollTextBoxAppend(ControlScrollTextBox *self, const char *text) {
 
     appendLen = strlen(text);
 
-    while (box->textLen + appendLen >= SCROLLTEXTBOX_TEXT_MAXLEN &&
-           box->textLen > 0) {
-        const char *nl = memchr(box->text, '\n', box->textLen);
+    while (textBox->textLen + appendLen >= SCROLLTEXTBOX_TEXT_MAXLEN &&
+           textBox->textLen > 0) {
+        const char *nl = memchr(textBox->text, '\n', textBox->textLen);
         if (nl != NULL) {
-            size_t trimLen = (size_t)(nl - box->text) + 1;
-            size_t remaining = box->textLen - trimLen;
-            memmove(box->text, box->text + trimLen, remaining);
-            box->textLen = remaining;
-            box->text[box->textLen] = '\0';
+            size_t trimLen = (size_t)(nl - textBox->text) + 1;
+            size_t remaining = textBox->textLen - trimLen;
+            memmove(textBox->text, textBox->text + trimLen, remaining);
+            textBox->textLen = remaining;
+            textBox->text[textBox->textLen] = '\0';
         } else {
-            box->textLen = 0;
-            box->text[0] = '\0';
+            textBox->textLen = 0;
+            textBox->text[0] = '\0';
             break;
         }
     }
 
     {
-        size_t spaceLeft = SCROLLTEXTBOX_TEXT_MAXLEN - box->textLen - 1;
+        size_t spaceLeft = SCROLLTEXTBOX_TEXT_MAXLEN - textBox->textLen - 1;
         if (spaceLeft == 0) {
             return;
         }
@@ -1232,52 +1232,196 @@ void controlScrollTextBoxAppend(ControlScrollTextBox *self, const char *text) {
         }
     }
 
-    memcpy(box->text + box->textLen, text, appendLen);
-    box->textLen += appendLen;
-    box->text[box->textLen] = '\0';
+    memcpy(textBox->text + textBox->textLen, text, appendLen);
+    textBox->textLen += appendLen;
+    textBox->text[textBox->textLen] = '\0';
 
     {
         size_t lineCount = 0;
-        const char *p = box->text;
-        const char *end = box->text + box->textLen;
+        const char *p = textBox->text;
+        const char *end = textBox->text + textBox->textLen;
         while (p < end) {
             if (*p == '\n') {
                 lineCount++;
             }
             p++;
         }
-        if (box->textLen > 0 && box->text[box->textLen - 1] != '\n') {
+        if (textBox->textLen > 0 &&
+            textBox->text[textBox->textLen - 1] != '\n') {
             lineCount++;
         }
 
-        while (lineCount > self->maxLines && box->textLen > 0) {
-            const char *nl = memchr(box->text, '\n', box->textLen);
+        while (lineCount > self->maxLines && textBox->textLen > 0) {
+            const char *nl = memchr(textBox->text, '\n', textBox->textLen);
             if (nl != NULL) {
-                size_t trimLen = (size_t)(nl - box->text) + 1;
-                size_t remaining = box->textLen - trimLen;
-                memmove(box->text, box->text + trimLen, remaining);
-                box->textLen = remaining;
-                box->text[box->textLen] = '\0';
+                size_t trimLen = (size_t)(nl - textBox->text) + 1;
+                size_t remaining = textBox->textLen - trimLen;
+                memmove(textBox->text, textBox->text + trimLen, remaining);
+                textBox->textLen = remaining;
+                textBox->text[textBox->textLen] = '\0';
             } else {
-                box->textLen = 0;
-                box->text[0] = '\0';
+                textBox->textLen = 0;
+                textBox->text[0] = '\0';
                 break;
             }
             lineCount--;
         }
     }
 
-    if (box->base.windowHandler != NULL) {
-        int availWidth = box->base.width - 2;
-        int visibleLines = box->base.height - 2;
+    if (textBox->base.windowHandler != NULL) {
+        int availWidth = textBox->base.width - 2;
+        int visibleLines = textBox->base.height - 2;
         if (availWidth >= 1 && visibleLines >= 1) {
-            size_t totalLines =
-                textBoxCountVisualLines(box->text, box->textLen, availWidth);
+            size_t totalLines = textBoxCountVisualLines(
+                textBox->text, textBox->textLen, availWidth);
             size_t maxView = (totalLines > (size_t)visibleLines)
                                  ? totalLines - (size_t)visibleLines
                                  : 0;
-            box->viewBegin = maxView;
+            textBox->viewBegin = maxView;
         }
-        controlTextBoxDraw(box);
+        controlTextBoxDraw(textBox);
+    }
+}
+
+void controlListBoxConstruct(ControlListBox *self, int height, int width, int y,
+                             int x, void (*draw)(ControlListBox *self),
+                             void (*resize)(ControlListBox *self),
+                             void (*refresh)(ControlListBox *self)) {
+    controlConstruct((Control *)self, height, width, y, x, true, false);
+    self->base.vtable = defaultListBoxVtable;
+    arrayStrInit(&self->list, ARRAY_DEFAULT_CAPACITY);
+    self->viewBegin = 0;
+    self->curLine = 0;
+    self->entryCnt = 0;
+    if (draw != NULL) {
+        self->base.vtable.draw = (void (*)(Control *))draw;
+    }
+    if (resize != NULL) {
+        self->base.commonMsgHandlers.resize = (void (*)(Control *))resize;
+    }
+    if (refresh != NULL) {
+        self->base.commonMsgHandlers.refresh = (void (*)(Control *))resize;
+    }
+}
+
+void controlListBoxDraw(ControlListBox *self) {
+    werase(self->base.windowHandler);
+
+    if (self->base.focused) {
+        if (self->base.takeOverInput) {
+            DOUBLE_BOX(self->base.windowHandler);
+        } else {
+            customBox(self->base.windowHandler, L"┊", L"┊", L"╌", L"╌", L"┌",
+                      L"┐", L"└", L"┘");
+        }
+    } else {
+        box(self->base.windowHandler, 0, 0);
+    }
+
+    for (size_t i = self->viewBegin;
+         i < (size_t)self->base.height - 2 + self->viewBegin &&
+         i < self->entryCnt;
+         ++i) {
+        Str cur;
+        arrayStrGet(&self->list, i, &cur);
+        if (i == self->curLine) {
+            wattron(self->base.windowHandler, A_REVERSE);
+            mvwprintw(self->base.windowHandler, i - self->viewBegin + 1, 1,
+                      "%-*s", self->base.width - 2, cur);
+            wattroff(self->base.windowHandler, A_REVERSE);
+            attroff(A_REVERSE);
+        } else {
+            mvwprintw(self->base.windowHandler, i - self->viewBegin + 1, 1,
+                      "%-*s", self->base.width - 2, cur);
+        }
+    }
+
+    wnoutrefresh(self->base.windowHandler);
+}
+
+void controlListBoxAppend(ControlListBox *self, const char *entry) {
+    char *cur = malloc(strlen(entry) + 1);
+    strcpy(cur, entry);
+    arrayStrPushBack(&self->list, cur);
+    ++self->entryCnt;
+}
+
+static void controlListBoxDestruct(ControlListBox *self) {
+    for (size_t i = 0; i < arrayStrSize(&self->list); ++i) {
+        Str cur;
+        arrayStrGet(&self->list, i, &cur);
+        free(cur);
+    }
+    arrayStrDeinit(&self->list);
+}
+
+static void controlListBoxMsgHandler(ControlListBox *self, TuiMsg msg) {
+    switch (msg.type) {
+    case MsgFocusEnter:
+        self->base.takeOverInput = true;
+        break;
+    case MsgInput: {
+        switch (msg.arg1.input) {
+        case '\e':
+            self->base.takeOverInput = false;
+            break;
+        case KEY_BTAB:
+        case KEY_LEFT:
+        case KEY_UP:
+            if (self->curLine > 0) {
+                --self->curLine;
+            } else {
+                self->curLine = self->entryCnt - 1;
+            }
+            break;
+        case '\t':
+        case KEY_RIGHT:
+        case KEY_DOWN:
+            if (self->curLine < self->entryCnt - 1) {
+                ++self->curLine;
+            } else {
+                self->curLine = 0;
+            }
+            break;
+        case KEY_PPAGE:
+        case KEY_HOME:
+            self->curLine = 0;
+            break;
+        case KEY_NPAGE:
+        case KEY_END:
+            if (self->entryCnt > 0) {
+                self->curLine = self->entryCnt - 1;
+            }
+            break;
+        default:
+            break;
+        }
+        break;
+    }
+    case MsgRefresh:
+        if (self->base.commonMsgHandlers.refresh != NULL) {
+            self->base.commonMsgHandlers.refresh((Control *)self);
+        }
+        break;
+    case MsgResize:
+        if (self->base.commonMsgHandlers.resize != NULL) {
+            self->base.commonMsgHandlers.resize((Control *)self);
+        }
+        break;
+    case MsgMouse:
+        if ((msg.arg2.input & BUTTON1_CLICKED) != 0) {
+            int x = msg.mouseX, y = msg.mouseY;
+            wmouse_trafo(self->base.windowHandler, &y, &x, false);
+            self->curLine = y - 1 + self->viewBegin;
+        }
+        break;
+    default:
+        break;
+    }
+    if (self->curLine < self->viewBegin) {
+        self->viewBegin = self->curLine;
+    }
+    if (self->viewBegin + self->base.height - 3 < self->curLine) {
+        self->viewBegin = self->curLine - (self->base.height - 3);
     }
 }
