@@ -171,6 +171,8 @@ typedef struct {
     uint8_t chatDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted ChatHistoryDBKey. */
     uint8_t roomDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted RoomDBKey. */
     uint8_t gameDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted GameDBKey. */
+    struct PacPlaySDK *sdk; /**< Server SDK handle for game payload bridge
+                                (NULL if no game server is attached). */
 } Server;
 
 /* ─────────────────────────────── public API ─────────────────────────────── */

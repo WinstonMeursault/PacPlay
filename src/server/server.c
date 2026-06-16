@@ -47,6 +47,8 @@
 
 #include <openssl/crypto.h>
 
+#include "pacplay_sdk.h"
+
 /* ────────────── internal constants (avoiding magic numbers) ─────────────── */
 
 enum {
@@ -79,6 +81,8 @@ static void clientDisconnect(Server *s, int idx);
 static int handleKeyExchange(Server *s, ClientSession *cs, Packet *pkt);
 static int handleHeartbeat(Server *s, ClientSession *cs);
 static int handleLogout(Server *s, ClientSession *cs);
+static int serverHandleGamePayload(Server *s, ClientSession *sender,
+                                   Packet *pkt);
 
 /* ════════════════════════════ server key init ═════════════════════════════ */
 
@@ -250,6 +254,26 @@ static void *serverEventLoop(void *arg) {
     Server *s = (Server *)arg;
 
     while (s->running && !gShutdownRequested) {
+        /* Poll SDK send queue for game-server-originated payloads and
+         * broadcast them to room members. */
+        if (s->sdk != NULL) {
+            uint8_t *gamePayload = NULL;
+            size_t gameLen = 0;
+            while (pacplay_srv_poll_send(s->sdk, &gamePayload, &gameLen)) {
+                /* Broadcast to all clients in the sender's room (simplified:
+                 * for now, broadcast game payloads to all connected clients
+                 * in SessionChat state). */
+                for (int ci = 0; ci < s->clientCount; ci++) {
+                    if (s->clients[ci]->state == SessionChat) {
+                        serverSendEncryptedPacket(s->clients[ci],
+                                                  MsgGamePayload,
+                                                  gamePayload, gameLen);
+                    }
+                }
+                pacplay_srv_free_payload(s->sdk, gamePayload);
+            }
+        }
+
         fd_set readFds;
         FD_ZERO(&readFds);
         FD_SET(s->listenFd, &readFds);
@@ -508,6 +532,14 @@ static int processClient(Server *s, ClientSession *cs) {
             ret = serverHandleChatMessage(s, cs, &pkt);
         } else if (mt == MsgHeartbeat) {
             ret = handleHeartbeat(s, cs);
+        } else if (mt == MsgGamePayload) {
+            /* Push to SDK receive queue if a game server is attached. */
+            if (s->sdk != NULL && pkt.header.payloadLength > 0) {
+                pacplay_srv_push_received(s->sdk, pkt.payload,
+                                          pkt.header.payloadLength);
+            }
+            /* Broadcast to other room members. */
+            ret = serverHandleGamePayload(s, cs, &pkt);
         } else if (mt == MsgLogout) {
             ret = handleLogout(s, cs);
         } else if (mt == MsgTOTPSetupReq) {
@@ -547,6 +579,30 @@ static int handleKeyExchange(Server *s, ClientSession *cs, Packet *pkt) {
 static int handleHeartbeat(Server *s, ClientSession *cs) {
     (void)s;
     return serverSendEncryptedPacket(cs, MsgHeartbeat, NULL, 0);
+}
+
+static int serverHandleGamePayload(Server *s, ClientSession *sender,
+                                   Packet *pkt) {
+    uint32_t roomId = sender->currentRoomId;
+    if (roomId == 0 || pkt->payload == NULL ||
+        pkt->header.payloadLength == 0) {
+        return SERVER_SUCC;
+    }
+
+    ActiveRoom *room = serverFindActiveRoom(s, roomId);
+    if (room == NULL) {
+        return SERVER_SUCC;
+    }
+
+    for (int i = 0; i < room->memberCount; i++) {
+        if (room->members[i] != sender) {
+            serverSendEncryptedPacket(room->members[i], MsgGamePayload,
+                                      pkt->payload,
+                                      pkt->header.payloadLength);
+        }
+    }
+
+    return SERVER_SUCC;
 }
 
 static int handleLogout(Server *s, ClientSession *cs) {

@@ -1,6 +1,6 @@
 /**
  * @file connection.c
- * @brief PacPlay client connect and disconnect.
+ * @brief PacPlay client connect, disconnect, and IO thread management.
  *
  * @date 2026-05-27
  * @copyright GPLv3 License
@@ -26,6 +26,8 @@
 #include "communication.h"
 #include "database.h"
 #include "log.h"
+#include "pacplay_sdk.h"
+#include <errno.h>
 #include <string.h>
 #include <sys/select.h>
 #include <unistd.h>
@@ -61,6 +63,7 @@ int clientConnect(Client *client, const char *addr, uint16_t port) {
 }
 
 void clientDisconnect(Client *client) {
+    clientShutdown(client);
     if (client->fd != NULL_SOCKETFD) {
         clientCloseDB(client);
         OPENSSL_cleanse(&client->aesKey, sizeof(client->aesKey));
@@ -68,4 +71,92 @@ void clientDisconnect(Client *client) {
         socketClose(&client->fd);
     }
     LOG_INFO("Client disconnected");
+}
+
+/* ════════════════════════ IO thread management ════════════════════════════ */
+
+static void *clientEventLoop(void *arg);
+
+int clientLaunch(Client *client, PacPlaySDK *sdk) {
+    if (client == NULL || client->fd == NULL_SOCKETFD) {
+        return CLIENT_FAIL;
+    }
+
+    client->sdk = sdk;
+    client->running = true;
+
+    if (pthread_create(&client->ioThread, NULL, clientEventLoop, client) !=
+        0) {
+        LOG_ERROR("clientLaunch: pthread_create failed (errno=%d)", errno);
+        client->running = false;
+        client->sdk = NULL;
+        return CLIENT_FAIL;
+    }
+
+    LOG_INFO("Client IO thread started (fd=%d)", client->fd);
+    return CLIENT_SUCC;
+}
+
+void clientShutdown(Client *client) {
+    if (client == NULL || !client->running) {
+        return;
+    }
+    client->running = false;
+    pthread_join(client->ioThread, NULL);
+    client->sdk = NULL;
+    LOG_INFO("Client IO thread stopped");
+}
+
+/* ════════════════════════ background event loop ═══════════════════════════ */
+
+static void *clientEventLoop(void *arg) {
+    Client *c = (Client *)arg;
+
+    while (c->running) {
+        fd_set readFds;
+        FD_ZERO(&readFds);
+        FD_SET(c->fd, &readFds);
+
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = CLIENT_SELECT_TIMEOUT_US;
+
+        int ready = select(c->fd + 1, &readFds, NULL, NULL, &tv);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            LOG_ERROR("clientEventLoop: select() failed (errno=%d, fd=%d)",
+                      errno, c->fd);
+            break;
+        }
+
+        /* 1. Drain SDK send queue — encrypt and send game payloads. */
+        if (c->sdk != NULL) {
+            uint8_t *gamePayload = NULL;
+            size_t gameLen = 0;
+            while (pacplay_cli_poll_send(c->sdk, &gamePayload, &gameLen)) {
+                clientSendEncryptedPacket(c, MsgGamePayload, gamePayload,
+                                         gameLen);
+                pacplay_cli_free_payload(c->sdk, gamePayload);
+            }
+        }
+
+        /* 2. Receive and dispatch incoming packets. */
+        if (ready > 0 && FD_ISSET(c->fd, &readFds)) {
+            Packet pkt;
+            memset(&pkt, 0, sizeof(pkt));
+
+            if (clientRecvEncryptedPacket(c, &pkt) == PROTOCOL_SUCC) {
+                if (pkt.header.messageType == MsgGamePayload &&
+                    c->sdk != NULL && pkt.header.payloadLength > 0) {
+                    pacplay_cli_push_received(c->sdk, pkt.payload,
+                                              pkt.header.payloadLength);
+                }
+            }
+            packetClear(&pkt);
+        }
+    }
+
+    return NULL;
 }

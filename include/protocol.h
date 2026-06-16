@@ -133,7 +133,10 @@ typedef enum {
     MsgGameMetadata,
     MsgGameChunk,
     MsgGameChunkAck,
-    MsgGameDownloadDone
+    MsgGameDownloadDone,
+
+    /* In-game payload. */
+    MsgGamePayload
 } MessageType;
 
 #pragma pack(push, 1)

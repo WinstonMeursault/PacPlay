@@ -44,6 +44,9 @@ int clientConnect(Client *client, const char *addr, uint16_t port);
 /**
  * @brief Disconnect and clean up client resources.
  *
+ * Shuts down the IO thread if running, closes the local database,
+ * wipes sensitive key material, and closes the socket.
+ *
  * @param client  Client to tear down.
  */
 void clientDisconnect(Client *client);

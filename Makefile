@@ -18,7 +18,10 @@ CLANG_TIDY := clang-tidy
 SRC_DIR := src
 BUILD_DIR := build
 BIN_DIR := bin
-INC_DIR := include $(SRC_DIR)
+SDK_DIR := sdk
+SDK_INC_DIR := $(SDK_DIR)/include
+SDK_LIB_DIR := $(SDK_DIR)/lib
+INC_DIR := include $(SRC_DIR) $(SDK_INC_DIR)
 INC_FLAGS := $(addprefix -I, $(INC_DIR))
 TEST_DIR := tests
 
@@ -26,6 +29,8 @@ TEST_DIR := tests
 SERVER_BIN := $(BIN_DIR)/server/server
 CLIENT_BIN := $(BIN_DIR)/client/client
 LOADER_BIN := $(BIN_DIR)/client/loader
+CLIENT_SDK_LIB := $(SDK_LIB_DIR)/libpacplay_client_sdk.so
+SERVER_SDK_LIB := $(SDK_LIB_DIR)/libpacplay_server_sdk.so
 
 # Source File Discovery
 
@@ -36,6 +41,11 @@ LOADER_SRC := $(shell find $(SRC_DIR)/client/loader -type f -name '*.c')
 
 # Shared common sources
 COMMON_SRC := $(shell find $(SRC_DIR)/common -type f -name '*.c')
+
+# SDK sources
+SDK_SRC_COMMON := $(shell find $(SDK_DIR)/src/common -type f -name '*.c')
+SDK_SRC_CLIENT := $(shell find $(SDK_DIR)/src/client -type f -name '*.c')
+SDK_SRC_SERVER := $(shell find $(SDK_DIR)/src/server -type f -name '*.c')
 
 # Object File Mapping
 
@@ -80,33 +90,53 @@ C_BLUE  := \033[94m
 C_RESET := \033[0m
 
 # Build Rules
-.PHONY: all server client clean run run-server run-client analyze test json json-server json-client debug
+.PHONY: all server client sdk clean run run-server run-client analyze test json json-server json-client debug
 
-all: analyze $(SERVER_BIN) $(CLIENT_BIN) $(LOADER_BIN)
+all: analyze $(SERVER_BIN) $(CLIENT_BIN) $(LOADER_BIN) $(CLIENT_SDK_LIB) $(SERVER_SDK_LIB)
 
 server: $(SERVER_BIN)
 
 client: $(CLIENT_BIN)
+
+sdk: $(CLIENT_SDK_LIB) $(SERVER_SDK_LIB)
 
 # Link server executable
 $(BIN_DIR)/server $(BIN_DIR)/client: | $(BIN_DIR)
 	@echo -e '$(C_GREEN)Creating directory: $@/$(C_RESET)'
 	@mkdir -p $@
 
-# Link server executable
-$(SERVER_BIN): $(SERVER_ALL_OBJ) | $(BIN_DIR)/server
+# Link server executable (links against server SDK .so)
+$(SERVER_BIN): $(SERVER_ALL_OBJ) $(SERVER_SDK_LIB) | $(BIN_DIR)/server
 	@echo -e '$(C_GREEN)Linking server: $@$(C_RESET)'
-	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS) -L$(SDK_LIB_DIR) -lpacplay_server_sdk \
+		-Wl,-rpath,$(CURDIR)/$(SDK_LIB_DIR)
 
-# Link client executable
-$(CLIENT_BIN): $(CLIENT_ALL_OBJ) | $(BIN_DIR)/client
+# Link client executable (links against client SDK .so)
+$(CLIENT_BIN): $(CLIENT_ALL_OBJ) $(CLIENT_SDK_LIB) | $(BIN_DIR)/client
 	@echo -e '$(C_GREEN)Linking client: $@$(C_RESET)'
-	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS) -L$(SDK_LIB_DIR) -lpacplay_client_sdk \
+		-Wl,-rpath,$(CURDIR)/$(SDK_LIB_DIR)
 
 # Link loader executable
 $(LOADER_BIN): $(LOADER_ALL_OBJ) | $(BIN_DIR)/client
 	@echo -e '$(C_GREEN)Linking loader: $@$(C_RESET)'
 	@$(CC) $(CFLAGS) -ldl $^ -o $@ $(LDLIBS)
+
+# SDK: Client shared library
+$(CLIENT_SDK_LIB): $(SDK_SRC_COMMON) $(SDK_SRC_CLIENT)
+	@echo -e '$(C_GREEN)Building client SDK: $@$(C_RESET)'
+	@mkdir -p $(SDK_LIB_DIR)
+	@$(CC) $(CFLAGS) -fPIC -shared -Wl,-soname,libpacplay_client_sdk.so \
+		$(INC_FLAGS) -I$(SDK_INC_DIR) \
+		$(SDK_SRC_COMMON) $(SDK_SRC_CLIENT) -o $@ -lpthread
+
+# SDK: Server shared library
+$(SERVER_SDK_LIB): $(SDK_SRC_COMMON) $(SDK_SRC_SERVER)
+	@echo -e '$(C_GREEN)Building server SDK: $@$(C_RESET)'
+	@mkdir -p $(SDK_LIB_DIR)
+	@$(CC) $(CFLAGS) -fPIC -shared -Wl,-soname,libpacplay_server_sdk.so \
+		$(INC_FLAGS) -I$(SDK_INC_DIR) \
+		$(SDK_SRC_COMMON) $(SDK_SRC_SERVER) -o $@ -lpthread
 
 # Compile server-specific .c files
 $(BUILD_DIR)/server/%.o: $(SRC_DIR)/server/%.c
@@ -186,10 +216,13 @@ $(BUILD_DIR)/tests/%.o: $(TEST_DIR)/%.c
 	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
 	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INC_FLAGS) -I$(TEST_DIR) -c $< -o $@
 
-# Link each test binary against its object + server & client build of common objects (excluding main.o)
-$(BIN_DIR)/tests/%: $(BUILD_DIR)/tests/%.o $(COMMON_SERVER_OBJ) $(SERVER_OBJ_NO_MAIN) $(CLIENT_OBJ_NO_MAIN) | $(BIN_DIR)/tests
+# Link each test binary against its object + server & client build of common objects
+# (excluding main.o), plus both SDK shared libraries.
+$(BIN_DIR)/tests/%: $(BUILD_DIR)/tests/%.o $(COMMON_SERVER_OBJ) $(SERVER_OBJ_NO_MAIN) $(CLIENT_OBJ_NO_MAIN) $(CLIENT_SDK_LIB) $(SERVER_SDK_LIB) | $(BIN_DIR)/tests
 	@echo -e '$(C_GREEN)Linking test: $@$(C_RESET)'
-	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS)
+	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS) \
+		-L$(SDK_LIB_DIR) -lpacplay_client_sdk -lpacplay_server_sdk \
+		-Wl,-rpath,$(CURDIR)/$(SDK_LIB_DIR)
 
 $(BIN_DIR)/tests:
 	@echo -e '$(C_GREEN)Creating directory: $@/$(C_RESET)'
@@ -261,4 +294,4 @@ debug:
 ## Clean build artifacts
 clean:
 	@echo -e '$(C_GREEN)Cleaning workspace...$(C_RESET)'
-	@rm -rf $(BUILD_DIR) $(BIN_DIR)
+	@rm -rf $(BUILD_DIR) $(BIN_DIR) $(SDK_LIB_DIR)
