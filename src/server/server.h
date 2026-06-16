@@ -70,6 +70,9 @@ struct DownloadPool;
 
 #define DATA_PORT_OFFSET 1 /**< Data channel port = control port + offset. */
 
+/** @brief Maximum length of the game platform role string ("server" | "client"). */
+#define GAME_ROLE_LEN 8
+
 /* ────────────────────────────── return codes ────────────────────────────── */
 
 #define SERVER_SUCC (0)
@@ -102,6 +105,7 @@ typedef struct {
     char *fileName;
     char *hash;
     uint64_t fileSize;
+    char role[GAME_ROLE_LEN]; /**< "server" or "client" — which side this binary runs on. */
 } GamePlatformInfo;
 
 typedef struct {
@@ -173,6 +177,9 @@ typedef struct {
     uint8_t gameDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted GameDBKey. */
     struct PacPlaySDK *sdk; /**< Server SDK handle for game payload bridge
                                 (NULL if no game server is attached). */
+    pthread_t gameThread;        /**< Game runner background thread handle. */
+    volatile bool gameRunning;   /**< True while a game server is loaded. */
+    void *gameHandle;            /**< dlopen handle for the game .so, or NULL. */
 } Server;
 
 /* ─────────────────────────────── public API ─────────────────────────────── */

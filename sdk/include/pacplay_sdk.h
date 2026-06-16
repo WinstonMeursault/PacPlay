@@ -105,6 +105,23 @@ void pacplay_cli_push_received(PacPlaySDK *sdk, const uint8_t *payload,
  *  @param payload Pointer previously returned by @c pacplay_cli_poll_send. */
 void pacplay_cli_free_payload(PacPlaySDK *sdk, uint8_t *payload);
 
+/** Request the Client IO thread to send a game start request to the Server.
+ *
+ *  The game (running inside @c pacplayMain) calls this to tell the Server
+ *  to load and run the corresponding server-side game dynamic library.
+ *
+ *  Internally this builds a tagged control message and pushes it into the
+ *  SDK send queue.  The Client IO thread recognises the tag and sends a
+ *  @c MsgGameStartReq protocol packet instead of a game payload.
+ *
+ *  @param sdk      Client SDK handle.
+ *  @param gameId   Unique game identifier registered on the Server.
+ *  @param platform Target server platform (e.g. "linux-x86_64"),
+ *                  NUL-terminated, max 15 characters.
+ *  @return 0 on success, -1 on failure (NULL args, OOM, queue full). */
+int pacplay_cli_request_start_server(PacPlaySDK *sdk, uint32_t gameId,
+                                     const char *platform);
+
 /* ═════════════════════════ Server SDK API ═════════════════════════════════ */
 
 /** Create a Server SDK instance (game server → Server IO Thread bridge). */

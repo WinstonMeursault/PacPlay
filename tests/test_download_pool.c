@@ -11,7 +11,6 @@ enum {
     ShortSleepUs = 100000,
     TokenFillByte = 0xAA,
     KeyFillByte = 0xBB,
-    GameEncKeyFill = 0xCC,
     TestGameId = 42,
     TestResumeChunk = 0,
     TestFileSize = 65536,
@@ -33,7 +32,6 @@ static void fillToken(PendingToken *pt, uint8_t seed) {
              (unsigned)seed);
     pt->fileSize = TestFileSize;
     pt->totalChunks = TestTotalChunks;
-    memset(pt->gameEncKey, GameEncKeyFill, AES_GCM_KEY_LEN);
     pt->used = false;
 }
 

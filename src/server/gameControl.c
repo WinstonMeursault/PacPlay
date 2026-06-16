@@ -33,9 +33,12 @@ static const char *hexDigits = "0123456789abcdef";
 
 static int parseMetadata(const char *jsonPath, char **outName,
                          char **outVersion, char **outDescription,
-                         cJSON **outPlatforms) {
+                         char **outServerArchive, cJSON **outServerPlatforms,
+                         char **outClientArchive, cJSON **outClientPlatforms) {
     if (jsonPath == NULL || outName == NULL || outVersion == NULL ||
-        outDescription == NULL || outPlatforms == NULL) {
+        outDescription == NULL || outServerArchive == NULL ||
+        outServerPlatforms == NULL || outClientArchive == NULL ||
+        outClientPlatforms == NULL) {
         return GAME_CONTROL_FAIL;
     }
 
@@ -73,15 +76,17 @@ static int parseMetadata(const char *jsonPath, char **outName,
         return GAME_CONTROL_FAIL;
     }
 
-    cJSON *nameItem = cJSON_GetObjectItem(root, "name");
+    cJSON *nameItem = cJSON_GetObjectItem(root, "gameName");
     cJSON *versionItem = cJSON_GetObjectItem(root, "version");
-    cJSON *platformsItem = cJSON_GetObjectItem(root, "platforms");
+    cJSON *serverItem = cJSON_GetObjectItem(root, "server");
+    cJSON *clientItem = cJSON_GetObjectItem(root, "client");
 
     char *nameStr = cJSON_GetStringValue(nameItem);
     char *versionStr = cJSON_GetStringValue(versionItem);
 
-    if (nameStr == NULL || versionStr == NULL || platformsItem == NULL ||
-        !cJSON_IsArray(platformsItem)) {
+    if (nameStr == NULL || versionStr == NULL || serverItem == NULL ||
+        !cJSON_IsObject(serverItem) || clientItem == NULL ||
+        !cJSON_IsObject(clientItem)) {
         cJSON_Delete(root);
         return GAME_CONTROL_FAIL;
     }
@@ -89,18 +94,48 @@ static int parseMetadata(const char *jsonPath, char **outName,
     cJSON *descItem = cJSON_GetObjectItem(root, "description");
     char *descStr = cJSON_GetStringValue(descItem);
 
-    *outName = strdup(nameStr);
-    *outVersion = strdup(versionStr);
-    *outDescription = strdup(descStr != NULL ? descStr : "");
-    if (*outName == NULL || *outVersion == NULL || *outDescription == NULL) {
-        free(*outName);
-        free(*outVersion);
-        free(*outDescription);
+    cJSON *servArchiveItem = cJSON_GetObjectItem(serverItem, "archive");
+    cJSON *cliArchiveItem = cJSON_GetObjectItem(clientItem, "archive");
+    char *servArchiveStr = cJSON_GetStringValue(servArchiveItem);
+    char *cliArchiveStr = cJSON_GetStringValue(cliArchiveItem);
+
+    if (servArchiveStr == NULL || cliArchiveStr == NULL) {
         cJSON_Delete(root);
         return GAME_CONTROL_FAIL;
     }
 
-    *outPlatforms = cJSON_DetachItemFromObject(root, "platforms");
+    *outName = strdup(nameStr);
+    *outVersion = strdup(versionStr);
+    *outDescription = strdup(descStr != NULL ? descStr : "");
+    *outServerArchive = strdup(servArchiveStr);
+    *outClientArchive = strdup(cliArchiveStr);
+
+    if (*outName == NULL || *outVersion == NULL || *outDescription == NULL ||
+        *outServerArchive == NULL || *outClientArchive == NULL) {
+        free(*outName);
+        free(*outVersion);
+        free(*outDescription);
+        free(*outServerArchive);
+        free(*outClientArchive);
+        cJSON_Delete(root);
+        return GAME_CONTROL_FAIL;
+    }
+
+    *outServerPlatforms = cJSON_DetachItemFromObject(serverItem, "server");
+    if (*outServerPlatforms == NULL) {
+        *outServerPlatforms = cJSON_CreateObject();
+    } else {
+        cJSON_Delete(*outServerPlatforms);
+        *outServerPlatforms = cJSON_Duplicate(serverItem, 1);
+    }
+    // Re-read: we want the server object minus "archive"
+    cJSON_Delete(*outServerPlatforms);
+    *outServerPlatforms = cJSON_Duplicate(serverItem, 1);
+    cJSON_DeleteItemFromObject(*outServerPlatforms, "archive");
+
+    *outClientPlatforms = cJSON_Duplicate(clientItem, 1);
+    cJSON_DeleteItemFromObject(*outClientPlatforms, "archive");
+
     cJSON_Delete(root);
     return GAME_CONTROL_SUCC;
 }
@@ -156,80 +191,6 @@ static int computeFileSHA256(const char *filePath, char outHex[GAME_HASH_LEN]) {
     return GAME_CONTROL_SUCC;
 }
 
-static int encryptFileWithKey(const char *srcPath, const char *dstPath,
-                              const uint8_t key[AES_GCM_KEY_LEN]) {
-    if (srcPath == NULL || dstPath == NULL || key == NULL) {
-        return GAME_CONTROL_FAIL;
-    }
-
-    FILE *fp = fopen(srcPath, "rb");
-    if (fp == NULL) {
-        return GAME_CONTROL_FAIL;
-    }
-
-    fseek(fp, 0, SEEK_END);
-    long fileLen = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-
-    if (fileLen < 0) {
-        fclose(fp);
-        return GAME_CONTROL_FAIL;
-    }
-
-    uint8_t *plainData = NULL;
-    size_t dataLen = (size_t)fileLen;
-    if (dataLen > 0) {
-        plainData = (uint8_t *)malloc(dataLen);
-        if (plainData == NULL) {
-            fclose(fp);
-            return GAME_CONTROL_FAIL;
-        }
-        if (fread(plainData, 1, dataLen, fp) != dataLen) {
-            free(plainData);
-            fclose(fp);
-            return GAME_CONTROL_FAIL;
-        }
-    }
-    fclose(fp);
-
-    AESGCMKey aesKey;
-    memcpy(aesKey.key, key, AES_GCM_KEY_LEN);
-    if (cryptoRandomBytes(aesKey.nonce, AES_GCM_NONCE_LEN) != CRYPTO_SUCC) {
-        free(plainData);
-        return GAME_CONTROL_FAIL;
-    }
-
-    AESGCMBuffer plainBuf = {
-        .data = plainData, .capacity = dataLen, .len = dataLen};
-
-    AESGCMCipher cipher;
-    if (aesGCMBufferInit(&cipher.buffer, dataLen) != CRYPTO_SUCC) {
-        free(plainData);
-        return GAME_CONTROL_FAIL;
-    }
-
-    if (encryptAESGCM(&plainBuf, NULL, &aesKey, &cipher) != CRYPTO_SUCC) {
-        aesGCMBufferDeinit(&cipher.buffer);
-        free(plainData);
-        return GAME_CONTROL_FAIL;
-    }
-    free(plainData);
-
-    FILE *out = fopen(dstPath, "wb");
-    if (out == NULL) {
-        aesGCMBufferDeinit(&cipher.buffer);
-        return GAME_CONTROL_FAIL;
-    }
-
-    fwrite(aesKey.nonce, 1, AES_GCM_NONCE_LEN, out);
-    fwrite(cipher.buffer.data, 1, cipher.buffer.len, out);
-    fwrite(cipher.tag, 1, AES_GCM_TAG_LEN, out);
-    fclose(out);
-
-    aesGCMBufferDeinit(&cipher.buffer);
-    return GAME_CONTROL_SUCC;
-}
-
 static int dekEnvelopeEncrypt(const uint8_t *dekKey, const uint8_t *plainKey,
                               uint8_t *outEnvelope, size_t *outLen) {
     if (dekKey == NULL || plainKey == NULL || outEnvelope == NULL ||
@@ -266,43 +227,110 @@ static int dekEnvelopeEncrypt(const uint8_t *dekKey, const uint8_t *plainKey,
     return GAME_CONTROL_SUCC;
 }
 
-static int dekEnvelopeDecrypt(const uint8_t *dekKey, const uint8_t *envelope,
-                              size_t envLen, uint8_t *outKey) {
-    if (dekKey == NULL || envelope == NULL || outKey == NULL) {
-        return GAME_CONTROL_FAIL;
+static void freeAll(char *name, char *version, char *description,
+                    char *serverArchive, char *clientArchive,
+                    cJSON *serverPlatforms, cJSON *clientPlatforms) {
+    free(name);
+    free(version);
+    free(description);
+    free(serverArchive);
+    free(clientArchive);
+    cJSON_Delete(serverPlatforms);
+    cJSON_Delete(clientPlatforms);
+}
+
+static int storePlatformFiles(Server *s, uint32_t gameId, const char *version,
+                               const char *tmpDir, cJSON *section,
+                               const char *role,
+                               ControlScrollTextBox *outBox) {
+    for (cJSON *platform = section->child; platform != NULL;
+         platform = platform->next) {
+        const char *platName = platform->string;
+        cJSON *libItem = cJSON_GetObjectItem(platform, "libraryPath");
+        char *libPath = cJSON_GetStringValue(libItem);
+
+        if (platName == NULL || libPath == NULL) {
+            continue;
+        }
+
+        const char *fileName = strrchr(libPath, '/');
+        if (fileName == NULL) {
+            fileName = libPath;
+        } else {
+            fileName++;
+        }
+
+        char srcFilePath[PathBufSize];
+        (void)snprintf(srcFilePath, sizeof(srcFilePath), "%s/%s", tmpDir,
+                       libPath + 2);
+
+        if (access(srcFilePath, R_OK) != 0) {
+            char errLine[LineBufSize];
+            (void)snprintf(errLine, sizeof(errLine),
+                           "Error: file '%s' not found in archive\n", libPath);
+            controlScrollTextBoxAppend(outBox, errLine);
+            return GAME_CONTROL_FAIL;
+        }
+
+        char computedHash[Sha256HexLen + 1];
+        if (computeFileSHA256(srcFilePath, computedHash) != GAME_CONTROL_SUCC) {
+            controlScrollTextBoxAppend(outBox,
+                                       "Error: hash computation failed\n");
+            return GAME_CONTROL_FAIL;
+        }
+
+        char destDir[PathBufSize];
+        (void)snprintf(destDir, sizeof(destDir), "%s/%u/%s/%s/%s",
+                       GAME_LIB_DIR, gameId, version, role, platName);
+        platformMkdirp(destDir);
+
+        char dstFilePath[PathBufSize];
+        (void)snprintf(dstFilePath, sizeof(dstFilePath), "%s/%s", destDir,
+                       fileName);
+
+        FILE *src = fopen(srcFilePath, "rb");
+        if (src == NULL) {
+            return GAME_CONTROL_FAIL;
+        }
+        FILE *dst = fopen(dstFilePath, "wb");
+        if (dst == NULL) {
+            fclose(src);
+            return GAME_CONTROL_FAIL;
+        }
+        char buf[GzBufSize];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), src)) > 0) {
+            fwrite(buf, 1, n, dst);
+        }
+        fclose(src);
+        fclose(dst);
+
+        uint64_t fileSz = 0;
+        platformFileSize(dstFilePath, &fileSz);
+
+        GamePlatformInfo platInfo;
+        memset(&platInfo, 0, sizeof(platInfo));
+        (void)snprintf(platInfo.platform, sizeof(platInfo.platform), "%s",
+                       platName);
+        platInfo.fileName = strdup(fileName);
+        platInfo.hash = strdup(computedHash);
+        strncpy(platInfo.role, role, sizeof(platInfo.role) - 1);
+        platInfo.fileSize = fileSz;
+
+        if (platInfo.fileName == NULL || platInfo.hash == NULL) {
+            gamePlatformInfoFree(&platInfo);
+            return GAME_CONTROL_FAIL;
+        }
+
+        if (registerGamePlatform(s->gameDB, gameId, &platInfo) != DB_SUCC) {
+            char errLine[LineBufSize];
+            (void)snprintf(errLine, sizeof(errLine),
+                           "Warning: platform '%s' registration failed\n",
+                           platName);
+            controlScrollTextBoxAppend(outBox, errLine);
+        }
+        gamePlatformInfoFree(&platInfo);
     }
-    if (envLen != DekEnvelopeSize) {
-        return GAME_CONTROL_FAIL;
-    }
-
-    AESGCMKey decKey;
-    memcpy(decKey.key, dekKey, AES_GCM_KEY_LEN);
-    memcpy(decKey.nonce, envelope, NonceLen);
-
-    AESGCMCipher cipher;
-    if (aesGCMBufferInit(&cipher.buffer, KeyLen) != CRYPTO_SUCC) {
-        return GAME_CONTROL_FAIL;
-    }
-    memcpy(cipher.buffer.data, envelope + NonceLen, KeyLen);
-    cipher.buffer.len = KeyLen;
-    memcpy(cipher.tag, envelope + NonceLen + KeyLen, TagLen);
-
-    AESGCMBuffer plainBuf;
-    if (aesGCMBufferInit(&plainBuf, KeyLen) != CRYPTO_SUCC) {
-        aesGCMBufferDeinit(&cipher.buffer);
-        return GAME_CONTROL_FAIL;
-    }
-
-    int rc = decryptAESGCM(&cipher, NULL, &decKey, &plainBuf);
-    aesGCMBufferDeinit(&cipher.buffer);
-
-    if (rc != CRYPTO_SUCC) {
-        aesGCMBufferDeinit(&plainBuf);
-        return GAME_CONTROL_FAIL;
-    }
-
-    memcpy(outKey, plainBuf.data, KeyLen);
-    aesGCMBufferDeinit(&plainBuf);
     return GAME_CONTROL_SUCC;
 }
 
@@ -369,104 +397,99 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
     char *name = NULL;
     char *version = NULL;
     char *description = NULL;
-    cJSON *platforms = NULL;
-    if (parseMetadata(metaPath, &name, &version, &description, &platforms) !=
+    char *serverArchive = NULL;
+    char *clientArchive = NULL;
+    cJSON *serverPlatforms = NULL;
+    cJSON *clientPlatforms = NULL;
+    if (parseMetadata(metaPath, &name, &version, &description, &serverArchive,
+                      &serverPlatforms, &clientArchive, &clientPlatforms) !=
         GAME_CONTROL_SUCC) {
         controlScrollTextBoxAppend(outBox, "Error: invalid metadata.json\n");
         platformRmrf(tmpDir);
         return GAME_CONTROL_FAIL;
     }
 
-    int platCount = cJSON_GetArraySize(platforms);
-    for (int i = 0; i < platCount; i++) {
-        cJSON *entry = cJSON_GetArrayItem(platforms, i);
-        cJSON *fileItem = cJSON_GetObjectItem(entry, "file");
-        cJSON *hashItem = cJSON_GetObjectItem(entry, "hash");
+    char serverArchivePath[PathBufSize];
+    (void)snprintf(serverArchivePath, sizeof(serverArchivePath), "%s/%s",
+                   tmpDir, serverArchive);
+    if (access(serverArchivePath, R_OK) != 0) {
+        controlScrollTextBoxAppend(outBox, "Error: server archive not found\n");
+        free(name);
+        free(version);
+        free(description);
+        free(serverArchive);
+        free(clientArchive);
+        cJSON_Delete(serverPlatforms);
+        cJSON_Delete(clientPlatforms);
+        platformRmrf(tmpDir);
+        return GAME_CONTROL_FAIL;
+    }
+    if (extractTarGz(serverArchivePath, tmpDir) != ARCHIVE_SUCC) {
+        controlScrollTextBoxAppend(outBox,
+                                    "Error: server archive extraction failed\n");
+        free(name);
+        free(version);
+        free(description);
+        free(serverArchive);
+        free(clientArchive);
+        cJSON_Delete(serverPlatforms);
+        cJSON_Delete(clientPlatforms);
+        platformRmrf(tmpDir);
+        return GAME_CONTROL_FAIL;
+    }
 
-        char *fileStr = cJSON_GetStringValue(fileItem);
-        char *hashStr = cJSON_GetStringValue(hashItem);
-        if (fileStr == NULL || hashStr == NULL) {
-            controlScrollTextBoxAppend(
-                outBox, "Error: platform entry missing fields\n");
-            free(name);
-            free(version);
-            free(description);
-            cJSON_Delete(platforms);
-            platformRmrf(tmpDir);
-            return GAME_CONTROL_FAIL;
-        }
-
-        char srcFilePath[PathBufSize];
-        (void)snprintf(srcFilePath, sizeof(srcFilePath), "%s/%s", tmpDir,
-                       fileStr);
-
-        if (access(srcFilePath, R_OK) != 0) {
-            char errLine[LineBufSize];
-            (void)snprintf(errLine, sizeof(errLine),
-                           "Error: file '%s' not found in archive\n", fileStr);
-            controlScrollTextBoxAppend(outBox, errLine);
-            free(name);
-            free(version);
-            free(description);
-            cJSON_Delete(platforms);
-            platformRmrf(tmpDir);
-            return GAME_CONTROL_FAIL;
-        }
-
-        char computedHash[Sha256HexLen + 1];
-        if (computeFileSHA256(srcFilePath, computedHash) != GAME_CONTROL_SUCC) {
-            controlScrollTextBoxAppend(outBox,
-                                       "Error: hash computation failed\n");
-            free(name);
-            free(version);
-            free(description);
-            cJSON_Delete(platforms);
-            platformRmrf(tmpDir);
-            return GAME_CONTROL_FAIL;
-        }
-
-        if (strcmp(computedHash, hashStr) != 0) {
-            char errLine[LineBufSize];
-            (void)snprintf(errLine, sizeof(errLine),
-                           "Error: hash mismatch for '%s'\n", fileStr);
-            controlScrollTextBoxAppend(outBox, errLine);
-            free(name);
-            free(version);
-            free(description);
-            cJSON_Delete(platforms);
-            platformRmrf(tmpDir);
-            return GAME_CONTROL_FAIL;
-        }
+    char clientArchivePath[PathBufSize];
+    (void)snprintf(clientArchivePath, sizeof(clientArchivePath), "%s/%s",
+                   tmpDir, clientArchive);
+    if (access(clientArchivePath, R_OK) != 0) {
+        controlScrollTextBoxAppend(outBox, "Error: client archive not found\n");
+        free(name);
+        free(version);
+        free(description);
+        free(serverArchive);
+        free(clientArchive);
+        cJSON_Delete(serverPlatforms);
+        cJSON_Delete(clientPlatforms);
+        platformRmrf(tmpDir);
+        return GAME_CONTROL_FAIL;
+    }
+    if (extractTarGz(clientArchivePath, tmpDir) != ARCHIVE_SUCC) {
+        controlScrollTextBoxAppend(outBox,
+                                    "Error: client archive extraction failed\n");
+        free(name);
+        free(version);
+        free(description);
+        free(serverArchive);
+        free(clientArchive);
+        cJSON_Delete(serverPlatforms);
+        cJSON_Delete(clientPlatforms);
+        platformRmrf(tmpDir);
+        return GAME_CONTROL_FAIL;
     }
 
     GameInfo existing;
     memset(&existing, 0, sizeof(existing));
-    uint8_t gameKey[KeyLen];
     uint32_t gameId = 0;
     bool isNewGame = (getGameByName(s->gameDB, name, &existing) != DB_SUCC);
 
     if (isNewGame) {
+        uint8_t envelope[DekEnvelopeSize];
+        size_t envLen = 0;
+        uint8_t gameKey[KeyLen];
         if (cryptoRandomBytes(gameKey, KeyLen) != CRYPTO_SUCC) {
             controlScrollTextBoxAppend(outBox,
                                        "Error: key generation failed\n");
-            free(name);
-            free(version);
-            free(description);
-            cJSON_Delete(platforms);
+            freeAll(name, version, description, serverArchive, clientArchive,
+                    serverPlatforms, clientPlatforms);
             platformRmrf(tmpDir);
             return GAME_CONTROL_FAIL;
         }
-
-        uint8_t envelope[DekEnvelopeSize];
-        size_t envLen = 0;
         if (dekEnvelopeEncrypt(s->dekKey, gameKey, envelope, &envLen) !=
             GAME_CONTROL_SUCC) {
             controlScrollTextBoxAppend(outBox,
                                        "Error: envelope encryption failed\n");
-            free(name);
-            free(version);
-            free(description);
-            cJSON_Delete(platforms);
+            freeAll(name, version, description, serverArchive, clientArchive,
+                    serverPlatforms, clientPlatforms);
             platformRmrf(tmpDir);
             return GAME_CONTROL_FAIL;
         }
@@ -480,120 +503,40 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
         if (registerGame(s->gameDB, &newGame, envelope, envLen) != DB_SUCC) {
             controlScrollTextBoxAppend(outBox,
                                        "Error: game registration failed\n");
-            free(name);
-            free(version);
-            free(description);
-            cJSON_Delete(platforms);
+            freeAll(name, version, description, serverArchive, clientArchive,
+                    serverPlatforms, clientPlatforms);
             platformRmrf(tmpDir);
             return GAME_CONTROL_FAIL;
         }
         gameId = newGame.gameId;
     } else {
         gameId = existing.gameId;
-
-        uint8_t *envData = NULL;
-        size_t envDataLen = 0;
-        if (getGameEncKey(s->gameDB, gameId, &envData, &envDataLen) !=
-            DB_SUCC) {
-            controlScrollTextBoxAppend(outBox,
-                                       "Error: failed to retrieve game key\n");
-            gameInfoFree(&existing);
-            free(name);
-            free(version);
-            free(description);
-            cJSON_Delete(platforms);
-            platformRmrf(tmpDir);
-            return GAME_CONTROL_FAIL;
-        }
-
-        if (dekEnvelopeDecrypt(s->dekKey, envData, envDataLen, gameKey) !=
-            GAME_CONTROL_SUCC) {
-            controlScrollTextBoxAppend(outBox,
-                                       "Error: key decryption failed\n");
-            free(envData);
-            gameInfoFree(&existing);
-            free(name);
-            free(version);
-            free(description);
-            cJSON_Delete(platforms);
-            platformRmrf(tmpDir);
-            return GAME_CONTROL_FAIL;
-        }
-        free(envData);
-
         if (updateGameVersion(s->gameDB, gameId, version) != DB_SUCC) {
             controlScrollTextBoxAppend(outBox,
                                        "Error: version update failed\n");
             gameInfoFree(&existing);
-            free(name);
-            free(version);
-            free(description);
-            cJSON_Delete(platforms);
+            freeAll(name, version, description, serverArchive, clientArchive,
+                    serverPlatforms, clientPlatforms);
             platformRmrf(tmpDir);
             return GAME_CONTROL_FAIL;
         }
         gameInfoFree(&existing);
     }
 
-    for (int i = 0; i < platCount; i++) {
-        cJSON *entry = cJSON_GetArrayItem(platforms, i);
-        cJSON *platItem = cJSON_GetObjectItem(entry, "platform");
-        cJSON *fileItem = cJSON_GetObjectItem(entry, "file");
-        cJSON *hashItem = cJSON_GetObjectItem(entry, "hash");
+    if (storePlatformFiles(s, gameId, version, tmpDir, serverPlatforms, "server",
+                           outBox) != GAME_CONTROL_SUCC) {
+        freeAll(name, version, description, serverArchive, clientArchive,
+                serverPlatforms, clientPlatforms);
+        platformRmrf(tmpDir);
+        return GAME_CONTROL_FAIL;
+    }
 
-        char *platStr = cJSON_GetStringValue(platItem);
-        char *fileStr = cJSON_GetStringValue(fileItem);
-        char *hashStr = cJSON_GetStringValue(hashItem);
-
-        if (platStr == NULL || fileStr == NULL || hashStr == NULL) {
-            continue;
-        }
-
-        char destDir[PathBufSize];
-        (void)snprintf(destDir, sizeof(destDir), "%s/%u/%s", GAME_LIB_DIR,
-                       gameId, version);
-        platformMkdirp(destDir);
-
-        char srcFilePath[PathBufSize];
-        (void)snprintf(srcFilePath, sizeof(srcFilePath), "%s/%s", tmpDir,
-                       fileStr);
-
-        char dstFilePath[PathBufSize];
-        (void)snprintf(dstFilePath, sizeof(dstFilePath), "%s/%s", destDir,
-                       fileStr);
-
-        if (encryptFileWithKey(srcFilePath, dstFilePath, gameKey) !=
-            GAME_CONTROL_SUCC) {
-            char errLine[LineBufSize];
-            (void)snprintf(errLine, sizeof(errLine),
-                           "Error: encryption failed for '%s'\n", fileStr);
-            controlScrollTextBoxAppend(outBox, errLine);
-            free(name);
-            free(version);
-            free(description);
-            cJSON_Delete(platforms);
-            platformRmrf(tmpDir);
-            return GAME_CONTROL_FAIL;
-        }
-
-        uint64_t encFileSize = 0;
-        platformFileSize(dstFilePath, &encFileSize);
-
-        GamePlatformInfo platInfo;
-        memset(&platInfo, 0, sizeof(platInfo));
-        (void)snprintf(platInfo.platform, sizeof(platInfo.platform), "%s",
-                       platStr);
-        platInfo.fileName = fileStr;
-        platInfo.hash = hashStr;
-        platInfo.fileSize = encFileSize;
-
-        if (registerGamePlatform(s->gameDB, gameId, &platInfo) != DB_SUCC) {
-            char errLine[LineBufSize];
-            (void)snprintf(errLine, sizeof(errLine),
-                           "Warning: platform '%s' registration failed\n",
-                           platStr);
-            controlScrollTextBoxAppend(outBox, errLine);
-        }
+    if (storePlatformFiles(s, gameId, version, tmpDir, clientPlatforms, "client",
+                           outBox) != GAME_CONTROL_SUCC) {
+        freeAll(name, version, description, serverArchive, clientArchive,
+                serverPlatforms, clientPlatforms);
+        platformRmrf(tmpDir);
+        return GAME_CONTROL_FAIL;
     }
 
     platformRmrf(tmpDir);
@@ -604,10 +547,8 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
                    gameId, isNewGame ? "registered" : "updated");
     controlScrollTextBoxAppend(outBox, successLine);
 
-    free(name);
-    free(version);
-    free(description);
-    cJSON_Delete(platforms);
+    freeAll(name, version, description, serverArchive, clientArchive,
+            serverPlatforms, clientPlatforms);
     return GAME_CONTROL_SUCC;
 }
 
@@ -723,7 +664,8 @@ int gameCtlInfo(Server *s, uint32_t gameId, ControlScrollTextBox *outBox) {
         platCount > 0) {
         controlScrollTextBoxAppend(outBox, "Platforms:\n");
         for (size_t i = 0; i < platCount; i++) {
-            (void)snprintf(line, sizeof(line), "  %-10s  %s  (%lu bytes)\n",
+            (void)snprintf(line, sizeof(line), "  [%s] %-10s  %s  (%lu bytes)\n",
+                           plats[i].role[0] != '\0' ? plats[i].role : "?",
                            plats[i].platform,
                            plats[i].fileName != NULL ? plats[i].fileName
                                                      : "(null)",

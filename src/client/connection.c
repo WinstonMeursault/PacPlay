@@ -34,6 +34,13 @@
 
 #include <openssl/crypto.h>
 
+enum {
+    SdkCtlMagic = 0xFF,
+    SdkCtlGameIdOffset = 1,
+    SdkCtlPlatformOffset = 5,
+    SdkCtlStartServerLen = 1 + 4 + PLATFORM_NAME_LEN
+};
+
 /* ─────────────────────────────── public API ─────────────────────────────── */
 
 int clientConnect(Client *client, const char *addr, uint16_t port) {
@@ -136,8 +143,21 @@ static void *clientEventLoop(void *arg) {
             uint8_t *gamePayload = NULL;
             size_t gameLen = 0;
             while (pacplay_cli_poll_send(c->sdk, &gamePayload, &gameLen)) {
-                clientSendEncryptedPacket(c, MsgGamePayload, gamePayload,
-                                         gameLen);
+                if (gameLen == SdkCtlStartServerLen &&
+                    gamePayload[0] == SdkCtlMagic) {
+                    GameStartReqPayload req;
+                    memcpy(&req.gameId,
+                           gamePayload + SdkCtlGameIdOffset,
+                           sizeof(req.gameId));
+                    memcpy(req.platform,
+                           gamePayload + SdkCtlPlatformOffset,
+                           PLATFORM_NAME_LEN);
+                    clientSendEncryptedPacket(c, MsgGameStartReq, &req,
+                                              sizeof(req));
+                } else {
+                    clientSendEncryptedPacket(c, MsgGamePayload, gamePayload,
+                                              gameLen);
+                }
                 pacplay_cli_free_payload(c->sdk, gamePayload);
             }
         }

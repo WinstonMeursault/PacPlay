@@ -6,18 +6,16 @@
 #include "server/database.h"
 #include "server/downloadPool.h"
 #include "server/gameControl.h"
+#include "server/gameRunner.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#include <openssl/crypto.h>
-
 enum {
     StatusOk = 0,
-    StatusError = 1,
-    GameKeyEnvelopeLen = AES_GCM_NONCE_LEN + AES_GCM_KEY_LEN + AES_GCM_TAG_LEN
+    StatusError = 1
 };
 
 int serverHandleGameList(Server *s, ClientSession *cs, const Packet *pkt) {
@@ -84,10 +82,6 @@ int serverHandleGameDownload(Server *s, ClientSession *cs, const Packet *pkt) {
     memset(&gameInfo, 0, sizeof(gameInfo));
     GamePlatformInfo platInfo;
     memset(&platInfo, 0, sizeof(platInfo));
-    uint8_t *envelope = NULL;
-    size_t envLen = 0;
-    uint8_t gameEncKey[AES_GCM_KEY_LEN];
-    memset(gameEncKey, 0, sizeof(gameEncKey));
 
     if (getGameById(s->gameDB, gameId, &gameInfo) != DB_SUCC) {
         LOG_WARN("serverHandleGameDownload: game %u not found", gameId);
@@ -95,7 +89,7 @@ int serverHandleGameDownload(Server *s, ClientSession *cs, const Packet *pkt) {
         return SERVER_SUCC;
     }
 
-    if (getGamePlatform(s->gameDB, gameId, platform, &platInfo) != DB_SUCC) {
+    if (getGamePlatform(s->gameDB, gameId, platform, "client", &platInfo) != DB_SUCC) {
         LOG_WARN("serverHandleGameDownload: platform %s not found for game %u",
                  platform, gameId);
         sendDownloadFailure(cs);
@@ -104,8 +98,8 @@ int serverHandleGameDownload(Server *s, ClientSession *cs, const Packet *pkt) {
     }
 
     char filePath[FILE_PATH_MAX_LEN];
-    snprintf(filePath, sizeof(filePath), GAME_LIB_DIR "/%u/%s/%s", gameId,
-             platform, platInfo.fileName);
+    (void)snprintf(filePath, sizeof(filePath), GAME_LIB_DIR "/%u/%s/client/%s/%s",
+                   gameId, gameInfo.version, platform, platInfo.fileName);
 
     if (access(filePath, R_OK) != 0) {
         LOG_WARN("serverHandleGameDownload: file not readable: %s", filePath);
@@ -114,56 +108,6 @@ int serverHandleGameDownload(Server *s, ClientSession *cs, const Packet *pkt) {
         gamePlatformInfoFree(&platInfo);
         return SERVER_SUCC;
     }
-
-    if (getGameEncKey(s->gameDB, gameId, &envelope, &envLen) != DB_SUCC ||
-        envelope == NULL) {
-        LOG_ERROR("serverHandleGameDownload: failed to get enc key for game %u",
-                  gameId);
-        sendDownloadFailure(cs);
-        gameInfoFree(&gameInfo);
-        gamePlatformInfoFree(&platInfo);
-        free(envelope);
-        return SERVER_SUCC;
-    }
-
-    if (envLen != GameKeyEnvelopeLen) {
-        LOG_ERROR("serverHandleGameDownload: bad envelope size for game %u",
-                  gameId);
-        sendDownloadFailure(cs);
-        gameInfoFree(&gameInfo);
-        gamePlatformInfoFree(&platInfo);
-        free(envelope);
-        return SERVER_SUCC;
-    }
-
-    AESGCMKey decKey;
-    memcpy(decKey.key, s->gameDB->dekKey, AES_GCM_KEY_LEN);
-    memcpy(decKey.nonce, envelope, AES_GCM_NONCE_LEN);
-
-    AESGCMCipher cipher;
-    cipher.buffer.data = envelope + AES_GCM_NONCE_LEN;
-    cipher.buffer.len = AES_GCM_KEY_LEN;
-    cipher.buffer.capacity = AES_GCM_KEY_LEN;
-    memcpy(cipher.tag, envelope + AES_GCM_NONCE_LEN + AES_GCM_KEY_LEN,
-           AES_GCM_TAG_LEN);
-
-    AESGCMBuffer ptBuf;
-    ptBuf.data = gameEncKey;
-    ptBuf.capacity = AES_GCM_KEY_LEN;
-    ptBuf.len = 0;
-
-    if (decryptAESGCM(&cipher, NULL, &decKey, &ptBuf) != CRYPTO_SUCC) {
-        LOG_ERROR(
-            "serverHandleGameDownload: envelope decryption failed for game %u",
-            gameId);
-        OPENSSL_cleanse(&decKey, sizeof(decKey));
-        sendDownloadFailure(cs);
-        gameInfoFree(&gameInfo);
-        gamePlatformInfoFree(&platInfo);
-        free(envelope);
-        return SERVER_SUCC;
-    }
-    OPENSSL_cleanse(&decKey, sizeof(decKey));
 
     uint32_t totalChunks =
         (uint32_t)((platInfo.fileSize + GAME_CHUNK_SIZE - 1) / GAME_CHUNK_SIZE);
@@ -180,7 +124,6 @@ int serverHandleGameDownload(Server *s, ClientSession *cs, const Packet *pkt) {
     strncpy(pt.filePath, filePath, FILE_PATH_MAX_LEN);
     pt.fileSize = platInfo.fileSize;
     pt.totalChunks = totalChunks;
-    memcpy(pt.gameEncKey, gameEncKey, AES_GCM_KEY_LEN);
     pt.metadata.gameId = gameId;
     pt.metadata.fileSize = platInfo.fileSize;
     strncpy(pt.metadata.name, gameInfo.name, GAME_NAME_LEN);
@@ -190,11 +133,9 @@ int serverHandleGameDownload(Server *s, ClientSession *cs, const Packet *pkt) {
 
     if (downloadPoolRegisterToken(s->downloadPool, &pt) != 0) {
         LOG_ERROR("serverHandleGameDownload: token registration failed");
-        OPENSSL_cleanse(gameEncKey, sizeof(gameEncKey));
         sendDownloadFailure(cs);
         gameInfoFree(&gameInfo);
         gamePlatformInfoFree(&platInfo);
-        free(envelope);
         return SERVER_SUCC;
     }
 
@@ -213,8 +154,6 @@ int serverHandleGameDownload(Server *s, ClientSession *cs, const Packet *pkt) {
 
     gameInfoFree(&gameInfo);
     gamePlatformInfoFree(&platInfo);
-    free(envelope);
-    OPENSSL_cleanse(gameEncKey, sizeof(gameEncKey));
 
     return ret;
 }
@@ -231,5 +170,68 @@ int serverHandleGameDownloadCancel(Server *s, ClientSession *cs,
     const DataAuthPayload *payload = (const DataAuthPayload *)pkt->payload;
     (void)downloadPoolCancelByToken(s->downloadPool, payload->token);
 
+    return SERVER_SUCC;
+}
+
+int serverHandleGameStart(Server *s, ClientSession *cs, const Packet *pkt) {
+    if (pkt->header.payloadLength < sizeof(GameStartReqPayload)) {
+        LOG_WARN("serverHandleGameStart: payload too short (fd=%d)", cs->fd);
+        return SERVER_FAIL;
+    }
+
+    const GameStartReqPayload *req =
+        (const GameStartReqPayload *)pkt->payload;
+    uint32_t gameId = ntohl(req->gameId);
+    char platform[PLATFORM_NAME_LEN];
+    memcpy(platform, req->platform, PLATFORM_NAME_LEN);
+    platform[PLATFORM_NAME_LEN - 1] = '\0';
+
+    GameInfo gameInfo;
+    memset(&gameInfo, 0, sizeof(gameInfo));
+    GamePlatformInfo platInfo;
+    memset(&platInfo, 0, sizeof(platInfo));
+
+    if (getGameById(s->gameDB, gameId, &gameInfo) != DB_SUCC) {
+        LOG_WARN("serverHandleGameStart: game %u not found", gameId);
+        gameInfoFree(&gameInfo);
+        (void)serverSendStatusResponse(cs, MsgGameStartResp, StatusError);
+        return SERVER_SUCC;
+    }
+
+    if (getGamePlatform(s->gameDB, gameId, platform, "server", &platInfo) != DB_SUCC) {
+        LOG_WARN("serverHandleGameStart: platform %s not found for game %u",
+                 platform, gameId);
+        gameInfoFree(&gameInfo);
+        (void)serverSendStatusResponse(cs, MsgGameStartResp, StatusError);
+        return SERVER_SUCC;
+    }
+
+    char soPath[FILE_PATH_MAX_LEN];
+    (void)snprintf(soPath, sizeof(soPath), GAME_LIB_DIR "/%u/%s/server/%s/%s",
+                   gameId, gameInfo.version, platform, platInfo.fileName);
+
+    if (access(soPath, R_OK) != 0) {
+        LOG_WARN("serverHandleGameStart: .so not readable: %s", soPath);
+        gameInfoFree(&gameInfo);
+        gamePlatformInfoFree(&platInfo);
+        (void)serverSendStatusResponse(cs, MsgGameStartResp, StatusError);
+        return SERVER_SUCC;
+    }
+
+    if (serverStartGame(s, soPath) != SERVER_SUCC) {
+        LOG_ERROR("serverHandleGameStart: serverStartGame failed for %s",
+                  soPath);
+        gameInfoFree(&gameInfo);
+        gamePlatformInfoFree(&platInfo);
+        (void)serverSendStatusResponse(cs, MsgGameStartResp, StatusError);
+        return SERVER_SUCC;
+    }
+
+    gameInfoFree(&gameInfo);
+    gamePlatformInfoFree(&platInfo);
+
+    (void)serverSendStatusResponse(cs, MsgGameStartResp, StatusOk);
+    LOG_INFO("serverHandleGameStart: game %u started (platform=%s)", gameId,
+             platform);
     return SERVER_SUCC;
 }

@@ -54,7 +54,8 @@
     "fileName TEXT NOT NULL, "                                                 \
     "hash TEXT NOT NULL, "                                                     \
     "fileSize INTEGER NOT NULL, "                                              \
-    "PRIMARY KEY (gameId, platform), "                                         \
+    "role TEXT NOT NULL DEFAULT 'client', "                                    \
+    "PRIMARY KEY (gameId, platform, role), "                                   \
     "FOREIGN KEY (gameId) REFERENCES games(gameId) ON DELETE CASCADE"          \
     ");"
 
@@ -106,14 +107,15 @@
 
 #define SQL_INSERT_PLATFORM                                                    \
     "INSERT OR REPLACE INTO game_platforms "                                   \
-    "(gameId, platform, fileName, hash, fileSize) VALUES (?, ?, ?, ?, ?);"
+    "(gameId, platform, fileName, hash, fileSize, role) "                      \
+    "VALUES (?, ?, ?, ?, ?, ?);"
 
 #define SQL_SELECT_PLATFORM                                                    \
-    "SELECT platform, fileName, hash, fileSize "                               \
-    "FROM game_platforms WHERE gameId = ? AND platform = ?;"
+    "SELECT platform, fileName, hash, fileSize, role "                         \
+    "FROM game_platforms WHERE gameId = ? AND platform = ? AND role = ?;"
 
 #define SQL_LIST_PLATFORMS                                                     \
-    "SELECT platform, fileName, hash, fileSize "                               \
+    "SELECT platform, fileName, hash, fileSize, role "                         \
     "FROM game_platforms WHERE gameId = ?;"
 
 /* ─────────────────── column indices ────────────────────── */
@@ -131,7 +133,8 @@ enum {
     ColPlatPlatform = 0,
     ColPlatFileName = 1,
     ColPlatHash = 2,
-    ColPlatFileSize = 3
+    ColPlatFileSize = 3,
+    ColPlatRole = 4
 };
 
 /* ────────────────────────── schema init helper ──────────────────────────── */
@@ -409,7 +412,9 @@ int listGamePlatforms(DB *database, uint32_t gameId, GamePlatformInfo **out,
         const char *fn =
             (const char *)sqlite3_column_text(stmt, ColPlatFileName);
         const char *h = (const char *)sqlite3_column_text(stmt, ColPlatHash);
-        if (plat == NULL || fn == NULL || h == NULL) {
+        const char *r =
+            (const char *)sqlite3_column_text(stmt, ColPlatRole);
+        if (plat == NULL || fn == NULL || h == NULL || r == NULL) {
             LOG_ERROR("listGamePlatforms: unexpected NULL column");
             gamePlatformInfoArrayFree(results, n);
             return DB_FAIL;
@@ -418,6 +423,8 @@ int listGamePlatforms(DB *database, uint32_t gameId, GamePlatformInfo **out,
         results[n].platform[PLATFORM_NAME_LEN - 1] = '\0';
         results[n].fileName = strdup(fn);
         results[n].hash = strdup(h);
+        strncpy(results[n].role, r, sizeof(results[n].role) - 1);
+        results[n].role[sizeof(results[n].role) - 1] = '\0';
         results[n].fileSize =
             (uint64_t)sqlite3_column_int64(stmt, ColPlatFileSize);
         if (results[n].fileName == NULL || results[n].hash == NULL) {
@@ -473,7 +480,8 @@ int registerGamePlatform(DB *database, uint32_t gameId,
         ParamPlatform = 2,
         ParamFileName = 3,
         ParamHash = 4,
-        ParamFileSize = 5
+        ParamFileSize = 5,
+        ParamRole = 6
     };
 
     if (sqlite3_bind_int64(stmt, ParamGameId, (sqlite3_int64)gameId) !=
@@ -485,7 +493,9 @@ int registerGamePlatform(DB *database, uint32_t gameId,
         sqlite3_bind_text(stmt, ParamHash, platform->hash, -1, SQLITE_STATIC) !=
             SQLITE_OK ||
         sqlite3_bind_int64(stmt, ParamFileSize,
-                           (sqlite3_int64)platform->fileSize) != SQLITE_OK) {
+                           (sqlite3_int64)platform->fileSize) != SQLITE_OK ||
+        sqlite3_bind_text(stmt, ParamRole, platform->role, -1,
+                          SQLITE_STATIC) != SQLITE_OK) {
         LOG_ERROR("registerGamePlatform: bind failed: %s",
                   sqlite3_errmsg(database->handle));
         return DB_FAIL;
@@ -502,8 +512,8 @@ int registerGamePlatform(DB *database, uint32_t gameId,
 }
 
 int getGamePlatform(DB *database, uint32_t gameId, const char *platform,
-                    GamePlatformInfo *out) {
-    if (database == NULL || platform == NULL || out == NULL) {
+                    const char *role, GamePlatformInfo *out) {
+    if (database == NULL || platform == NULL || role == NULL || out == NULL) {
         LOG_ERROR("getGamePlatform: NULL argument");
         return DB_FAIL;
     }
@@ -517,11 +527,13 @@ int getGamePlatform(DB *database, uint32_t gameId, const char *platform,
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
 
-    enum { ParamGameId = 1, ParamPlatform = 2 };
+    enum { ParamGameId = 1, ParamPlatform = 2, ParamRole = 3 };
 
     if (sqlite3_bind_int64(stmt, ParamGameId, (sqlite3_int64)gameId) !=
             SQLITE_OK ||
         sqlite3_bind_text(stmt, ParamPlatform, platform, -1, SQLITE_STATIC) !=
+            SQLITE_OK ||
+        sqlite3_bind_text(stmt, ParamRole, role, -1, SQLITE_STATIC) !=
             SQLITE_OK) {
         LOG_ERROR("getGamePlatform: bind failed: %s",
                   sqlite3_errmsg(database->handle));
@@ -536,7 +548,9 @@ int getGamePlatform(DB *database, uint32_t gameId, const char *platform,
         const char *fn =
             (const char *)sqlite3_column_text(stmt, ColPlatFileName);
         const char *h = (const char *)sqlite3_column_text(stmt, ColPlatHash);
-        if (plat == NULL || fn == NULL || h == NULL) {
+        const char *r =
+            (const char *)sqlite3_column_text(stmt, ColPlatRole);
+        if (plat == NULL || fn == NULL || h == NULL || r == NULL) {
             LOG_ERROR("getGamePlatform: unexpected NULL column");
             return DB_FAIL;
         }
@@ -544,6 +558,8 @@ int getGamePlatform(DB *database, uint32_t gameId, const char *platform,
         out->platform[PLATFORM_NAME_LEN - 1] = '\0';
         out->fileName = strdup(fn);
         out->hash = strdup(h);
+        strncpy(out->role, r, sizeof(out->role) - 1);
+        out->role[sizeof(out->role) - 1] = '\0';
         out->fileSize = (uint64_t)sqlite3_column_int64(stmt, ColPlatFileSize);
         if (out->fileName == NULL || out->hash == NULL) {
             LOG_ERROR("getGamePlatform: strdup failed (errno=%d)", errno);

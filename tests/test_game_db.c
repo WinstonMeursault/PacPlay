@@ -127,7 +127,8 @@ static void testUnregisterGameCascade(void) {
     ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
 
     GamePlatformInfo plat = {
-        .fileName = "game.exe", .hash = "abc123", .fileSize = TestFileSize};
+        .fileName = "game.exe", .hash = "abc123", .fileSize = TestFileSize,
+        .role = "server"};
     strncpy(plat.platform, "windows", PLATFORM_NAME_LEN - 1);
     plat.platform[PLATFORM_NAME_LEN - 1] = '\0';
     ASSERT_INT_EQ(registerGamePlatform(db, g.gameId, &plat), DB_SUCC);
@@ -136,7 +137,7 @@ static void testUnregisterGameCascade(void) {
 
     GamePlatformInfo pOut;
     memset(&pOut, 0, sizeof(pOut));
-    ASSERT_INT_EQ(getGamePlatform(db, g.gameId, "windows", &pOut), DB_FAIL);
+    ASSERT_INT_EQ(getGamePlatform(db, g.gameId, "windows", "server", &pOut), DB_FAIL);
 
     dbClose(db);
 }
@@ -149,8 +150,9 @@ static void testRegisterPlatform(void) {
     ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
 
     GamePlatformInfo plat = {.fileName = "game.bin",
-                             .hash = "sha256hex",
-                             .fileSize = TestFileSizeSmall};
+                              .hash = "sha256hex",
+                              .fileSize = TestFileSizeSmall,
+                              .role = "client"};
     strncpy(plat.platform, "linux", PLATFORM_NAME_LEN - 1);
     plat.platform[PLATFORM_NAME_LEN - 1] = '\0';
     ASSERT_INT_EQ(registerGamePlatform(db, g.gameId, &plat), DB_SUCC);
@@ -166,15 +168,16 @@ static void testGetPlatform(void) {
     ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
 
     GamePlatformInfo plat = {.fileName = "app.dmg",
-                             .hash = "deadbeef",
-                             .fileSize = TestFileSizeLarge};
+                              .hash = "deadbeef",
+                              .fileSize = TestFileSizeLarge,
+                              .role = "server"};
     strncpy(plat.platform, "macos", PLATFORM_NAME_LEN - 1);
     plat.platform[PLATFORM_NAME_LEN - 1] = '\0';
     ASSERT_INT_EQ(registerGamePlatform(db, g.gameId, &plat), DB_SUCC);
 
     GamePlatformInfo out;
     memset(&out, 0, sizeof(out));
-    ASSERT_INT_EQ(getGamePlatform(db, g.gameId, "macos", &out), DB_SUCC);
+    ASSERT_INT_EQ(getGamePlatform(db, g.gameId, "macos", "server", &out), DB_SUCC);
     ASSERT_STR_EQ(out.platform, "macos");
     ASSERT_STR_EQ(out.fileName, "app.dmg");
     ASSERT_STR_EQ(out.hash, "deadbeef");
@@ -192,17 +195,20 @@ static void testListPlatforms(void) {
     ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
 
     GamePlatformInfo p1 = {
-        .fileName = "game.exe", .hash = "h1", .fileSize = TestFileSize};
+        .fileName = "game.exe", .hash = "h1", .fileSize = TestFileSize,
+        .role = "server"};
     strncpy(p1.platform, "windows", PLATFORM_NAME_LEN - 1);
     p1.platform[PLATFORM_NAME_LEN - 1] = '\0';
 
     GamePlatformInfo p2 = {
-        .fileName = "game.bin", .hash = "h2", .fileSize = TestFileSizeSmall};
+        .fileName = "game.bin", .hash = "h2", .fileSize = TestFileSizeSmall,
+        .role = "client"};
     strncpy(p2.platform, "linux", PLATFORM_NAME_LEN - 1);
     p2.platform[PLATFORM_NAME_LEN - 1] = '\0';
 
     GamePlatformInfo p3 = {
-        .fileName = "game.dmg", .hash = "h3", .fileSize = TestFileSizeLarge};
+        .fileName = "game.dmg", .hash = "h3", .fileSize = TestFileSizeLarge,
+        .role = "client"};
     strncpy(p3.platform, "macos", PLATFORM_NAME_LEN - 1);
     p3.platform[PLATFORM_NAME_LEN - 1] = '\0';
 
@@ -500,7 +506,8 @@ static void registerGameWithPlatform(DB *db, const char *gameName,
     ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
 
     GamePlatformInfo plat = {.fileName = "game.bin", .hash = "abc123",
-                              .fileSize = TestFileSizeSmall};
+                              .fileSize = TestFileSizeSmall,
+                              .role = "client"};
     strncpy(plat.platform, platformName, PLATFORM_NAME_LEN - 1);
     plat.platform[PLATFORM_NAME_LEN - 1] = '\0';
     ASSERT_INT_EQ(registerGamePlatform(db, g.gameId, &plat), DB_SUCC);

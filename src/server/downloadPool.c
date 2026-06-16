@@ -144,7 +144,6 @@ static void *acceptThreadFunc(void *arg) {
         memcpy(task.filePath, matched->filePath, FILE_PATH_MAX_LEN);
         task.fileSize = matched->fileSize;
         task.totalChunks = matched->totalChunks;
-        memcpy(task.gameEncKey, matched->gameEncKey, AES_GCM_KEY_LEN);
         task.metadata = matched->metadata;
 
         if (deriveDataChannelKey(matched->mainAESKey, matched->token,
@@ -165,35 +164,32 @@ static void *acceptThreadFunc(void *arg) {
     return NULL;
 }
 
-static int decryptFileAtRest(const char *filePath,
-                             const uint8_t gameEncKey[AES_GCM_KEY_LEN],
-                             uint8_t **outPlaintext, uint64_t *outLen) {
+static int readFilePlaintext(const char *filePath, uint8_t **outData,
+                              uint64_t *outLen) {
     int fd = open(filePath, O_RDONLY);
     if (fd < 0) {
         LOG_ERROR("Cannot open game file: %s", filePath);
         return PoolFail;
     }
 
-    off_t rawSize = lseek(fd, 0, SEEK_END);
-    if (rawSize < (off_t)(AES_GCM_NONCE_LEN + AES_GCM_TAG_LEN)) {
+    off_t fileLen = lseek(fd, 0, SEEK_END);
+    if (fileLen < 0) {
         close(fd);
-        LOG_ERROR("Game file too small: %s", filePath);
         return PoolFail;
     }
     lseek(fd, 0, SEEK_SET);
 
-    size_t totalSize = (size_t)rawSize;
-    uint8_t *raw = malloc(totalSize);
-    if (raw == NULL) {
+    uint8_t *data = malloc((size_t)fileLen);
+    if (data == NULL) {
         close(fd);
         return PoolFail;
     }
 
     size_t bytesRead = 0;
-    while (bytesRead < totalSize) {
-        ssize_t n = read(fd, raw + bytesRead, totalSize - bytesRead);
+    while (bytesRead < (size_t)fileLen) {
+        ssize_t n = read(fd, data + bytesRead, (size_t)fileLen - bytesRead);
         if (n <= 0) {
-            free(raw);
+            free(data);
             close(fd);
             return PoolFail;
         }
@@ -201,41 +197,8 @@ static int decryptFileAtRest(const char *filePath,
     }
     close(fd);
 
-    size_t cipherLen = totalSize - AES_GCM_NONCE_LEN - AES_GCM_TAG_LEN;
-
-    AESGCMKey decKey;
-    memcpy(decKey.key, gameEncKey, AES_GCM_KEY_LEN);
-    memcpy(decKey.nonce, raw, AES_GCM_NONCE_LEN);
-
-    AESGCMCipher cipher;
-    cipher.buffer.data = raw + AES_GCM_NONCE_LEN;
-    cipher.buffer.len = cipherLen;
-    cipher.buffer.capacity = cipherLen;
-    memcpy(cipher.tag, raw + AES_GCM_NONCE_LEN + cipherLen, AES_GCM_TAG_LEN);
-
-    uint8_t *plaintext = malloc(cipherLen);
-    if (plaintext == NULL) {
-        free(raw);
-        return PoolFail;
-    }
-
-    AESGCMBuffer ptBuf;
-    ptBuf.data = plaintext;
-    ptBuf.capacity = cipherLen;
-    ptBuf.len = 0;
-
-    int ret = decryptAESGCM(&cipher, NULL, &decKey, &ptBuf);
-    OPENSSL_cleanse(&decKey, sizeof(decKey));
-    free(raw);
-
-    if (ret != CRYPTO_SUCC) {
-        free(plaintext);
-        LOG_ERROR("Game file decryption failed: %s", filePath);
-        return PoolFail;
-    }
-
-    *outPlaintext = plaintext;
-    *outLen = ptBuf.len;
+    *outData = data;
+    *outLen = (uint64_t)fileLen;
     return PoolSuccess;
 }
 
@@ -267,7 +230,6 @@ static void *workerThreadFunc(void *arg) {
                      task.gameId);
             close(task.dataFd);
             OPENSSL_cleanse(task.dataKey, AES_GCM_KEY_LEN);
-            OPENSSL_cleanse(task.gameEncKey, AES_GCM_KEY_LEN);
             continue;
         }
 
@@ -278,23 +240,19 @@ static void *workerThreadFunc(void *arg) {
                      task.gameId);
             close(task.dataFd);
             OPENSSL_cleanse(task.dataKey, AES_GCM_KEY_LEN);
-            OPENSSL_cleanse(task.gameEncKey, AES_GCM_KEY_LEN);
             continue;
         }
 
         uint8_t *plainData = NULL;
         uint64_t plainLen = 0;
-        if (decryptFileAtRest(task.filePath, task.gameEncKey, &plainData,
-                              &plainLen) != PoolSuccess) {
-            LOG_ERROR("Worker: file decryption failed for game %u",
+        if (readFilePlaintext(task.filePath, &plainData,
+                               &plainLen) != PoolSuccess) {
+            LOG_ERROR("Worker: file read failed for game %u",
                       task.gameId);
             close(task.dataFd);
             OPENSSL_cleanse(task.dataKey, AES_GCM_KEY_LEN);
-            OPENSSL_cleanse(task.gameEncKey, AES_GCM_KEY_LEN);
             continue;
         }
-
-        OPENSSL_cleanse(task.gameEncKey, AES_GCM_KEY_LEN);
 
         bool transferOk = true;
         for (uint32_t i = task.resumeChunkIndex; i < task.totalChunks; i++) {
@@ -521,7 +479,6 @@ void downloadPoolDestroy(DownloadPool *pool) {
         DownloadTask *t = &pool->taskQueue[pool->queueHead];
         close(t->dataFd);
         OPENSSL_cleanse(t->dataKey, AES_GCM_KEY_LEN);
-        OPENSSL_cleanse(t->gameEncKey, AES_GCM_KEY_LEN);
         pool->queueHead = (pool->queueHead + 1) % MAX_QUEUED_TASKS;
         pool->queueCount--;
     }

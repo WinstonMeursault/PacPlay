@@ -503,7 +503,7 @@ int getGameEncKey(DB *database, uint32_t gameId, uint8_t **outEnvelope,
 int registerGamePlatform(DB *database, uint32_t gameId,
                          const GamePlatformInfo *platform);
 int getGamePlatform(DB *database, uint32_t gameId, const char *platform,
-                    GamePlatformInfo *out);
+                    const char *role, GamePlatformInfo *out);
 int listGamePlatforms(DB *database, uint32_t gameId, GamePlatformInfo **out,
                       size_t *count);
 void gameInfoFree(GameInfo *info);

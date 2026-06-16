@@ -109,7 +109,7 @@ $(BIN_DIR)/server $(BIN_DIR)/client: | $(BIN_DIR)
 $(SERVER_BIN): $(SERVER_ALL_OBJ) $(SERVER_SDK_LIB) | $(BIN_DIR)/server
 	@echo -e '$(C_GREEN)Linking server: $@$(C_RESET)'
 	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS) -L$(SDK_LIB_DIR) -lpacplay_server_sdk \
-		-Wl,-rpath,$(CURDIR)/$(SDK_LIB_DIR)
+		-Wl,-rpath,$(CURDIR)/$(SDK_LIB_DIR) -ldl
 
 # Link client executable (links against client SDK .so)
 $(CLIENT_BIN): $(CLIENT_ALL_OBJ) $(CLIENT_SDK_LIB) | $(BIN_DIR)/client

@@ -136,7 +136,11 @@ typedef enum {
     MsgGameDownloadDone,
 
     /* In-game payload. */
-    MsgGamePayload
+    MsgGamePayload,
+
+    /* Game start request / response — client requests server-side game launch. */
+    MsgGameStartReq,
+    MsgGameStartResp
 } MessageType;
 
 #pragma pack(push, 1)
@@ -338,6 +342,17 @@ typedef struct {
 typedef struct {
     uint32_t chunkIndex;
 } GameChunkAckPayload;
+#pragma pack(pop)
+
+/** @brief Game server start request payload sent from client to server.
+ *
+ *  Used by @c MsgGameStartReq.  Requests the server to load and run the
+ *  server-side game dynamic library for the specified game and platform. */
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t gameId;
+    char platform[PLATFORM_NAME_LEN];
+} GameStartReqPayload;
 #pragma pack(pop)
 
 /** @brief Game list request payload for range-based browsing with optional

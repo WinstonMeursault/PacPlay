@@ -22,7 +22,6 @@ typedef struct {
     char filePath[FILE_PATH_MAX_LEN];
     uint64_t fileSize;
     uint32_t totalChunks;
-    uint8_t gameEncKey[AES_GCM_KEY_LEN];
     GameMetadataPayload metadata;
 } DownloadTask;
 
@@ -34,7 +33,6 @@ typedef struct {
     char filePath[FILE_PATH_MAX_LEN];
     uint64_t fileSize;
     uint32_t totalChunks;
-    uint8_t gameEncKey[AES_GCM_KEY_LEN];
     GameMetadataPayload metadata;
     int64_t expiresAt;
     bool used;

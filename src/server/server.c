@@ -32,6 +32,7 @@
 #include "server/downloadPool.h"
 #include "server/gameControl.h"
 #include "server/gameDistribution.h"
+#include "server/gameRunner.h"
 #include "server/keyManager.h"
 #include "server/room.h"
 #include "server/tui/serverTUI.h"
@@ -244,6 +245,7 @@ void serverShutdown(Server *server) {
     }
     server->running = false;
     pthread_join(server->serverThread, NULL);
+    serverStopGame(server);
 }
 
 void serverRun(Server *server) { (void)server; }
@@ -514,6 +516,8 @@ static int processClient(Server *s, ClientSession *cs) {
             ret = serverHandleGameDownload(s, cs, &pkt);
         } else if (mt == MsgGameDownloadCancel) {
             ret = serverHandleGameDownloadCancel(s, cs, &pkt);
+        } else if (mt == MsgGameStartReq) {
+            ret = serverHandleGameStart(s, cs, &pkt);
         } else if (mt == MsgLogout) {
             ret = handleLogout(s, cs);
         } else if (mt == MsgTOTPSetupReq) {
@@ -540,6 +544,8 @@ static int processClient(Server *s, ClientSession *cs) {
             }
             /* Broadcast to other room members. */
             ret = serverHandleGamePayload(s, cs, &pkt);
+        } else if (mt == MsgGameStartReq) {
+            ret = serverHandleGameStart(s, cs, &pkt);
         } else if (mt == MsgLogout) {
             ret = handleLogout(s, cs);
         } else if (mt == MsgTOTPSetupReq) {

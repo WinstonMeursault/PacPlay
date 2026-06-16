@@ -25,6 +25,17 @@
 
 #include "pacplay_sdk.h"
 
+#include <arpa/inet.h>
+#include <string.h>
+
+enum {
+    CtlMagic = 0xFF,
+    CtlGameIdOffset = 1,
+    CtlPlatformOffset = 5,
+    CtlPlatformLen = 16,
+    CtlStartServerLen = 1 + 4 + CtlPlatformLen
+};
+
 PacPlaySDK *sdk_create(void);
 void sdk_destroy(PacPlaySDK *sdk);
 int sdk_send(PacPlaySDK *sdk, const void *data, size_t len);
@@ -66,4 +77,21 @@ void pacplay_cli_on_receive(PacPlaySDK *sdk, PacPlayOnReceive callback,
 void pacplay_cli_free_payload(PacPlaySDK *sdk, uint8_t *payload)
 {
     sdk_free_payload(sdk, payload);
+}
+
+int pacplay_cli_request_start_server(PacPlaySDK *sdk, uint32_t gameId,
+                                     const char *platform)
+{
+    if (sdk == NULL || platform == NULL) {
+        return -1;
+    }
+
+    uint8_t buf[CtlStartServerLen];
+    buf[0] = CtlMagic;
+    uint32_t netGameId = htonl(gameId);
+    memcpy(buf + CtlGameIdOffset, &netGameId, sizeof(netGameId));
+    strncpy((char *)(buf + CtlPlatformOffset), platform, CtlPlatformLen - 1);
+    buf[CtlStartServerLen - 1] = '\0';
+
+    return sdk_send(sdk, buf, CtlStartServerLen);
 }
