@@ -3395,3 +3395,58 @@ tuiAppInit()           → 初始化 ncurses 环境 + 消息队列
   └─ tuiAppStart(page)                   → 启动事件循环（阻塞，等待 wgetch / SIGWINCH）
 tuiAppStop()           → 退出循环 → endwin
 ```
+
+---
+
+## 第六部分：游戏分发 API
+
+### 6.1 概述
+
+游戏分发模块实现服务器对客户端的完整游戏包体传输，包括：管理员通过 TUI `gamectl` 命令上架/管理游戏、客户端浏览并按平台下载游戏文件、分片加密传输与断点续传。
+
+详细设计见 `docs/superpowers/specs/2026-06-16-game-distribution-design.md`。
+
+### 6.2 新增协议消息（控制通道）
+
+| 值 | 名称 | 方向 | 说明 |
+|---|------|------|------|
+| 23 | `MsgGameListReq` | C→S | 请求游戏列表（载荷：PlatformInfoPayload） |
+| 24 | `MsgGameListResp` | S→C | 游戏列表响应（载荷：GameListEntry[]） |
+| 25 | `MsgGameDownloadReq` | C→S | 请求下载（载荷：GameDownloadReqPayload） |
+| 26 | `MsgGameDownloadResp` | S→C | 下载响应（载荷：GameDownloadRespPayload） |
+| 27 | `MsgGameDownloadCancel` | C→S | 取消下载 |
+
+### 6.3 新增协议消息（数据通道）
+
+| 值 | 名称 | 方向 | 说明 |
+|---|------|------|------|
+| 28 | `MsgDataAuth` | C→S | 数据通道认证（载荷：DataAuthPayload） |
+| 29 | `MsgDataAuthResp` | S→C | 认证结果（status byte） |
+| 30 | `MsgGameMetadata` | S→C | 游戏元数据（载荷：GameMetadataPayload） |
+| 31 | `MsgGameChunk` | S→C | 文件分片（载荷：GameChunkPayload） |
+| 32 | `MsgGameChunkAck` | C→S | 分片确认（载荷：GameChunkAckPayload） |
+| 33 | `MsgGameDownloadDone` | S→C | 传输完成 |
+
+### 6.4 服务器 gamectl 命令
+
+在服务器 TUI 的 Command 面板中输入：
+
+| 命令 | 功能 |
+|------|------|
+| `gamectl list` | 列出所有已注册游戏 |
+| `gamectl update <path.tar.gz>` | 上架/更新游戏包 |
+| `gamectl delete <gameId>` | 删除游戏 |
+| `gamectl scan` | 扫描 gameLib 目录校验完整性 |
+| `gamectl info <gameId>` | 查看游戏详细信息 |
+
+### 6.5 游戏包体格式
+
+开发者提交 `.tar.gz` 压缩包，内含 `metadata.json` + 各平台包体。详见设计文档 §2。
+
+### 6.6 下载线程池
+
+服务器使用固定大小线程池（默认 4 worker）处理并发下载请求。每个下载通过独立 TCP 数据通道传输，密钥由主通道 AES 密钥通过 HKDF 派生。详见设计文档 §4.3。
+
+### 6.7 客户端下载管理器接口
+
+声明于 `src/client/gameLoad.h`。提供 `downloadManagerInit`、`downloadManagerStartDownload`、`downloadManagerCancel`、`downloadManagerGetProgress`、`downloadManagerDestroy` 等接口，由其他开发者实现实际 TUI 集成。

@@ -129,9 +129,16 @@ typedef struct DB {
     sqlite3_stmt *stmtSetKey; /**< Cached INSERT OR REPLACE (ServerDB). */
     sqlite3_stmt *stmtGetKey; /**< Cached SELECT key_value (ServerDB). */
     /* GameDB cached statements */
-    sqlite3_stmt *stmtUpdate;       /**< Cached UPDATE statement (GameDB). */
-    sqlite3_stmt *stmtSelectById;   /**< Cached SELECT by ID (GameDB). */
-    sqlite3_stmt *stmtSelectByName; /**< Cached SELECT by name (GameDB). */
+    sqlite3_stmt *stmtGameInsert;
+    sqlite3_stmt *stmtGameDelete;
+    sqlite3_stmt *stmtGameUpdate;
+    sqlite3_stmt *stmtGameSelectById;
+    sqlite3_stmt *stmtGameSelectByName;
+    sqlite3_stmt *stmtGameList;
+    sqlite3_stmt *stmtGameGetKey;
+    sqlite3_stmt *stmtPlatformInsert;
+    sqlite3_stmt *stmtPlatformSelect;
+    sqlite3_stmt *stmtPlatformList;
     /* Key material held in memory for the lifetime of the handle */
     uint8_t dekKey[AES_GCM_KEY_LEN];  /**< DEK for TOTP secret envelope
                                          encryption. */
@@ -478,104 +485,24 @@ int roomExists(DB *database, uint32_t roomId);
 
 /* ──────────────────── game metadata (registry) operations ──────────────── */
 
-/**
- * @brief Register a new game in the game metadata database.
- *
- * Inserts a row with the current UNIX timestamp for both createdAt and
- * updatedAt.  @p game->gameId must be non-zero and must not already
- * exist.  @p game->name must be unique.
- *
- * @param database  An open GameDB handle.
- * @param game      Game metadata to insert. Must not be NULL.
- * @return @c DB_SUCC on success, @c DB_FAIL on duplicate or error.
- */
-int registerGame(DB *database, GameInfo *game);
-
-/**
- * @brief Remove a game record from the game metadata database.
- *
- * Strict mode: returns @c DB_FAIL if @p gameId does not exist.
- *
- * @param database  An open GameDB handle.
- * @param gameId    The game to remove.
- * @return @c DB_SUCC on success, @c DB_FAIL if not found or on error.
- */
+int registerGame(DB *database, GameInfo *game, const uint8_t *encKeyEnvelope,
+                 size_t envelopeLen);
 int unregisterGame(DB *database, uint32_t gameId);
-
-/**
- * @brief Update the version and hash of an existing game.
- *
- * Also refreshes the updatedAt timestamp.  Returns @c DB_FAIL if the
- * game does not exist.
- *
- * @param database  An open GameDB handle.
- * @param gameId    The game to update.
- * @param version   New version string. Must not be NULL.
- * @param hash      New hash string. Must not be NULL.
- * @return @c DB_SUCC on success, @c DB_FAIL if not found or on error.
- */
-int updateGameVersion(DB *database, uint32_t gameId, const char *version,
-                      const char *hash);
-
-/**
- * @brief Retrieve a game record by its ID.
- *
- * On success, string fields in @p out are allocated via strdup and must
- * be freed by the caller (see gameInfoFree()).
- *
- * @param database  An open GameDB handle.
- * @param gameId    The game to look up.
- * @param out       Output structure. Must not be NULL.
- * @return @c DB_SUCC on success, @c DB_FAIL if not found or on error.
- */
+int updateGameVersion(DB *database, uint32_t gameId, const char *version);
 int getGameById(DB *database, uint32_t gameId, GameInfo *out);
-
-/**
- * @brief Retrieve a game record by its unique name.
- *
- * On success, string fields in @p out are allocated via strdup and must
- * be freed by the caller (see gameInfoFree()).
- *
- * @param database  An open GameDB handle.
- * @param name      Game name to look up. Must not be NULL.
- * @param out       Output structure. Must not be NULL.
- * @return @c DB_SUCC on success, @c DB_FAIL if not found or on error.
- */
 int getGameByName(DB *database, const char *name, GameInfo *out);
-
-/**
- * @brief List all registered games.
- *
- * On success @p *out is set to a newly allocated array sorted by
- * gameId ascending, and @p *count is set to the number of entries.
- * An empty database returns @c DB_SUCC with @p *count = 0 and
- * @p *out = NULL.  The caller must free the result with
- * gameInfoArrayFree().
- *
- * @param database  An open GameDB handle.
- * @param out       Output array pointer. Must not be NULL.
- * @param count     Output count. Must not be NULL.
- * @return @c DB_SUCC on success, @c DB_FAIL on error.
- */
 int listRegisteredGames(DB *database, GameInfo **out, size_t *count);
-
-/**
- * @brief Free the internal string fields of a single GameInfo.
- *
- * Does not free the struct itself.  Safe to call on a zeroed struct.
- *
- * @param info  The GameInfo to clean up.
- */
+int getGameEncKey(DB *database, uint32_t gameId, uint8_t **outEnvelope,
+                  size_t *outLen);
+int registerGamePlatform(DB *database, uint32_t gameId,
+                         const GamePlatformInfo *platform);
+int getGamePlatform(DB *database, uint32_t gameId, const char *platform,
+                    GamePlatformInfo *out);
+int listGamePlatforms(DB *database, uint32_t gameId,
+                      GamePlatformInfo **out, size_t *count);
 void gameInfoFree(GameInfo *info);
-
-/**
- * @brief Free an array of GameInfo records returned by listRegisteredGames().
- *
- * Calls gameInfoFree() on each element and then frees the array.
- *
- * @param arr    The array to free (may be NULL).
- * @param count  Number of elements.
- */
 void gameInfoArrayFree(GameInfo *arr, size_t count);
+void gamePlatformInfoFree(GamePlatformInfo *info);
+void gamePlatformInfoArrayFree(GamePlatformInfo *arr, size_t count);
 
 #endif /* SERVER_DATABASE_H */

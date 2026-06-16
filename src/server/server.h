@@ -90,13 +90,23 @@ typedef struct {
     time_t timestamp; /**< UNIX timestamp (seconds since epoch, UTC). */
 } Chat;
 
-/** @brief Metadata record for a registered game on the platform. */
+#ifndef PLATFORM_NAME_LEN
+#define PLATFORM_NAME_LEN 16
+#endif
+
+typedef struct {
+    char platform[PLATFORM_NAME_LEN];
+    char *fileName;
+    char *hash;
+    uint64_t fileSize;
+} GamePlatformInfo;
+
 typedef struct {
     uint32_t gameId;
     char *name;
     char *version;
-    char *hash;
-    char *path;
+    GamePlatformInfo *platforms;
+    size_t platformCount;
     time_t createdAt;
     time_t updatedAt;
 } GameInfo;

@@ -25,7 +25,9 @@
 #include "mainPage.h"
 #include "client/connection.h"
 #include "client/database.h"
+#include "client/gameLoad.h"
 #include "clientTUI.h"
+#include <string.h>
 #include <time.h>
 
 #define TUI_HOME_STATUSGRID_HEIGHT 9
@@ -78,9 +80,7 @@ ControlButton chatCreateRoomBtn;
 ControlScrollTextBox chatHistoryBox;
 ControlInputBox chatInputBox;
 
-static void quitRoom() {}
 
-static void enterRoom() {}
 
 typedef enum { GameTag = 1, ChatTag = 2 } TagEnum;
 static void switchTag(TagEnum tag) {
@@ -269,6 +269,21 @@ static void backBtnOnClick(ControlButton *self) {
     tuiAppChangePage(&homePage);
 }
 
+static void homeOperDownloadOnClick(ControlButton *self) {
+    (void)self;
+    strcpy(homeOperDownloadStatus.text, "Download: not yet implemented");
+}
+
+static void homeOperRefreshOnClick(ControlButton *self) {
+    (void)self;
+    strcpy(homeOperDownloadStatus.text, "Refresh: not yet implemented");
+}
+
+static void homeOperRemoveOnClick(ControlButton *self) {
+    (void)self;
+    // TODO: implement game removal
+}
+
 void tuiClientMainPageInit() {
     controlPageConstruct(&homePage);
     controlGridConstruct(&homePageGrid, 0, 0, 0, 0, LayoutNone, 0, 0,
@@ -306,7 +321,7 @@ void tuiClientMainPageInit() {
                            NULL);
     controlButtonConstruct(&homeOperRemoveGame, TUI_BTN_HEIGHT,
                            TUI_BTN_WIDTH + 6, 0, 0, "Remove selected", NULL,
-                           NULL, NULL, NULL, NULL);
+                           homeOperRemoveOnClick, NULL, NULL, NULL);
     controlLabelConstruct(&homeOperEmpty1, "", 1, 0, 0, NULL, NULL, NULL, NULL);
     controlLabelConstruct(&homeOperEmpty2, "", 1, 0, 0, NULL, NULL, NULL, NULL);
     controlListBoxConstruct(&homeOperServerGames, 10,
@@ -317,10 +332,10 @@ void tuiClientMainPageInit() {
                           NULL);
     controlButtonConstruct(&homeOperDownloadGame, TUI_BTN_HEIGHT,
                            TUI_BTN_WIDTH + 8, 0, 0, "Download selected", NULL,
-                           NULL, NULL, NULL, NULL);
+                           homeOperDownloadOnClick, NULL, NULL, NULL);
     controlButtonConstruct(&homeOperRefreshDownloadableGames, TUI_BTN_HEIGHT,
-                           TUI_BTN_WIDTH + 8, 0, 0, "Refresh games", NULL, NULL,
-                           NULL, NULL, NULL);
+                           TUI_BTN_WIDTH + 8, 0, 0, "Refresh games", NULL,
+                           homeOperRefreshOnClick, NULL, NULL, NULL);
 
     tuiAppControlRegister(&homePage, NULL);
     tuiAppControlRegister((Control *)&homePageGrid, (Control *)&homePage);

@@ -23,22 +23,13 @@ cd ./PacPlay
 
 在另外的主机上执行 ```make run-client``` 即可运行客户端
 
-## 第三方库
+## Third-Party Libraries
 
-本项目使用了以下第三方库：
+This project includes the following vendored third-party libraries:
 
-- [log.c](https://github.com/rxi/log.c)
-
-  Copyright (c) 2020 rxi
-
-  License: MIT License
-
-  原始许可证文本包含在: [rxi/log.c LICENSE](https://github.com/rxi/log.c/blob/master/LICENSE)
-
-- [QR-Code-generator](https://github.com/nayuki/QR-Code-generator)
-
-  Copyright © 2025 Project Nayuki
-
-  License: MIT License
-
-  原始许可证文本包含在: [nayuki/QR-Code-generator Readme.markdown](https://github.com/nayuki/QR-Code-generator/blob/master/Readme.markdown)
+| Library | License | Source | Purpose |
+|---------|---------|--------|---------|
+| log.c | MIT | [rxi/log.c](https://github.com/rxi/log.c) | Logging framework |
+| qrcodegen | MIT | [nayuki/QR-Code-generator](https://www.nayuki.io/page/qr-code-generator-library) | QR code generation |
+| cJSON | MIT | [DaveGamble/cJSON](https://github.com/DaveGamble/cJSON) | JSON parsing |
+| microtar | MIT | [rxi/microtar](https://github.com/rxi/microtar) | tar archive reading |

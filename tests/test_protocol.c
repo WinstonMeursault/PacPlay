@@ -185,12 +185,13 @@ static void testMessageTypeValues(void) {
     ASSERT_INT_EQ(MsgCreateRoomResp, 16);
     ASSERT_INT_EQ(MsgJoinRoom, 17);
     ASSERT_INT_EQ(MsgJoinRoomResp, 18);
-    ASSERT_INT_EQ(MsgChat, 19);
-    ASSERT_INT_EQ(MsgLogout, 20);
-    ASSERT_INT_EQ(MsgHeartbeat, 21);
-    ASSERT_INT_EQ(MsgGameList, 22);
-    ASSERT_INT_EQ(MsgGameStart, 23);
-    ASSERT_INT_EQ(MsgGameStop, 24);
+    ASSERT_INT_EQ(MsgQuitRoom, 19);
+    ASSERT_INT_EQ(MsgChat, 20);
+    ASSERT_INT_EQ(MsgLogout, 21);
+    ASSERT_INT_EQ(MsgHeartbeat, 22);
+    ASSERT_INT_EQ(MsgGameListReq, 23);
+    ASSERT_INT_EQ(MsgGameListResp, 24);
+    ASSERT_INT_EQ(MsgGameDownloadDone, 33);
 }
 
 /** @brief NULL_SOCKETFD sentinel value. */
@@ -2069,8 +2070,8 @@ static void testHexCharToNibbleInvalid(void) {
     ASSERT_INT_EQ(hexCharToNibble('\0'), InvalidReturn);
 }
 
-/** @brief MessageType enum has exactly 24 values. */
-static void testMessageTypeCount(void) { ASSERT_INT_EQ(MsgGameStop, 24); }
+/** @brief MessageType enum has exactly 33 values. */
+static void testMessageTypeCount(void) { ASSERT_INT_EQ(MsgGameDownloadDone, 33); }
 
 /* ══════════════════════════════════ main ══════════════════════════════════ */
 

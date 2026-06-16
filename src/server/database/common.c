@@ -229,9 +229,16 @@ DB *dbInit(DBType dbType, const uint8_t *encKey) {
         dbFinalize(&database->stmtSetKey);
         dbFinalize(&database->stmtGetKey);
         dbFinalize(&database->stmtSeq);
-        dbFinalize(&database->stmtUpdate);
-        dbFinalize(&database->stmtSelectById);
-        dbFinalize(&database->stmtSelectByName);
+        dbFinalize(&database->stmtGameInsert);
+        dbFinalize(&database->stmtGameDelete);
+        dbFinalize(&database->stmtGameUpdate);
+        dbFinalize(&database->stmtGameSelectById);
+        dbFinalize(&database->stmtGameSelectByName);
+        dbFinalize(&database->stmtGameList);
+        dbFinalize(&database->stmtGameGetKey);
+        dbFinalize(&database->stmtPlatformInsert);
+        dbFinalize(&database->stmtPlatformSelect);
+        dbFinalize(&database->stmtPlatformList);
         roomCacheDestroy(database->roomCache);
         sqlite3_close(database->handle);
         free(database);
@@ -262,9 +269,16 @@ void dbClose(DB *database) {
     dbFinalize(&database->stmtGetKey);
 
     /* Finalize GameDB cached statements */
-    dbFinalize(&database->stmtUpdate);
-    dbFinalize(&database->stmtSelectById);
-    dbFinalize(&database->stmtSelectByName);
+    dbFinalize(&database->stmtGameInsert);
+    dbFinalize(&database->stmtGameDelete);
+    dbFinalize(&database->stmtGameUpdate);
+    dbFinalize(&database->stmtGameSelectById);
+    dbFinalize(&database->stmtGameSelectByName);
+    dbFinalize(&database->stmtGameList);
+    dbFinalize(&database->stmtGameGetKey);
+    dbFinalize(&database->stmtPlatformInsert);
+    dbFinalize(&database->stmtPlatformSelect);
+    dbFinalize(&database->stmtPlatformList);
 
     /* Finalize ChatHistoryDB cached statements */
     dbFinalize(&database->stmtSeq);

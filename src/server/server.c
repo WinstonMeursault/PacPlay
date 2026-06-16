@@ -24,10 +24,12 @@
 
 #include "server.h"
 #include "log.h"
+#include "platform.h"
 #include "server/auth.h"
 #include "server/chat.h"
 #include "server/communication.h"
 #include "server/database.h"
+#include "server/gameControl.h"
 #include "server/keyManager.h"
 #include "server/room.h"
 #include "server/tui/serverTUI.h"
@@ -173,6 +175,8 @@ int serverLaunch(Server *server) {
     server->gameDB = gameDB;
 
     dbSetDekKey(server->userDB, server->dekKey);
+
+    platformMkdirp(GAME_LIB_DIR);
 
     server->clientCapacity = SERVER_INITIAL_CAPACITY;
     server->clients = (ClientSession **)calloc((size_t)server->clientCapacity,

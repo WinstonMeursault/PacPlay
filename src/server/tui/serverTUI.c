@@ -23,6 +23,7 @@
  */
 
 #include "serverTUI.h"
+#include "server/gameControl.h"
 #include "server/keyManager.h"
 #include "server/serverLog.h"
 #include "utils.h"
@@ -242,6 +243,33 @@ static void commandInputSubmit(ControlInputBox *self) {
         controlScrollTextBoxAppend(&cmdScrollBox, "Server shutting down...\n");
         serverShutdown(server);
         tuiAppStop();
+        return;
+    }
+
+    if (strncmp(commandInput.buf, "gamectl ", 8) == 0) {
+        char *sub = commandInput.buf + 8;
+        if (strncmp(sub, "list", 4) == 0 &&
+            (sub[4] == '\0' || sub[4] == ' ')) {
+            gameCtlList(server, &cmdScrollBox);
+        } else if (strncmp(sub, "update ", 7) == 0) {
+            gameCtlUpdate(server, sub + 7, &cmdScrollBox);
+        } else if (strncmp(sub, "delete ", 7) == 0) {
+            uint32_t gid = (uint32_t)strtoul(sub + 7, NULL, 10);
+            gameCtlDelete(server, gid, &cmdScrollBox);
+        } else if (strncmp(sub, "scan", 4) == 0 &&
+                   (sub[4] == '\0' || sub[4] == ' ')) {
+            gameCtlScan(server, &cmdScrollBox);
+        } else if (strncmp(sub, "info ", 5) == 0) {
+            uint32_t gid = (uint32_t)strtoul(sub + 5, NULL, 10);
+            gameCtlInfo(server, gid, &cmdScrollBox);
+        } else {
+            controlScrollTextBoxAppend(
+                &cmdScrollBox,
+                "Usage: gamectl <list|update|delete|scan|info>\n");
+        }
+        commandInput.curLen = 0;
+        commandInput.curLoc = 0;
+        commandInput.buf[0] = '\0';
         return;
     }
 

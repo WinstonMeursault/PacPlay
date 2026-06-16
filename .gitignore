@@ -69,3 +69,4 @@ bin/
 db/
 src/common/tui/test/
 err.log
+logs/

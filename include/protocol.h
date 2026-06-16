@@ -56,6 +56,15 @@
 /** @brief Length of a per-user client database encryption key (256-bit). */
 #define CLIENT_DB_KEY_LEN 32
 
+#define GAME_NAME_LEN 64
+#define GAME_VERSION_LEN 32
+#define GAME_HASH_LEN 65
+#define PLATFORM_NAME_LEN 16
+#define GAME_CHUNK_SIZE 65536u
+#define DATA_MAX_PAYLOAD_LEN 65536u
+#define DATA_AUTH_TOKEN_LEN 32
+#define TOKEN_EXPIRE_SECS 30
+
 /** @brief Extra bytes added by AES-256-GCM encryption: nonce + tag. */
 #define AES_PACKET_EXTRA_LEN (AES_GCM_NONCE_LEN + AES_GCM_TAG_LEN)
 
@@ -110,12 +119,20 @@ typedef enum {
     MsgLogout,
     MsgHeartbeat,
 
-    /* Game list */
-    MsgGameList,
+    /* Game distribution — control channel. */
+    MsgGameListReq,
+    MsgGameListResp,
+    MsgGameDownloadReq,
+    MsgGameDownloadResp,
+    MsgGameDownloadCancel,
 
-    /* Game control (future). */
-    MsgGameStart,
-    MsgGameStop
+    /* Game distribution — data channel. */
+    MsgDataAuth,
+    MsgDataAuthResp,
+    MsgGameMetadata,
+    MsgGameChunk,
+    MsgGameChunkAck,
+    MsgGameDownloadDone
 } MessageType;
 
 #pragma pack(push, 1)
@@ -250,6 +267,73 @@ typedef struct {
     int64_t timestamp;
     uint8_t message[];
 } ChatBroadcastPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    char platform[PLATFORM_NAME_LEN];
+} PlatformInfoPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t gameId;
+    uint64_t fileSize;
+    char name[GAME_NAME_LEN];
+    char version[GAME_VERSION_LEN];
+    char hash[GAME_HASH_LEN];
+} GameListEntry;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t gameId;
+    uint32_t resumeChunkIndex;
+    char platform[PLATFORM_NAME_LEN];
+} GameDownloadReqPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t status;
+    uint32_t gameId;
+    uint64_t fileSize;
+    uint32_t totalChunks;
+    uint16_t dataPort;
+    uint8_t token[DATA_AUTH_TOKEN_LEN];
+    char hash[GAME_HASH_LEN];
+} GameDownloadRespPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t token[DATA_AUTH_TOKEN_LEN];
+} DataAuthPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t gameId;
+    uint64_t fileSize;
+    char name[GAME_NAME_LEN];
+    char version[GAME_VERSION_LEN];
+    char hash[GAME_HASH_LEN];
+    char platform[PLATFORM_NAME_LEN];
+} GameMetadataPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t chunkIndex;
+    uint32_t chunkSize;
+    uint8_t data[];
+} GameChunkPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t chunkIndex;
+} GameChunkAckPayload;
 #pragma pack(pop)
 
 /**
@@ -426,6 +510,13 @@ int packetRecv(Packet *dest, SocketFD socketFD);
 int packetSendEncrypted(SocketFD fd, MessageType mt, uint32_t *seqID,
                         uint8_t key[AES_GCM_KEY_LEN], const void *data,
                         size_t dataLen);
+
+int packetInitData(Packet *packet, MessageType msgType, uint32_t seqID,
+                   PacketType pktType, const void *data, size_t dataLen);
+
+int packetSendEncryptedData(SocketFD fd, MessageType mt, uint32_t *seqID,
+                            uint8_t key[AES_GCM_KEY_LEN],
+                            const void *data, size_t dataLen);
 
 /**
  * @brief Receive and decrypt an AES-256-GCM packet.

@@ -2,10 +2,10 @@
  * @file gameDb.c
  * @brief Game metadata (registry) database operations for PacPlay server.
  *
- * Implements CRUD operations for the platform game registry.  Games are
- * stored in the games table and survive server restarts.
+ * Implements CRUD operations for the platform game registry with a
+ * dual-table schema: games + game_platforms.
  *
- * @date 2026-06-15
+ * @date 2026-06-16
  * @copyright GPLv3 License
  * @section LICENSE
  * PacPlay
@@ -36,116 +36,178 @@
 
 /* ───────────────────────── SQL schema definitions ───────────────────────── */
 
-/** @brief CREATE the games table for GameDB. */
 #define SQL_CREATE_GAMES_TABLE                                                 \
     "CREATE TABLE IF NOT EXISTS games ("                                       \
-    "gameId INTEGER PRIMARY KEY, "                                             \
-    "name TEXT NOT NULL UNIQUE, "                                               \
-    "version TEXT NOT NULL, "                                                   \
-    "hash TEXT NOT NULL, "                                                      \
-    "path TEXT NOT NULL, "                                                      \
+    "gameId INTEGER PRIMARY KEY AUTOINCREMENT, "                               \
+    "name TEXT NOT NULL UNIQUE, "                                              \
+    "version TEXT NOT NULL, "                                                  \
+    "encKey BLOB NOT NULL, "                                                   \
     "createdAt INTEGER NOT NULL, "                                             \
     "updatedAt INTEGER NOT NULL"                                               \
     ");"
 
+#define SQL_CREATE_PLATFORMS_TABLE                                             \
+    "CREATE TABLE IF NOT EXISTS game_platforms ("                              \
+    "gameId INTEGER NOT NULL, "                                                \
+    "platform TEXT NOT NULL, "                                                 \
+    "fileName TEXT NOT NULL, "                                                 \
+    "hash TEXT NOT NULL, "                                                     \
+    "fileSize INTEGER NOT NULL, "                                              \
+    "PRIMARY KEY (gameId, platform), "                                         \
+    "FOREIGN KEY (gameId) REFERENCES games(gameId) ON DELETE CASCADE"          \
+    ");"
+
 /* ──────────────────────── GameDB prepared SQL ───────────────────────────── */
 
-/** @brief INSERT a game. Params: ?1..?7. */
 #define SQL_INSERT_GAME                                                        \
-    "INSERT INTO games (gameId, name, version, hash, path, createdAt, "       \
-    "updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?);"
+    "INSERT INTO games (name, version, encKey, createdAt, updatedAt) "        \
+    "VALUES (?, ?, ?, ?, ?);"
 
-/** @brief DELETE a game by gameId. Params: ?1=gameId. */
 #define SQL_DELETE_GAME "DELETE FROM games WHERE gameId = ?;"
 
-/** @brief UPDATE version and hash. Params: ?1=version, ?2=hash, ?3=updatedAt, ?4=gameId. */
 #define SQL_UPDATE_GAME                                                        \
-    "UPDATE games SET version = ?, hash = ?, updatedAt = ? WHERE gameId = ?;"
+    "UPDATE games SET version = ?, updatedAt = ? WHERE gameId = ?;"
 
-/** @brief SELECT a game by gameId. Params: ?1=gameId. */
 #define SQL_SELECT_GAME_BY_ID                                                  \
-    "SELECT gameId, name, version, hash, path, createdAt, updatedAt "         \
+    "SELECT gameId, name, version, createdAt, updatedAt "                     \
     "FROM games WHERE gameId = ?;"
 
-/** @brief SELECT a game by name. Params: ?1=name. */
 #define SQL_SELECT_GAME_BY_NAME                                                \
-    "SELECT gameId, name, version, hash, path, createdAt, updatedAt "         \
+    "SELECT gameId, name, version, createdAt, updatedAt "                     \
     "FROM games WHERE name = ?;"
 
-/** @brief SELECT all games ordered by gameId ascending. */
 #define SQL_LIST_GAMES                                                         \
-    "SELECT gameId, name, version, hash, path, createdAt, updatedAt "         \
+    "SELECT gameId, name, version, createdAt, updatedAt "                     \
     "FROM games ORDER BY gameId ASC;"
 
-/* ─────────────────── column / bind-parameter indices ────────────────────── */
+#define SQL_GET_ENC_KEY "SELECT encKey FROM games WHERE gameId = ?;"
+
+#define SQL_INSERT_PLATFORM                                                    \
+    "INSERT OR REPLACE INTO game_platforms "                                   \
+    "(gameId, platform, fileName, hash, fileSize) VALUES (?, ?, ?, ?, ?);"
+
+#define SQL_SELECT_PLATFORM                                                    \
+    "SELECT platform, fileName, hash, fileSize "                              \
+    "FROM game_platforms WHERE gameId = ? AND platform = ?;"
+
+#define SQL_LIST_PLATFORMS                                                      \
+    "SELECT platform, fileName, hash, fileSize "                              \
+    "FROM game_platforms WHERE gameId = ?;"
+
+/* ─────────────────── column indices ────────────────────── */
 
 enum {
     ColGameId = 0,
     ColName = 1,
     ColVersion = 2,
-    ColHash = 3,
-    ColPath = 4,
-    ColCreatedAt = 5,
-    ColUpdatedAt = 6
+    ColCreatedAt = 3,
+    ColUpdatedAt = 4
+};
+
+enum {
+    ColPlatPlatform = 0,
+    ColPlatFileName = 1,
+    ColPlatHash = 2,
+    ColPlatFileSize = 3
 };
 
 /* ────────────────────────── schema init helper ──────────────────────────── */
 
 int initGameDBSchema(sqlite3 *dbHandle) {
-    return dbExec(dbHandle, SQL_CREATE_GAMES_TABLE, "CREATE TABLE games");
+    if (dbExec(dbHandle, SQL_CREATE_GAMES_TABLE, "CREATE TABLE games") !=
+        DB_EXEC_SUCC) {
+        return DB_FAIL;
+    }
+    if (dbExec(dbHandle, SQL_CREATE_PLATFORMS_TABLE,
+               "CREATE TABLE game_platforms") != DB_EXEC_SUCC) {
+        return DB_FAIL;
+    }
+    return DB_SUCC;
 }
 
 /* ──────────────────────── GameDB stmt preparation ───────────────────────── */
 
 int prepareGameDBStmts(DB *database) {
     int rc;
+    sqlite3 *h = database->handle;
 
-    rc = sqlite3_prepare_v2(database->handle, SQL_INSERT_GAME, -1,
-                            &database->stmtInsert, NULL);
+    rc = sqlite3_prepare_v2(h, SQL_INSERT_GAME, -1,
+                            &database->stmtGameInsert, NULL);
     if (rc != SQLITE_OK) {
-        LOG_ERROR("prepareGameDBStmts: INSERT prepare failed: %s (rc=%d)",
-                  sqlite3_errmsg(database->handle), rc);
+        LOG_ERROR("prepareGameDBStmts: INSERT game failed: %s (rc=%d)",
+                  sqlite3_errmsg(h), rc);
         return DB_FAIL;
     }
 
-    rc = sqlite3_prepare_v2(database->handle, SQL_DELETE_GAME, -1,
-                            &database->stmtDelete, NULL);
+    rc = sqlite3_prepare_v2(h, SQL_DELETE_GAME, -1,
+                            &database->stmtGameDelete, NULL);
     if (rc != SQLITE_OK) {
-        LOG_ERROR("prepareGameDBStmts: DELETE prepare failed: %s (rc=%d)",
-                  sqlite3_errmsg(database->handle), rc);
+        LOG_ERROR("prepareGameDBStmts: DELETE game failed: %s (rc=%d)",
+                  sqlite3_errmsg(h), rc);
         return DB_FAIL;
     }
 
-    rc = sqlite3_prepare_v2(database->handle, SQL_UPDATE_GAME, -1,
-                            &database->stmtUpdate, NULL);
+    rc = sqlite3_prepare_v2(h, SQL_UPDATE_GAME, -1,
+                            &database->stmtGameUpdate, NULL);
     if (rc != SQLITE_OK) {
-        LOG_ERROR("prepareGameDBStmts: UPDATE prepare failed: %s (rc=%d)",
-                  sqlite3_errmsg(database->handle), rc);
+        LOG_ERROR("prepareGameDBStmts: UPDATE game failed: %s (rc=%d)",
+                  sqlite3_errmsg(h), rc);
         return DB_FAIL;
     }
 
-    rc = sqlite3_prepare_v2(database->handle, SQL_SELECT_GAME_BY_ID, -1,
-                            &database->stmtSelectById, NULL);
+    rc = sqlite3_prepare_v2(h, SQL_SELECT_GAME_BY_ID, -1,
+                            &database->stmtGameSelectById, NULL);
     if (rc != SQLITE_OK) {
-        LOG_ERROR("prepareGameDBStmts: SELECT-by-id prepare failed: %s (rc=%d)",
-                  sqlite3_errmsg(database->handle), rc);
+        LOG_ERROR("prepareGameDBStmts: SELECT-by-id failed: %s (rc=%d)",
+                  sqlite3_errmsg(h), rc);
         return DB_FAIL;
     }
 
-    rc = sqlite3_prepare_v2(database->handle, SQL_SELECT_GAME_BY_NAME, -1,
-                            &database->stmtSelectByName, NULL);
+    rc = sqlite3_prepare_v2(h, SQL_SELECT_GAME_BY_NAME, -1,
+                            &database->stmtGameSelectByName, NULL);
     if (rc != SQLITE_OK) {
-        LOG_ERROR(
-            "prepareGameDBStmts: SELECT-by-name prepare failed: %s (rc=%d)",
-            sqlite3_errmsg(database->handle), rc);
+        LOG_ERROR("prepareGameDBStmts: SELECT-by-name failed: %s (rc=%d)",
+                  sqlite3_errmsg(h), rc);
         return DB_FAIL;
     }
 
-    rc = sqlite3_prepare_v2(database->handle, SQL_LIST_GAMES, -1,
-                            &database->stmtSelect, NULL);
+    rc = sqlite3_prepare_v2(h, SQL_LIST_GAMES, -1,
+                            &database->stmtGameList, NULL);
     if (rc != SQLITE_OK) {
-        LOG_ERROR("prepareGameDBStmts: SELECT-all prepare failed: %s (rc=%d)",
-                  sqlite3_errmsg(database->handle), rc);
+        LOG_ERROR("prepareGameDBStmts: LIST games failed: %s (rc=%d)",
+                  sqlite3_errmsg(h), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_prepare_v2(h, SQL_GET_ENC_KEY, -1,
+                            &database->stmtGameGetKey, NULL);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("prepareGameDBStmts: GET enc key failed: %s (rc=%d)",
+                  sqlite3_errmsg(h), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_prepare_v2(h, SQL_INSERT_PLATFORM, -1,
+                            &database->stmtPlatformInsert, NULL);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("prepareGameDBStmts: INSERT platform failed: %s (rc=%d)",
+                  sqlite3_errmsg(h), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_prepare_v2(h, SQL_SELECT_PLATFORM, -1,
+                            &database->stmtPlatformSelect, NULL);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("prepareGameDBStmts: SELECT platform failed: %s (rc=%d)",
+                  sqlite3_errmsg(h), rc);
+        return DB_FAIL;
+    }
+
+    rc = sqlite3_prepare_v2(h, SQL_LIST_PLATFORMS, -1,
+                            &database->stmtPlatformList, NULL);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("prepareGameDBStmts: LIST platforms failed: %s (rc=%d)",
+                  sqlite3_errmsg(h), rc);
         return DB_FAIL;
     }
 
@@ -158,29 +220,47 @@ static int populateGameInfo(sqlite3_stmt *stmt, GameInfo *out) {
     out->gameId = (uint32_t)sqlite3_column_int(stmt, ColGameId);
     const char *n = (const char *)sqlite3_column_text(stmt, ColName);
     const char *v = (const char *)sqlite3_column_text(stmt, ColVersion);
-    const char *h = (const char *)sqlite3_column_text(stmt, ColHash);
-    const char *p = (const char *)sqlite3_column_text(stmt, ColPath);
-    if (n == NULL || v == NULL || h == NULL || p == NULL) {
+    if (n == NULL || v == NULL) {
         LOG_ERROR("populateGameInfo: unexpected NULL column");
         return DB_FAIL;
     }
     out->name = strdup(n);
     out->version = strdup(v);
-    out->hash = strdup(h);
-    out->path = strdup(p);
-    if (out->name == NULL || out->version == NULL || out->hash == NULL ||
-        out->path == NULL) {
+    if (out->name == NULL || out->version == NULL) {
         LOG_ERROR("populateGameInfo: strdup failed (errno=%d)", errno);
-        gameInfoFree(out);
+        free(out->name);
+        free(out->version);
         memset(out, 0, sizeof(*out));
         return DB_FAIL;
     }
+    out->platforms = NULL;
+    out->platformCount = 0;
     out->createdAt = (time_t)sqlite3_column_int64(stmt, ColCreatedAt);
     out->updatedAt = (time_t)sqlite3_column_int64(stmt, ColUpdatedAt);
     return DB_SUCC;
 }
 
-/* ──────────────────── public API: game registry operations ──────────────── */
+/* ──────────────────── free helpers ──────────────────────────────────────── */
+
+void gamePlatformInfoFree(GamePlatformInfo *info) {
+    if (info == NULL) {
+        return;
+    }
+    free(info->fileName);
+    free(info->hash);
+    info->fileName = NULL;
+    info->hash = NULL;
+}
+
+void gamePlatformInfoArrayFree(GamePlatformInfo *arr, size_t count) {
+    if (arr == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < count; i++) {
+        gamePlatformInfoFree(&arr[i]);
+    }
+    free(arr);
+}
 
 void gameInfoFree(GameInfo *info) {
     if (info == NULL) {
@@ -188,12 +268,13 @@ void gameInfoFree(GameInfo *info) {
     }
     free(info->name);
     free(info->version);
-    free(info->hash);
-    free(info->path);
     info->name = NULL;
     info->version = NULL;
-    info->hash = NULL;
-    info->path = NULL;
+    if (info->platforms != NULL) {
+        gamePlatformInfoArrayFree(info->platforms, info->platformCount);
+        info->platforms = NULL;
+        info->platformCount = 0;
+    }
 }
 
 void gameInfoArrayFree(GameInfo *arr, size_t count) {
@@ -206,8 +287,221 @@ void gameInfoArrayFree(GameInfo *arr, size_t count) {
     free(arr);
 }
 
-int registerGame(DB *database, GameInfo *game) {
-    if (database == NULL || game == NULL) {
+/* ──────────────────── public API: platform operations ──────────────────── */
+
+int listGamePlatforms(DB *database, uint32_t gameId,
+                      GamePlatformInfo **out, size_t *count) {
+    if (database == NULL || out == NULL || count == NULL) {
+        LOG_ERROR("listGamePlatforms: NULL argument");
+        return DB_FAIL;
+    }
+    if (database->type != GameDB) {
+        LOG_ERROR("listGamePlatforms: wrong database type %d", (int)database->type);
+        return DB_FAIL;
+    }
+
+    *out = NULL;
+    *count = 0;
+
+    sqlite3_stmt *stmt = database->stmtPlatformList;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    if (sqlite3_bind_int64(stmt, 1, (sqlite3_int64)gameId) != SQLITE_OK) {
+        LOG_ERROR("listGamePlatforms: bind failed: %s",
+                  sqlite3_errmsg(database->handle));
+        return DB_FAIL;
+    }
+
+    size_t capacity = QUERY_INITIAL_CAPACITY;
+    size_t n = 0;
+    GamePlatformInfo *results = malloc(capacity * sizeof(GamePlatformInfo));
+    if (results == NULL) {
+        LOG_ERROR("listGamePlatforms: malloc failed (errno=%d)", errno);
+        return DB_FAIL;
+    }
+
+    int rc;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        if (n >= QUERY_MAX_RESULTS) {
+            LOG_WARN("listGamePlatforms: result limit reached");
+            break;
+        }
+        if (n >= capacity) {
+            size_t newCap = capacity * 2;
+            GamePlatformInfo *tmp =
+                realloc(results, newCap * sizeof(GamePlatformInfo));
+            if (tmp == NULL) {
+                LOG_ERROR("listGamePlatforms: realloc failed (errno=%d)", errno);
+                gamePlatformInfoArrayFree(results, n);
+                return DB_FAIL;
+            }
+            results = tmp;
+            capacity = newCap;
+        }
+
+        memset(&results[n], 0, sizeof(GamePlatformInfo));
+        const char *plat =
+            (const char *)sqlite3_column_text(stmt, ColPlatPlatform);
+        const char *fn =
+            (const char *)sqlite3_column_text(stmt, ColPlatFileName);
+        const char *h = (const char *)sqlite3_column_text(stmt, ColPlatHash);
+        if (plat == NULL || fn == NULL || h == NULL) {
+            LOG_ERROR("listGamePlatforms: unexpected NULL column");
+            gamePlatformInfoArrayFree(results, n);
+            return DB_FAIL;
+        }
+        strncpy(results[n].platform, plat, PLATFORM_NAME_LEN - 1);
+        results[n].platform[PLATFORM_NAME_LEN - 1] = '\0';
+        results[n].fileName = strdup(fn);
+        results[n].hash = strdup(h);
+        results[n].fileSize =
+            (uint64_t)sqlite3_column_int64(stmt, ColPlatFileSize);
+        if (results[n].fileName == NULL || results[n].hash == NULL) {
+            LOG_ERROR("listGamePlatforms: strdup failed (errno=%d)", errno);
+            gamePlatformInfoFree(&results[n]);
+            gamePlatformInfoArrayFree(results, n);
+            return DB_FAIL;
+        }
+        n++;
+    }
+
+    if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
+        LOG_ERROR("listGamePlatforms: step failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        gamePlatformInfoArrayFree(results, n);
+        return DB_FAIL;
+    }
+
+    if (n == 0) {
+        free(results);
+        *out = NULL;
+        *count = 0;
+        return DB_SUCC;
+    }
+
+    *out = results;
+    *count = n;
+    return DB_SUCC;
+}
+
+int registerGamePlatform(DB *database, uint32_t gameId,
+                         const GamePlatformInfo *platform) {
+    if (database == NULL || platform == NULL) {
+        LOG_ERROR("registerGamePlatform: NULL argument");
+        return DB_FAIL;
+    }
+    if (database->type != GameDB) {
+        LOG_ERROR("registerGamePlatform: wrong database type %d",
+                  (int)database->type);
+        return DB_FAIL;
+    }
+    if (platform->fileName == NULL || platform->hash == NULL) {
+        LOG_ERROR("registerGamePlatform: NULL string field");
+        return DB_FAIL;
+    }
+
+    sqlite3_stmt *stmt = database->stmtPlatformInsert;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    enum {
+        ParamGameId = 1,
+        ParamPlatform = 2,
+        ParamFileName = 3,
+        ParamHash = 4,
+        ParamFileSize = 5
+    };
+
+    if (sqlite3_bind_int64(stmt, ParamGameId, (sqlite3_int64)gameId) !=
+            SQLITE_OK ||
+        sqlite3_bind_text(stmt, ParamPlatform, platform->platform, -1,
+                          SQLITE_STATIC) != SQLITE_OK ||
+        sqlite3_bind_text(stmt, ParamFileName, platform->fileName, -1,
+                          SQLITE_STATIC) != SQLITE_OK ||
+        sqlite3_bind_text(stmt, ParamHash, platform->hash, -1,
+                          SQLITE_STATIC) != SQLITE_OK ||
+        sqlite3_bind_int64(stmt, ParamFileSize,
+                           (sqlite3_int64)platform->fileSize) != SQLITE_OK) {
+        LOG_ERROR("registerGamePlatform: bind failed: %s",
+                  sqlite3_errmsg(database->handle));
+        return DB_FAIL;
+    }
+
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        LOG_ERROR("registerGamePlatform: step failed: %s (rc=%d)",
+                  sqlite3_errmsg(database->handle), rc);
+        return DB_FAIL;
+    }
+
+    return DB_SUCC;
+}
+
+int getGamePlatform(DB *database, uint32_t gameId, const char *platform,
+                    GamePlatformInfo *out) {
+    if (database == NULL || platform == NULL || out == NULL) {
+        LOG_ERROR("getGamePlatform: NULL argument");
+        return DB_FAIL;
+    }
+    if (database->type != GameDB) {
+        LOG_ERROR("getGamePlatform: wrong database type %d",
+                  (int)database->type);
+        return DB_FAIL;
+    }
+
+    sqlite3_stmt *stmt = database->stmtPlatformSelect;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    enum { ParamGameId = 1, ParamPlatform = 2 };
+
+    if (sqlite3_bind_int64(stmt, ParamGameId, (sqlite3_int64)gameId) !=
+            SQLITE_OK ||
+        sqlite3_bind_text(stmt, ParamPlatform, platform, -1, SQLITE_STATIC) !=
+            SQLITE_OK) {
+        LOG_ERROR("getGamePlatform: bind failed: %s",
+                  sqlite3_errmsg(database->handle));
+        return DB_FAIL;
+    }
+
+    int rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        memset(out, 0, sizeof(*out));
+        const char *plat =
+            (const char *)sqlite3_column_text(stmt, ColPlatPlatform);
+        const char *fn =
+            (const char *)sqlite3_column_text(stmt, ColPlatFileName);
+        const char *h = (const char *)sqlite3_column_text(stmt, ColPlatHash);
+        if (plat == NULL || fn == NULL || h == NULL) {
+            LOG_ERROR("getGamePlatform: unexpected NULL column");
+            return DB_FAIL;
+        }
+        strncpy(out->platform, plat, PLATFORM_NAME_LEN - 1);
+        out->platform[PLATFORM_NAME_LEN - 1] = '\0';
+        out->fileName = strdup(fn);
+        out->hash = strdup(h);
+        out->fileSize = (uint64_t)sqlite3_column_int64(stmt, ColPlatFileSize);
+        if (out->fileName == NULL || out->hash == NULL) {
+            LOG_ERROR("getGamePlatform: strdup failed (errno=%d)", errno);
+            gamePlatformInfoFree(out);
+            return DB_FAIL;
+        }
+        return DB_SUCC;
+    }
+    if (rc == SQLITE_DONE) {
+        return DB_FAIL;
+    }
+    LOG_ERROR("getGamePlatform: step failed: %s (rc=%d)",
+              sqlite3_errmsg(database->handle), rc);
+    return DB_FAIL;
+}
+
+/* ──────────────────── public API: game operations ──────────────────────── */
+
+int registerGame(DB *database, GameInfo *game, const uint8_t *encKeyEnvelope,
+                 size_t envelopeLen) {
+    if (database == NULL || game == NULL || encKeyEnvelope == NULL) {
         LOG_ERROR("registerGame: NULL argument");
         return DB_FAIL;
     }
@@ -216,42 +510,31 @@ int registerGame(DB *database, GameInfo *game) {
                   (int)database->type);
         return DB_FAIL;
     }
-    if (game->gameId == 0) {
-        LOG_ERROR("registerGame: gameId zero is reserved");
-        return DB_FAIL;
-    }
-    if (game->name == NULL || game->version == NULL || game->hash == NULL ||
-        game->path == NULL) {
+    if (game->name == NULL || game->version == NULL) {
         LOG_ERROR("registerGame: NULL string field");
         return DB_FAIL;
     }
 
     time_t now = time(NULL);
 
-    sqlite3_stmt *stmt = database->stmtInsert;
+    sqlite3_stmt *stmt = database->stmtGameInsert;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
 
     enum {
-        ParamGameId = 1,
-        ParamName = 2,
-        ParamVersion = 3,
-        ParamHash = 4,
-        ParamPath = 5,
-        ParamCreatedAt = 6,
-        ParamUpdatedAt = 7
+        ParamName = 1,
+        ParamVersion = 2,
+        ParamEncKey = 3,
+        ParamCreatedAt = 4,
+        ParamUpdatedAt = 5
     };
 
-    if (sqlite3_bind_int64(stmt, ParamGameId,
-                           (sqlite3_int64)game->gameId) != SQLITE_OK ||
-        sqlite3_bind_text(stmt, ParamName, game->name, -1, SQLITE_STATIC) !=
+    if (sqlite3_bind_text(stmt, ParamName, game->name, -1, SQLITE_STATIC) !=
             SQLITE_OK ||
         sqlite3_bind_text(stmt, ParamVersion, game->version, -1,
                           SQLITE_STATIC) != SQLITE_OK ||
-        sqlite3_bind_text(stmt, ParamHash, game->hash, -1, SQLITE_STATIC) !=
-            SQLITE_OK ||
-        sqlite3_bind_text(stmt, ParamPath, game->path, -1, SQLITE_STATIC) !=
-            SQLITE_OK ||
+        sqlite3_bind_blob(stmt, ParamEncKey, encKeyEnvelope,
+                          (int)envelopeLen, SQLITE_STATIC) != SQLITE_OK ||
         sqlite3_bind_int64(stmt, ParamCreatedAt, (sqlite3_int64)now) !=
             SQLITE_OK ||
         sqlite3_bind_int64(stmt, ParamUpdatedAt, (sqlite3_int64)now) !=
@@ -268,6 +551,11 @@ int registerGame(DB *database, GameInfo *game) {
         return DB_FAIL;
     }
 
+    game->gameId =
+        (uint32_t)sqlite3_last_insert_rowid(database->handle);
+    game->createdAt = now;
+    game->updatedAt = now;
+
     return DB_SUCC;
 }
 
@@ -282,7 +570,7 @@ int unregisterGame(DB *database, uint32_t gameId) {
         return DB_FAIL;
     }
 
-    sqlite3_stmt *stmt = database->stmtDelete;
+    sqlite3_stmt *stmt = database->stmtGameDelete;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
 
@@ -308,9 +596,7 @@ int unregisterGame(DB *database, uint32_t gameId) {
     return DB_SUCC;
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-int updateGameVersion(DB *database, uint32_t gameId, const char *version,
-                      const char *hash) {
+int updateGameVersion(DB *database, uint32_t gameId, const char *version) {
     if (database == NULL) {
         LOG_ERROR("updateGameVersion: NULL database");
         return DB_FAIL;
@@ -321,27 +607,20 @@ int updateGameVersion(DB *database, uint32_t gameId, const char *version,
             (int)database->type);
         return DB_FAIL;
     }
-    if (version == NULL || hash == NULL) {
-        LOG_ERROR("updateGameVersion: NULL string argument");
+    if (version == NULL) {
+        LOG_ERROR("updateGameVersion: NULL version");
         return DB_FAIL;
     }
 
     time_t now = time(NULL);
 
-    sqlite3_stmt *stmt = database->stmtUpdate;
+    sqlite3_stmt *stmt = database->stmtGameUpdate;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
 
-    enum {
-        ParamVersion = 1,
-        ParamHash = 2,
-        ParamUpdatedAt = 3,
-        ParamGameId = 4
-    };
+    enum { ParamVersion = 1, ParamUpdatedAt = 2, ParamGameId = 3 };
 
     if (sqlite3_bind_text(stmt, ParamVersion, version, -1, SQLITE_STATIC) !=
-            SQLITE_OK ||
-        sqlite3_bind_text(stmt, ParamHash, hash, -1, SQLITE_STATIC) !=
             SQLITE_OK ||
         sqlite3_bind_int64(stmt, ParamUpdatedAt, (sqlite3_int64)now) !=
             SQLITE_OK ||
@@ -378,7 +657,7 @@ int getGameById(DB *database, uint32_t gameId, GameInfo *out) {
         return DB_FAIL;
     }
 
-    sqlite3_stmt *stmt = database->stmtSelectById;
+    sqlite3_stmt *stmt = database->stmtGameSelectById;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
 
@@ -391,7 +670,12 @@ int getGameById(DB *database, uint32_t gameId, GameInfo *out) {
 
     rc = sqlite3_step(stmt);
     if (rc == SQLITE_ROW) {
-        return populateGameInfo(stmt, out);
+        memset(out, 0, sizeof(*out));
+        if (populateGameInfo(stmt, out) != DB_SUCC) {
+            return DB_FAIL;
+        }
+        return listGamePlatforms(database, out->gameId, &out->platforms,
+                                 &out->platformCount);
     }
     if (rc == SQLITE_DONE) {
         return DB_FAIL;
@@ -412,7 +696,7 @@ int getGameByName(DB *database, const char *name, GameInfo *out) {
         return DB_FAIL;
     }
 
-    sqlite3_stmt *stmt = database->stmtSelectByName;
+    sqlite3_stmt *stmt = database->stmtGameSelectByName;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
 
@@ -425,7 +709,12 @@ int getGameByName(DB *database, const char *name, GameInfo *out) {
 
     rc = sqlite3_step(stmt);
     if (rc == SQLITE_ROW) {
-        return populateGameInfo(stmt, out);
+        memset(out, 0, sizeof(*out));
+        if (populateGameInfo(stmt, out) != DB_SUCC) {
+            return DB_FAIL;
+        }
+        return listGamePlatforms(database, out->gameId, &out->platforms,
+                                 &out->platformCount);
     }
     if (rc == SQLITE_DONE) {
         return DB_FAIL;
@@ -437,20 +726,20 @@ int getGameByName(DB *database, const char *name, GameInfo *out) {
 
 int listRegisteredGames(DB *database, GameInfo **out, size_t *count) {
     if (database == NULL || out == NULL || count == NULL) {
-        LOG_ERROR("listRegisteredGames: NULL argument (database=%p, out=%p, count=%p)",
-                  (void *)database, (void *)out, (void *)count);
+        LOG_ERROR("listRegisteredGames: NULL argument");
         return DB_FAIL;
     }
     if (database->type != GameDB) {
-        LOG_ERROR("listRegisteredGames: wrong database type %d (expected GameDB)",
-                  (int)database->type);
+        LOG_ERROR(
+            "listRegisteredGames: wrong database type %d (expected GameDB)",
+            (int)database->type);
         return DB_FAIL;
     }
 
     *out = NULL;
     *count = 0;
 
-    sqlite3_stmt *stmt = database->stmtSelect;
+    sqlite3_stmt *stmt = database->stmtGameList;
     sqlite3_reset(stmt);
 
     size_t capacity = QUERY_INITIAL_CAPACITY;
@@ -464,22 +753,21 @@ int listRegisteredGames(DB *database, GameInfo **out, size_t *count) {
     int rc;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         if (n >= QUERY_MAX_RESULTS) {
-            LOG_WARN("listRegisteredGames: result limit reached (%d)",
-                     QUERY_MAX_RESULTS);
+            LOG_WARN("listRegisteredGames: result limit reached");
             break;
         }
 
         if (n >= capacity) {
-            size_t newCapacity = capacity * 2;
-            GameInfo *tmp =
-                realloc(results, newCapacity * sizeof(GameInfo));
+            size_t newCap = capacity * 2;
+            GameInfo *tmp = realloc(results, newCap * sizeof(GameInfo));
             if (tmp == NULL) {
-                LOG_ERROR("listRegisteredGames: realloc failed (errno=%d)", errno);
+                LOG_ERROR("listRegisteredGames: realloc failed (errno=%d)",
+                          errno);
                 gameInfoArrayFree(results, n);
                 return DB_FAIL;
             }
             results = tmp;
-            capacity = newCapacity;
+            capacity = newCap;
         }
 
         memset(&results[n], 0, sizeof(GameInfo));
@@ -507,4 +795,57 @@ int listRegisteredGames(DB *database, GameInfo **out, size_t *count) {
     *out = results;
     *count = n;
     return DB_SUCC;
+}
+
+int getGameEncKey(DB *database, uint32_t gameId, uint8_t **outEnvelope,
+                  size_t *outLen) {
+    if (database == NULL || outEnvelope == NULL || outLen == NULL) {
+        LOG_ERROR("getGameEncKey: NULL argument");
+        return DB_FAIL;
+    }
+    if (database->type != GameDB) {
+        LOG_ERROR("getGameEncKey: wrong database type %d (expected GameDB)",
+                  (int)database->type);
+        return DB_FAIL;
+    }
+
+    *outEnvelope = NULL;
+    *outLen = 0;
+
+    sqlite3_stmt *stmt = database->stmtGameGetKey;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    if (sqlite3_bind_int64(stmt, 1, (sqlite3_int64)gameId) != SQLITE_OK) {
+        LOG_ERROR("getGameEncKey: bind failed: %s",
+                  sqlite3_errmsg(database->handle));
+        return DB_FAIL;
+    }
+
+    int rc = sqlite3_step(stmt);
+    if (rc == SQLITE_ROW) {
+        const void *blob = sqlite3_column_blob(stmt, 0);
+        int blobLen = sqlite3_column_bytes(stmt, 0);
+        if (blob == NULL || blobLen <= 0) {
+            LOG_ERROR("getGameEncKey: empty or NULL encKey for gameId %u",
+                      gameId);
+            return DB_FAIL;
+        }
+        uint8_t *copy = malloc((size_t)blobLen);
+        if (copy == NULL) {
+            LOG_ERROR("getGameEncKey: malloc failed (errno=%d)", errno);
+            return DB_FAIL;
+        }
+        memcpy(copy, blob, (size_t)blobLen);
+        *outEnvelope = copy;
+        *outLen = (size_t)blobLen;
+        return DB_SUCC;
+    }
+    if (rc == SQLITE_DONE) {
+        LOG_WARN("getGameEncKey: gameId %u not found", gameId);
+        return DB_FAIL;
+    }
+    LOG_ERROR("getGameEncKey: step failed: %s (rc=%d)",
+              sqlite3_errmsg(database->handle), rc);
+    return DB_FAIL;
 }

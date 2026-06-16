@@ -119,6 +119,9 @@ static void freeGameRecords(GameRecord **records, size_t count) {
     for (size_t i = 0; i < count; i++) {
         free(records[i]->gameName);
         free(records[i]->gamePath);
+        free(records[i]->gameVersion);
+        free(records[i]->platform);
+        free(records[i]->fileHash);
         free(records[i]);
     }
     free((void *)records);
@@ -152,11 +155,16 @@ static void testGameRecordLayout(void) {
     ASSERT_TRUE(offsetof(GameRecord, gameName) > offsetof(GameRecord, gameId));
     ASSERT_TRUE(offsetof(GameRecord, gamePath) >
                 offsetof(GameRecord, gameName));
-    ASSERT_TRUE(offsetof(GameRecord, playTime) >
+    ASSERT_TRUE(offsetof(GameRecord, gameVersion) >
                 offsetof(GameRecord, gamePath));
+    ASSERT_TRUE(offsetof(GameRecord, platform) >
+                offsetof(GameRecord, gameVersion));
+    ASSERT_TRUE(offsetof(GameRecord, fileHash) >
+                offsetof(GameRecord, platform));
+    ASSERT_TRUE(offsetof(GameRecord, playTime) >
+                offsetof(GameRecord, fileHash));
     enum {
-        ExpectedSize = sizeof(uint32_t) + sizeof(char *) + sizeof(char *) +
-                       sizeof(uint64_t)
+        ExpectedSize = sizeof(uint32_t) + sizeof(char *) * 5 + sizeof(uint64_t)
     };
     ASSERT_TRUE(sizeof(GameRecord) >= ExpectedSize);
 }
@@ -247,7 +255,7 @@ static void testCloseDBSetsNull(void) {
 
 /** @brief addGame rejects NULL client. */
 static void testAddGameNullClient(void) {
-    ASSERT_INT_EQ(addGame(NULL, TestGameA, "Test", "/tmp/test"),
+    ASSERT_INT_EQ(addGame(NULL, TestGameA, "Test", "/tmp/test", "", "", ""),
                   CLIENT_DB_FAIL);
 }
 
@@ -256,7 +264,7 @@ static void testAddGameUninitDB(void) {
     Client client;
     memset(&client, 0, sizeof(client));
     client.db = NULL;
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "Test", "/tmp/test"),
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "Test", "/tmp/test", "", "", ""),
                   CLIENT_DB_FAIL);
 }
 
@@ -265,7 +273,7 @@ static void testAddGameNullName(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, NULL, "/tmp/test"),
+    ASSERT_INT_EQ(addGame(&client, TestGameA, NULL, "/tmp/test", "", "", ""),
                   CLIENT_DB_FAIL);
     destroyTestClient(&client);
 }
@@ -275,7 +283,7 @@ static void testAddGameNullPath(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "Test", NULL), CLIENT_DB_FAIL);
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "Test", NULL, "", "", ""), CLIENT_DB_FAIL);
     destroyTestClient(&client);
 }
 
@@ -284,7 +292,7 @@ static void testAddGameBasic(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "Super Mario", "/games/mario"),
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "Super Mario", "/games/mario", "", "", ""),
                   CLIENT_DB_SUCC);
     destroyTestClient(&client);
 }
@@ -294,9 +302,9 @@ static void testAddGameDuplicate(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "Game One", "/tmp/g1"),
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "Game One", "/tmp/g1", "", "", ""),
                   CLIENT_DB_SUCC);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "Game Two", "/tmp/g2"),
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "Game Two", "/tmp/g2", "", "", ""),
                   CLIENT_DB_FAIL);
     destroyTestClient(&client);
 }
@@ -306,9 +314,9 @@ static void testAddGameMultiple(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "Alpha", "/a"), CLIENT_DB_SUCC);
-    ASSERT_INT_EQ(addGame(&client, TestGameB, "Beta", "/b"), CLIENT_DB_SUCC);
-    ASSERT_INT_EQ(addGame(&client, TestGameC, "Gamma", "/c"), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "Alpha", "/a", "", "", ""), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameB, "Beta", "/b", "", "", ""), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameC, "Gamma", "/c", "", "", ""), CLIENT_DB_SUCC);
     destroyTestClient(&client);
 }
 
@@ -318,8 +326,8 @@ static void testAddGameBoundaries(void) {
     Client client;
     initTestClient(&client);
     enum { GameZero = 0 };
-    ASSERT_INT_EQ(addGame(&client, GameZero, "Zero", "/z"), CLIENT_DB_SUCC);
-    ASSERT_INT_EQ(addGame(&client, TestGameMax, "Max", "/m"), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, GameZero, "Zero", "/z", "", "", ""), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameMax, "Max", "/m", "", "", ""), CLIENT_DB_SUCC);
     destroyTestClient(&client);
 }
 
@@ -328,7 +336,7 @@ static void testAddGameEmptyName(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "", "/tmp/test"), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "", "/tmp/test", "", "", ""), CLIENT_DB_SUCC);
     destroyTestClient(&client);
 }
 
@@ -337,7 +345,7 @@ static void testAddGameEmptyPath(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "Test", ""), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "Test", "", "", "", ""), CLIENT_DB_SUCC);
     destroyTestClient(&client);
 }
 
@@ -349,7 +357,7 @@ static void testAddGameSQLInjectionName(void) {
     Client client;
     initTestClient(&client);
     const char *injectName = "'; DROP TABLE gameList; --";
-    ASSERT_INT_EQ(addGame(&client, TestGameA, injectName, "/safe"),
+    ASSERT_INT_EQ(addGame(&client, TestGameA, injectName, "/safe", "", "", ""),
                   CLIENT_DB_SUCC);
     /* Verify the table still exists — listGames must succeed. */
     GameRecord **records = NULL;
@@ -368,7 +376,7 @@ static void testAddGameSQLInjectionPath(void) {
     Client client;
     initTestClient(&client);
     const char *injectPath = "/safe' OR '1'='1";
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "Safe", injectPath),
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "Safe", injectPath, "", "", ""),
                   CLIENT_DB_SUCC);
     GameRecord **records = NULL;
     size_t count = 0;
@@ -386,7 +394,7 @@ static void testAddGameSpecialChars(void) {
     initTestClient(&client);
     const char *name = "Game\twith\nspecial\rchars%00and\bnull";
     const char *path = "C:\\Program Files\\Game\\\"quoted\"";
-    ASSERT_INT_EQ(addGame(&client, TestGameA, name, path), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameA, name, path, "", "", ""), CLIENT_DB_SUCC);
     GameRecord **records = NULL;
     size_t count = 0;
     ASSERT_INT_EQ(listGames(&client, &records, &count), CLIENT_DB_SUCC);
@@ -454,7 +462,7 @@ static void testListGamesSingle(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "PacPlay", "/usr/games/pacplay"),
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "PacPlay", "/usr/games/pacplay", "", "", ""),
                   CLIENT_DB_SUCC);
     GameRecord **records = NULL;
     size_t count = 0;
@@ -473,9 +481,9 @@ static void testListGamesMultiple(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameC, "Zelda", "/z"), CLIENT_DB_SUCC);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "Alpha", "/a"), CLIENT_DB_SUCC);
-    ASSERT_INT_EQ(addGame(&client, TestGameB, "Mario", "/m"), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameC, "Zelda", "/z", "", "", ""), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "Alpha", "/a", "", "", ""), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameB, "Mario", "/m", "", "", ""), CLIENT_DB_SUCC);
     GameRecord **records = NULL;
     size_t count = 0;
     ASSERT_INT_EQ(listGames(&client, &records, &count), CLIENT_DB_SUCC);
@@ -519,7 +527,7 @@ static void testDeleteGameBasic(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "ToDelete", "/todel"),
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "ToDelete", "/todel", "", "", ""),
                   CLIENT_DB_SUCC);
     ASSERT_INT_EQ(deleteGame(&client, TestGameA), CLIENT_DB_SUCC);
     GameRecord **records = NULL;
@@ -544,7 +552,7 @@ static void testDeleteGameTwice(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "Once", "/once"), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "Once", "/once", "", "", ""), CLIENT_DB_SUCC);
     ASSERT_INT_EQ(deleteGame(&client, TestGameA), CLIENT_DB_SUCC);
     ASSERT_INT_EQ(deleteGame(&client, TestGameA), CLIENT_DB_FAIL);
     destroyTestClient(&client);
@@ -555,8 +563,8 @@ static void testDeleteGameIsolation(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "Keep", "/keep"), CLIENT_DB_SUCC);
-    ASSERT_INT_EQ(addGame(&client, TestGameB, "Remove", "/rm"), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "Keep", "/keep", "", "", ""), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameB, "Remove", "/rm", "", "", ""), CLIENT_DB_SUCC);
     ASSERT_INT_EQ(deleteGame(&client, TestGameB), CLIENT_DB_SUCC);
     GameRecord **records = NULL;
     size_t count = 0;
@@ -590,7 +598,7 @@ static void testUpdatePlayTimeBasic(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "Game", "/g"), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "Game", "/g", "", "", ""), CLIENT_DB_SUCC);
     ASSERT_INT_EQ(updatePlayTime(&client, TestGameA, TestPlayTimeVal),
                   CLIENT_DB_SUCC);
     GameRecord **records = NULL;
@@ -617,7 +625,7 @@ static void testUpdatePlayTimeZero(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "Zero", "/z"), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "Zero", "/z", "", "", ""), CLIENT_DB_SUCC);
     ASSERT_INT_EQ(updatePlayTime(&client, TestGameA, TestPlayTimeVal),
                   CLIENT_DB_SUCC);
     ASSERT_INT_EQ(updatePlayTime(&client, TestGameA, TestPlayTimeZero),
@@ -635,7 +643,7 @@ static void testUpdatePlayTimeMax(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "MaxTime", "/m"), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "MaxTime", "/m", "", "", ""), CLIENT_DB_SUCC);
     ASSERT_INT_EQ(updatePlayTime(&client, TestGameA, TestPlayTimeMax),
                   CLIENT_DB_SUCC);
     GameRecord **records = NULL;
@@ -651,7 +659,7 @@ static void testUpdatePlayTimeAccumulate(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "Acc", "/a"), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "Acc", "/a", "", "", ""), CLIENT_DB_SUCC);
     ASSERT_INT_EQ(updatePlayTime(&client, TestGameA, TestUpdateStep1),
                   CLIENT_DB_SUCC);
     ASSERT_INT_EQ(updatePlayTime(&client, TestGameA, TestUpdateStep2),
@@ -673,8 +681,8 @@ static void testAddListDeleteRoundTrip(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "GameA", "/pa"), CLIENT_DB_SUCC);
-    ASSERT_INT_EQ(addGame(&client, TestGameB, "GameB", "/pb"), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "GameA", "/pa", "", "", ""), CLIENT_DB_SUCC);
+    ASSERT_INT_EQ(addGame(&client, TestGameB, "GameB", "/pb", "", "", ""), CLIENT_DB_SUCC);
 
     GameRecord **records = NULL;
     size_t count = 0;
@@ -700,7 +708,7 @@ static void testFullCRUDRoundTrip(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "FullGame", "/full"),
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "FullGame", "/full", "", "", ""),
                   CLIENT_DB_SUCC);
 
     /* Read */
@@ -742,7 +750,7 @@ static void testDBEncryptedOnDisk(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "SecretGame", "/secret"),
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "SecretGame", "/secret", "", "", ""),
                   CLIENT_DB_SUCC);
     destroyTestClient(&client);
 
@@ -762,7 +770,7 @@ static void testWrongKeyFails(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "WrongKeyTest", "/w"),
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "WrongKeyTest", "/w", "", "", ""),
                   CLIENT_DB_SUCC);
     destroyTestClient(&client);
 
@@ -789,9 +797,9 @@ static void testPersistenceReopen(void) {
     {
         Client client;
         initTestClient(&client);
-        ASSERT_INT_EQ(addGame(&client, TestGameA, "Persist", "/p"),
+        ASSERT_INT_EQ(addGame(&client, TestGameA, "Persist", "/p", "", "", ""),
                       CLIENT_DB_SUCC);
-        ASSERT_INT_EQ(addGame(&client, TestGameB, "Persist2", "/p2"),
+        ASSERT_INT_EQ(addGame(&client, TestGameB, "Persist2", "/p2", "", "", ""),
                       CLIENT_DB_SUCC);
         destroyTestClient(&client);
     }
@@ -823,7 +831,7 @@ static void testRandomKeyPersistence(void) {
         client.fd = NULL_SOCKETFD;
         memcpy(client.cdbkey, randKey, CLIENT_DB_KEY_LEN);
         ASSERT_INT_EQ(clientInitDB(&client), CLIENT_DB_SUCC);
-        ASSERT_INT_EQ(addGame(&client, TestGameA, "RandGame", "/rng"),
+        ASSERT_INT_EQ(addGame(&client, TestGameA, "RandGame", "/rng", "", "", ""),
                       CLIENT_DB_SUCC);
         destroyTestClient(&client);
     }
@@ -852,7 +860,7 @@ static void testFileCorruptionDetected(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "CorruptMe", "/corrupt"),
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "CorruptMe", "/corrupt", "", "", ""),
                   CLIENT_DB_SUCC);
     destroyTestClient(&client);
 
@@ -895,7 +903,7 @@ static void testLifecycleReuse(void) {
     removeClientDBFiles();
     Client client;
     initTestClient(&client);
-    ASSERT_INT_EQ(addGame(&client, TestGameA, "Cycle", "/cycle"),
+    ASSERT_INT_EQ(addGame(&client, TestGameA, "Cycle", "/cycle", "", "", ""),
                   CLIENT_DB_SUCC);
     destroyTestClient(&client);
 

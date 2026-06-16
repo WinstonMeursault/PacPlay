@@ -63,6 +63,9 @@ typedef struct {
     uint32_t gameId;
     char *gameName;    /**< Human-readable game name, caller-freed. */
     char *gamePath;    /**< Filesystem path to the game, caller-freed. */
+    char *gameVersion; /**< Version string, caller-freed. */
+    char *platform;    /**< Platform identifier, caller-freed. */
+    char *fileHash;    /**< File hash for integrity verification, caller-freed. */
     uint64_t playTime; /**< Accumulated play time in seconds. */
 } GameRecord;
 
@@ -120,7 +123,8 @@ void clientCloseDB(struct Client *client);
  *         duplicate @c gameId.
  */
 int addGame(struct Client *client, uint32_t gameId, const char *gameName,
-            const char *gamePath);
+            const char *gamePath, const char *gameVersion,
+            const char *platform, const char *fileHash);
 
 /**
  * @brief List all games in the local library, ordered by gameName.

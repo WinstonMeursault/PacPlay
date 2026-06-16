@@ -52,25 +52,31 @@ int sqlite3_key(sqlite3 *db, const void *pKey, int nKey);
     "gameId INTEGER PRIMARY KEY, "                                             \
     "gameName TEXT NOT NULL, "                                                 \
     "gamePath TEXT NOT NULL, "                                                 \
+    "gameVersion TEXT NOT NULL DEFAULT '', "                                   \
+    "platform TEXT NOT NULL DEFAULT '', "                                      \
+    "fileHash TEXT NOT NULL DEFAULT '', "                                      \
     "playTime INTEGER NOT NULL DEFAULT 0"                                      \
     ");"
 
 /* ────────────────────────────── prepared SQL ────────────────────────────── */
 
 /** @brief INSERT a game record. Params: ?1=gameId, ?2=gameName, ?3=gamePath,
-    ?4=playTime (initially 0). */
+    ?4=gameVersion, ?5=platform, ?6=fileHash. */
 #define SQL_INSERT_GAME                                                        \
-    "INSERT INTO gameList (gameId, gameName, gamePath, playTime) "             \
-    "VALUES (?, ?, ?, 0);"
+    "INSERT INTO gameList (gameId, gameName, gamePath, gameVersion, "          \
+    "platform, fileHash, playTime) "                                           \
+    "VALUES (?, ?, ?, ?, ?, ?, 0);"
 
 /** @brief SELECT all games ordered by gameName. */
 #define SQL_SELECT_ALL_GAMES                                                   \
-    "SELECT gameId, gameName, gamePath, playTime FROM gameList "               \
+    "SELECT gameId, gameName, gamePath, gameVersion, platform, fileHash, "     \
+    "playTime FROM gameList "                                                  \
     "ORDER BY gameName ASC;"
 
 /** @brief SELECT a single game by gameId. Params: ?1=gameId. */
 #define SQL_SELECT_GAME_BY_ID                                                  \
-    "SELECT gameId, gameName, gamePath, playTime FROM gameList "               \
+    "SELECT gameId, gameName, gamePath, gameVersion, platform, fileHash, "     \
+    "playTime FROM gameList "                                                  \
     "WHERE gameId = ?;"
 
 /** @brief DELETE a game by gameId. Params: ?1=gameId. */
@@ -252,7 +258,8 @@ void clientCloseDB(Client *client) {
 /* ────────────────────── public API: game operations ─────────────────────── */
 
 int addGame(Client *client, uint32_t gameId, const char *gameName,
-            const char *gamePath) {
+            const char *gamePath, const char *gameVersion,
+            const char *platform, const char *fileHash) {
     if (client == NULL || client->db == NULL) {
         LOG_ERROR("addGame: NULL client or uninitialised database");
         return CLIENT_DB_FAIL;
@@ -262,6 +269,10 @@ int addGame(Client *client, uint32_t gameId, const char *gameName,
                   (void *)gamePath);
         return CLIENT_DB_FAIL;
     }
+
+    const char *ver = gameVersion != NULL ? gameVersion : "";
+    const char *plat = platform != NULL ? platform : "";
+    const char *hash = fileHash != NULL ? fileHash : "";
 
     ClientDB *db = client->db;
     sqlite3_stmt *stmt = db->stmtInsert;
@@ -285,6 +296,29 @@ int addGame(Client *client, uint32_t gameId, const char *gameName,
     rc = sqlite3_bind_text(stmt, 3, gamePath, -1, SQLITE_STATIC);
     if (rc != SQLITE_OK) {
         LOG_ERROR("addGame: bind gamePath failed: %s (rc=%d)",
+                  sqlite3_errmsg(db->handle), rc);
+        return CLIENT_DB_FAIL;
+    }
+
+    enum { BindGameVersion = 4, BindPlatform = 5, BindFileHash = 6 };
+
+    rc = sqlite3_bind_text(stmt, BindGameVersion, ver, -1, SQLITE_STATIC);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("addGame: bind gameVersion failed: %s (rc=%d)",
+                  sqlite3_errmsg(db->handle), rc);
+        return CLIENT_DB_FAIL;
+    }
+
+    rc = sqlite3_bind_text(stmt, BindPlatform, plat, -1, SQLITE_STATIC);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("addGame: bind platform failed: %s (rc=%d)",
+                  sqlite3_errmsg(db->handle), rc);
+        return CLIENT_DB_FAIL;
+    }
+
+    rc = sqlite3_bind_text(stmt, BindFileHash, hash, -1, SQLITE_STATIC);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("addGame: bind fileHash failed: %s (rc=%d)",
                   sqlite3_errmsg(db->handle), rc);
         return CLIENT_DB_FAIL;
     }
@@ -338,6 +372,9 @@ int listGames(Client *client, GameRecord ***outRecords, size_t *count) {
                 for (size_t i = 0; i < n; i++) {
                     free(results[i]->gameName);
                     free(results[i]->gamePath);
+                    free(results[i]->gameVersion);
+                    free(results[i]->platform);
+                    free(results[i]->fileHash);
                     free(results[i]);
                 }
                 free((void *)results);
@@ -353,6 +390,9 @@ int listGames(Client *client, GameRecord ***outRecords, size_t *count) {
             for (size_t i = 0; i < n; i++) {
                 free(results[i]->gameName);
                 free(results[i]->gamePath);
+                free(results[i]->gameVersion);
+                free(results[i]->platform);
+                free(results[i]->fileHash);
                 free(results[i]);
             }
             free((void *)results);
@@ -361,37 +401,67 @@ int listGames(Client *client, GameRecord ***outRecords, size_t *count) {
 
         rec->gameId = (uint32_t)sqlite3_column_int64(stmt, 0);
 
-        const char *nameStr = (const char *)sqlite3_column_text(stmt, 1);
-        const char *pathStr = (const char *)sqlite3_column_text(stmt, 2);
+        enum {
+            ColName = 1,
+            ColPath = 2,
+            ColVersion = 3,
+            ColPlatform = 4,
+            ColHash = 5,
+            ColPlayTime = 6
+        };
+
+        const char *nameStr = (const char *)sqlite3_column_text(stmt, ColName);
+        const char *pathStr = (const char *)sqlite3_column_text(stmt, ColPath);
         if (nameStr == NULL || pathStr == NULL) {
             LOG_ERROR("listGames: NULL column at row %zu", n);
             free(rec);
             for (size_t i = 0; i < n; i++) {
                 free(results[i]->gameName);
                 free(results[i]->gamePath);
+                free(results[i]->gameVersion);
+                free(results[i]->platform);
+                free(results[i]->fileHash);
                 free(results[i]);
             }
             free((void *)results);
             return CLIENT_DB_FAIL;
         }
 
+        const char *verStr =
+            (const char *)sqlite3_column_text(stmt, ColVersion);
+        const char *platStr =
+            (const char *)sqlite3_column_text(stmt, ColPlatform);
+        const char *hashStr =
+            (const char *)sqlite3_column_text(stmt, ColHash);
+
         rec->gameName = strdup(nameStr);
         rec->gamePath = strdup(pathStr);
-        if (rec->gameName == NULL || rec->gamePath == NULL) {
+        rec->gameVersion = strdup(verStr != NULL ? verStr : "");
+        rec->platform = strdup(platStr != NULL ? platStr : "");
+        rec->fileHash = strdup(hashStr != NULL ? hashStr : "");
+        if (rec->gameName == NULL || rec->gamePath == NULL ||
+            rec->gameVersion == NULL || rec->platform == NULL ||
+            rec->fileHash == NULL) {
             LOG_ERROR("listGames: strdup failed (errno=%d)", errno);
             free(rec->gameName);
             free(rec->gamePath);
+            free(rec->gameVersion);
+            free(rec->platform);
+            free(rec->fileHash);
             free(rec);
             for (size_t i = 0; i < n; i++) {
                 free(results[i]->gameName);
                 free(results[i]->gamePath);
+                free(results[i]->gameVersion);
+                free(results[i]->platform);
+                free(results[i]->fileHash);
                 free(results[i]);
             }
             free((void *)results);
             return CLIENT_DB_FAIL;
         }
 
-        rec->playTime = (uint64_t)sqlite3_column_int64(stmt, 3);
+        rec->playTime = (uint64_t)sqlite3_column_int64(stmt, ColPlayTime);
         results[n] = rec;
         n++;
     }
@@ -402,6 +472,9 @@ int listGames(Client *client, GameRecord ***outRecords, size_t *count) {
         for (size_t i = 0; i < n; i++) {
             free(results[i]->gameName);
             free(results[i]->gamePath);
+            free(results[i]->gameVersion);
+            free(results[i]->platform);
+            free(results[i]->fileHash);
             free(results[i]);
         }
         free((void *)results);
