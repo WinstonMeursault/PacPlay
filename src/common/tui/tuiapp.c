@@ -31,6 +31,7 @@
 #include <pthread.h>
 #include <stdbool.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "container.h"
@@ -101,6 +102,7 @@ static void tuiAppInput();
 static void tuiAppMsgHandle();
 static void tuiAppControlUpdate();
 static void tuiAppRender();
+static void tuiAppDelay(struct timespec frameBegin);
 static void tuiAppChangeRoot(Index root);
 static void tuiAppRefreshNavChain();
 static void tuiAppNavigate(bool isBack);
@@ -323,14 +325,14 @@ static void tuiAppDeinit() {
 
 static void tuiAppMainLoop() {
     tuiAppPushMessage((TuiMsg){.type = MsgResize});
+    struct timespec begin;
     while (tuiApp.isRunning) {
+        clock_gettime(CLOCK_REALTIME, &begin);
         tuiAppInput();
         tuiAppMsgHandle();
         tuiAppControlUpdate();
         tuiAppRender();
-        if (!tuiApp.fastRefresh) {
-            usleep(A_SEC / tuiApp.options.fps);
-        }
+        tuiAppDelay(begin);
     }
 }
 
@@ -629,6 +631,29 @@ static void tuiAppRender() {
     doupdate();
 }
 
+static void tuiAppDelay(struct timespec frameBegin) {
+    if (tuiApp.fastRefresh) {
+        return;
+    }
+    struct timespec cur;
+    if (clock_gettime(CLOCK_REALTIME, &cur) == 0) {
+        long long usecCur =
+            (long long)cur.tv_sec * 1000000LL + cur.tv_nsec / 1000; // NOLINT
+        long long usecBegin =
+            (long long)frameBegin.tv_sec * 1000000LL + // NOLINT
+            frameBegin.tv_nsec / 1000;                 // NOLINT
+        long long delay = usecCur - usecBegin;
+        long long idealSleep = A_SEC / tuiApp.options.fps;
+        if (delay < idealSleep) {
+            usleep(idealSleep - delay);
+        }
+    } else {
+        LOG_ERROR("tuiApp: cannot get time");
+        usleep(A_SEC / tuiApp.options.fps);
+        return;
+    }
+}
+
 static void tuiAppChangeRoot(Index root) {
     ControlRegEntry *curEntry;
     QueueIndex q;
@@ -851,7 +876,7 @@ static Index findWidgetAtMouse(int screenY, int screenX) {
 
 void tuiAppRefresh() {
     tuiAppRefreshNavChain();
-    
+
     tuiAppPushMessage((TuiMsg){.type = MsgRefresh});
 }
 

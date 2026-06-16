@@ -1,5 +1,5 @@
 /**
- * @file main.c
+ * @file controlGameView.h
  * @brief
  *
  * @date 2026-06-15
@@ -22,36 +22,27 @@
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
-#include "loader.h"
-#include "log.h"
-#include <dlfcn.h>
-#include <stdlib.h>
+#ifndef CONTROLGAMEVIEW_H
+#define CONTROLGAMEVIEW_H
 
-GameFunctions gameFunctions;
+#include "client/gameLoad.h"
+#include "tui/control.h"
+#include "poll.h"
 
-int main(int argc, const char *argv[]) {
-    setenv("TERM", "xterm-256color", 1);
+typedef struct {
+    Control base;
+    bool running;
+    VTerm *vterm;
+    VTermScreen *vscreen;
+    int vtHeight;
+    int vtWidth;
+    pid_t pid;
+    int ptyFD;
+} ControlGameView;
 
-    if (argc != 2) {
-        LOG_ERROR("loader: invalid argument count");
-        return EXIT_FAILURE;
-    }
+void controlGameViewConstruct(ControlGameView *self, int height, int width,
+                              int y, int x);
+void controlGameViewRun(ControlGameView *self, const char *gamePath);
+void controlGameViewStop(ControlGameView *self);
 
-    void *handle = dlopen(argv[1], RTLD_LAZY);
-
-    if (!handle) {
-        LOG_ERROR("loader: cannot open game shared object: %s", argv[1]);
-        return EXIT_FAILURE;
-    }
-
-    gameFunctions.pacplayMain = (void (*)())dlsym(handle, "pacplayMain");
-
-    if (gameFunctions.pacplayMain == NULL) {
-        LOG_ERROR("loader: cannot find symbol 'pacplayMain' in %s", argv[1]);
-    }
-
-    gameFunctions.pacplayMain();
-
-    dlclose(handle);
-    return EXIT_SUCCESS;
-}
+#endif // CONTROLGAMEVIEW_H

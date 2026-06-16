@@ -31,6 +31,7 @@
 #include <time.h>
 
 #include <stddef.h>
+#include <vterm.h>
 
 /* ───────────────────────────── generic macros ───────────────────────────── */
 
@@ -91,6 +92,6 @@ time_t getCurrentTimestamp(void);
  */
 size_t readPasswordMasked(char *buf, size_t bufsize);
 
-int clamp(int v, int min, int max);
+VTermKey ncursesKeyToVTerm(int ncursesKey);
 
 #endif /* UTILS_H */

@@ -204,8 +204,9 @@ int serverHandleTOTPVerify(Server *s, ClientSession *cs, const Packet *pkt) {
 int serverHandleDBKeyReq(Server *s, ClientSession *cs) {
     (void)s;
     uint8_t outKey[DB_ENC_KEY_LEN];
-    if (getCDBKey(s->userDB, cs->currentUser.uid, outKey) != DB_SUCC)
-        return SERVER_FAIL;
+    if (getCDBKey(s->userDB, cs->currentUser.uid, outKey) != DB_SUCC) {
+        return SERVER_SUCC;
+    }
     serverSendEncryptedPacket(cs, MsgDBKeyResp, outKey, DB_ENC_KEY_LEN);
     OPENSSL_cleanse(outKey, sizeof(outKey));
     return SERVER_SUCC;

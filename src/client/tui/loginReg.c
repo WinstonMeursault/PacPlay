@@ -165,6 +165,7 @@ static void loginBtnOnClick(ControlButton *self) {
         homePageInitUpdate(nickname, username);
         if (!totpEnabled) {
             tuiAppChangePage(&totpRecommendPage);
+            return;
         }
         if (totpRequest) {
             tuiAppChangePage(&totpVerifyPage);
@@ -463,9 +464,9 @@ static void totpSetupSecretResize(ControlLabel *self) {
 
 static void totpSetupDoneBtnOnClick(ControlButton *self) {
     (void)self;
-    OPENSSL_cleanse(totpSetupSecret.text, sizeof(totpData.qr));
+    OPENSSL_cleanse(totpSetupSecret.text, sizeof(TOTP_SETUP_SECRET_LEN));
     OPENSSL_cleanse(totpData.secret, sizeof(totpData.secret));
-    tuiAppStop();
+    tuiAppChangePage(&totpVerifyPage);
 }
 
 static void totpVerifyGridResize(ControlGrid *self) {

@@ -32,6 +32,13 @@
 
 #define MAX_CLIENT_DOWNLOADS 4
 #define CLIENT_GAME_LIB_DIR "./gameLib"
+#include "vterm.h"
+#include <poll.h>
+
+int clientRunGame(VTerm **vterm, VTermScreen **vscreen, const char *path,
+                  int height, int width, pid_t *pid, int *ptyFD);
+
+void clientStopGame(VTerm **vterm, pid_t *pid, int *ptyFD);
 
 typedef enum {
     DlPending = 0,

@@ -163,6 +163,8 @@ void customBox(WINDOW *handler, const wchar_t *lsRaw, const wchar_t *rsRaw,
 #define DOUBLE_BOX(handler)                                                    \
     customBox((handler), L"║", L"║", L"═", L"═", L"╔", L"╗", L"╚", L"╝")
 
+void controlConstruct(Control *self, int height, int width, int y, int x,
+                      bool focusable, bool isContainer);
 void controlInstantiate(Control *self, Control *parent);
 void controlDeinstantiate(Control *self);
 

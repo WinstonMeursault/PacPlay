@@ -28,6 +28,9 @@
 #include "client/gameLoad.h"
 #include "clientTUI.h"
 #include <string.h>
+#include "client/room.h"
+#include "clientTUI.h"
+#include "controlGameView.h"
 #include <time.h>
 
 #define TUI_HOME_STATUSGRID_HEIGHT 9
@@ -71,7 +74,7 @@ ControlGrid gameGrid;
 ControlButton toGameBtn;
 ControlButton toChatBtn;
 ControlButton backBtn;
-ControlGrid gameView;
+ControlGameView gameView;
 ControlGrid chatGrid;
 ControlListBox chatRoomList;
 ControlButton chatEnterRoomBtn;
@@ -79,8 +82,6 @@ ControlButton chatRefreshRoomBtn;
 ControlButton chatCreateRoomBtn;
 ControlScrollTextBox chatHistoryBox;
 ControlInputBox chatInputBox;
-
-
 
 typedef enum { GameTag = 1, ChatTag = 2 } TagEnum;
 static void switchTag(TagEnum tag) {
@@ -122,7 +123,7 @@ void homePageInitUpdate(char *nickname, char *username) {
     switchTag(GameTag);
 }
 
-static void homeGamePageGridResize(ControlGrid *self) {
+static void homePageGridResize(ControlGrid *self) {
     self->base.height = pViewArea->height;
     self->base.width = pViewArea->width;
 }
@@ -224,6 +225,7 @@ static void homeOperPlayOnClick(ControlButton *self) {
     (void)self;
     switchTag(GameTag);
     tuiAppChangePage(&gamePage);
+    controlGameViewRun(&gameView, "123");
 }
 
 static void gameGridDraw(ControlGrid *self) {
@@ -234,9 +236,13 @@ static void gameGridDraw(ControlGrid *self) {
     wnoutrefresh(self->base.windowHandler);
 }
 
-static void gameChatResize(ControlGrid *self) {
-    self->base.width = pViewArea->width - 2;
-    self->base.height = pViewArea->height - 2 - TUI_BTN_HEIGHT;
+static void gameGridResize(ControlGrid *self) {
+    self->base.height = pViewArea->height;
+    self->base.width = pViewArea->width;
+
+    gameView.base.width = chatGrid.base.width = pViewArea->width - 2;
+    gameView.base.height = chatGrid.base.height =
+        pViewArea->height - 2 - TUI_BTN_HEIGHT;
 
     backBtn.base.x = gameGrid.base.width - backBtn.base.width - 1;
 
@@ -266,6 +272,12 @@ static void toChatBtnOnClick(ControlButton *self) {
 
 static void backBtnOnClick(ControlButton *self) {
     (void)self;
+    if (client->currentRoomId != 0) {
+        clientQuitRoom(client);
+    }
+    if (gameView.running) {
+        controlGameViewStop(&gameView);
+    }
     tuiAppChangePage(&homePage);
 }
 
@@ -287,7 +299,7 @@ static void homeOperRemoveOnClick(ControlButton *self) {
 void tuiClientMainPageInit() {
     controlPageConstruct(&homePage);
     controlGridConstruct(&homePageGrid, 0, 0, 0, 0, LayoutNone, 0, 0,
-                         homePageGridDraw, homeGamePageGridResize, NULL, NULL,
+                         homePageGridDraw, homePageGridResize, NULL, NULL,
                          NULL);
     controlGridConstruct(&homeStatusGrid, TUI_HOME_STATUSGRID_HEIGHT,
                          TUI_HOME_STATUSGRID_WIDTH, 1, 0, LayoutNone, 0, 0,
@@ -373,7 +385,7 @@ void tuiClientMainPageInit() {
     // Game page
     controlPageConstruct(&gamePage);
     controlGridConstruct(&gameGrid, 0, 0, 0, 0, LayoutNone, 0, 0, gameGridDraw,
-                         homeGamePageGridResize, NULL, NULL, NULL);
+                         gameGridResize, NULL, NULL, NULL);
     controlButtonConstruct(&toGameBtn, TUI_BTN_HEIGHT, TUI_BTN_WIDTH, 1, 1,
                            "Game", NULL, toGameBtnOnClick, NULL, NULL, NULL);
     controlButtonConstruct(&toChatBtn, TUI_BTN_HEIGHT, TUI_BTN_WIDTH, 1,
@@ -382,10 +394,9 @@ void tuiClientMainPageInit() {
     controlButtonConstruct(&backBtn, TUI_BTN_HEIGHT, TUI_BTN_WIDTH, 1,
                            1 + TUI_BTN_WIDTH + 1, "Back", NULL, backBtnOnClick,
                            NULL, NULL, NULL);
-    controlGridConstruct(&gameView, 0, 0, TUI_BTN_HEIGHT + 1, 1, LayoutNone, 0,
-                         0, NULL, gameChatResize, NULL, NULL, NULL);
+    controlGameViewConstruct(&gameView, 3, 3, TUI_BTN_HEIGHT + 1, 1);
     controlGridConstruct(&chatGrid, 0, 0, TUI_BTN_HEIGHT + 1, 1, LayoutNone, 0,
-                         0, NULL, gameChatResize, NULL, NULL, NULL);
+                         0, NULL, NULL, NULL, NULL, NULL);
     controlListBoxConstruct(&chatRoomList, 20, 20, 0, 0, NULL, NULL, NULL,
                             NULL);
     controlButtonConstruct(&chatEnterRoomBtn, TUI_BTN_HEIGHT, TUI_BTN_WIDTH, 0,

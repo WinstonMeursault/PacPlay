@@ -1,5 +1,5 @@
 /**
- * @file main.c
+ * @file loader.h
  * @brief
  *
  * @date 2026-06-15
@@ -22,36 +22,11 @@
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
-#include "loader.h"
-#include "log.h"
-#include <dlfcn.h>
-#include <stdlib.h>
+#ifndef LOADER_H
+#define LOADER_H
 
-GameFunctions gameFunctions;
+typedef struct {
+    void (*pacplayMain)();
+} GameFunctions;
 
-int main(int argc, const char *argv[]) {
-    setenv("TERM", "xterm-256color", 1);
-
-    if (argc != 2) {
-        LOG_ERROR("loader: invalid argument count");
-        return EXIT_FAILURE;
-    }
-
-    void *handle = dlopen(argv[1], RTLD_LAZY);
-
-    if (!handle) {
-        LOG_ERROR("loader: cannot open game shared object: %s", argv[1]);
-        return EXIT_FAILURE;
-    }
-
-    gameFunctions.pacplayMain = (void (*)())dlsym(handle, "pacplayMain");
-
-    if (gameFunctions.pacplayMain == NULL) {
-        LOG_ERROR("loader: cannot find symbol 'pacplayMain' in %s", argv[1]);
-    }
-
-    gameFunctions.pacplayMain();
-
-    dlclose(handle);
-    return EXIT_SUCCESS;
-}
+#endif // LOADER_H

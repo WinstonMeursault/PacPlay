@@ -68,5 +68,6 @@ build/
 bin/
 db/
 src/common/tui/test/
-err.log
 logs/
+client_err.log
+server_err.log

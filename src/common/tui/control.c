@@ -32,9 +32,6 @@
 #include <string.h>
 #include <wchar.h>
 
-static void controlConstruct(Control *self, int height, int width, int y, int x,
-                             bool focusable, bool isContainer);
-
 static void controlPageMsgHandler(ControlPage *self, TuiMsg msg);
 static void controlPageRefreshChild(ControlPage *self, Control *child);
 
@@ -175,8 +172,7 @@ void controlDeinstantiate(Control *self) {
     self->windowHandler = NULL;
 }
 
-// parent == NULL means stdscr
-static void controlConstruct(Control *self, int height, int width, int y, int x,
+void controlConstruct(Control *self, int height, int width, int y, int x,
                              bool focusable, bool isContainer) {
     self->vtable = defaultCtrlVtable;
     self->windowHandler = NULL;

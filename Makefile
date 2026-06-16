@@ -5,8 +5,9 @@ MAKEFLAGS += -j $(shell nproc)
 
 ## Compiler and compilation flags
 CC := clang
-CFLAGS := -fsanitize=address -Wall -Wextra -Werror -g -Wno-unused-command-line-argument
-LDLIBS := -lssl -lcrypto -lsqlcipher -lncursesw -lpthread -lz-ng
+CFLAGS := -fsanitize=address -fno-omit-frame-pointer -Wall -Wextra -Werror -g -Wno-unused-command-line-argument
+# LDLIBS := -lssl -lcrypto -lsqlcipher -lncursesw -lpthread -lz-ng -L/path/to/libvterm/.libs -lvterm -Wl,-rpath,/home/kiraterin/gitclone/libvterm/.libs
+LDLIBS := -lssl -lcrypto -lsqlcipher -lncursesw -lpthread -lz-ng -lvterm
 ## Compiler flags for auto-generating dependency files (modern approach, replaces the old sed method)
 DEPFLAGS = -MMD -MP -MF $(@:%.o=%.d)
 

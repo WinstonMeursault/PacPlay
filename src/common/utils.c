@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <tui/ncurses_wrapper.h>
 #include <unistd.h>
 
 #ifdef __linux__
@@ -140,10 +141,45 @@ size_t readPasswordMasked(char *buf, size_t bufsize) {
 #endif
 }
 
-int clamp(int v, int min, int max) {
-    if (v < min)
-        return min;
-    if (v > max)
-        return max;
-    return v;
+VTermKey ncursesKeyToVTerm(int ncursesKey) {
+    switch (ncursesKey) {
+    case KEY_UP:
+        return VTERM_KEY_UP;
+    case KEY_DOWN:
+        return VTERM_KEY_DOWN;
+    case KEY_LEFT:
+        return VTERM_KEY_LEFT;
+    case KEY_RIGHT:
+        return VTERM_KEY_RIGHT;
+    case KEY_HOME:
+        return VTERM_KEY_HOME;
+    case KEY_END:
+        return VTERM_KEY_END;
+    case KEY_PPAGE:
+        return VTERM_KEY_PAGEUP;
+    case KEY_NPAGE:
+        return VTERM_KEY_PAGEDOWN;
+    case KEY_BACKSPACE:
+        return VTERM_KEY_BACKSPACE;
+    case KEY_DC:
+        return VTERM_KEY_DEL;
+    case KEY_IC:
+        return VTERM_KEY_INS;
+    case KEY_ENTER:
+        return VTERM_KEY_ENTER;
+    case '\r':
+        return VTERM_KEY_ENTER;
+    case '\n':
+        return VTERM_KEY_ENTER;
+    case '\t':
+        return VTERM_KEY_TAB;
+    default:
+        if (ncursesKey >= KEY_F(1) && ncursesKey <= KEY_F(12)) {
+            return VTERM_KEY_FUNCTION(ncursesKey - KEY_F(1) + 1);
+        }
+        if (ncursesKey >= ' ' && ncursesKey < '~') {
+            return VTERM_KEY_NONE;
+        }
+        return VTERM_KEY_NONE;
+    }
 }
