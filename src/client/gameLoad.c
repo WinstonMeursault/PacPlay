@@ -66,7 +66,7 @@ int clientRunGame(VTerm **vterm, VTermScreen **vscreen, const char *path,
         dup2(slaveFD, STDERR_FILENO);
         close(slaveFD);
         execl("./loader", path, NULL);
-        // execl("/home/kiraterin/playground/ncursesplg/bin/main", path, NULL);
+        // execl("/home/kiraterin/playgroun d/ncursesplg/bin/main", path, NULL);
 
         // code below will be executed when execl failed
         LOG_ERROR("clientRunGame: cannot execute loader");

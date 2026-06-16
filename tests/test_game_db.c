@@ -24,10 +24,9 @@ enum { PlatformCount3 = 3 };
 enum { SleepSec = 1 };
 
 static const uint8_t testEnvelope[TestEnvelopeLen] = {
-    0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04,
-    0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C,
-    0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14,
-    0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C};
+    0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12,
+    0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C};
 
 static void removeGameDBFiles(void) {
     remove("./db/game.db");
@@ -50,8 +49,8 @@ static void testGameDbSchemaCreation(void) {
                           NULL, NULL);
     ASSERT_INT_EQ(rc, SQLITE_OK);
 
-    rc = sqlite3_exec(db->handle, "SELECT * FROM game_platforms LIMIT 0;",
-                      NULL, NULL, NULL);
+    rc = sqlite3_exec(db->handle, "SELECT * FROM game_platforms LIMIT 0;", NULL,
+                      NULL, NULL);
     ASSERT_INT_EQ(rc, SQLITE_OK);
 
     dbClose(db);
@@ -62,8 +61,7 @@ static void testRegisterGame(void) {
     ASSERT_TRUE(db != NULL);
 
     GameInfo g = {.gameId = 0, .name = "TestGame", .version = "1.0.0"};
-    ASSERT_INT_EQ(
-        registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
     ASSERT_TRUE(g.gameId > 0);
 
     dbClose(db);
@@ -75,10 +73,10 @@ static void testRegisterDuplicateName(void) {
 
     GameInfo g1 = {.gameId = 0, .name = "DupGame", .version = "1.0"};
     GameInfo g2 = {.gameId = 0, .name = "DupGame", .version = "2.0"};
-    ASSERT_INT_EQ(
-        registerGame(db, &g1, testEnvelope, TestEnvelopeLen), DB_SUCC);
-    ASSERT_INT_EQ(
-        registerGame(db, &g2, testEnvelope, TestEnvelopeLen), DB_FAIL);
+    ASSERT_INT_EQ(registerGame(db, &g1, testEnvelope, TestEnvelopeLen),
+                  DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &g2, testEnvelope, TestEnvelopeLen),
+                  DB_FAIL);
 
     dbClose(db);
 }
@@ -88,8 +86,7 @@ static void testGetGameById(void) {
     ASSERT_TRUE(db != NULL);
 
     GameInfo g = {.gameId = 0, .name = "ById", .version = "3.2.1"};
-    ASSERT_INT_EQ(
-        registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
 
     GameInfo out;
     memset(&out, 0, sizeof(out));
@@ -109,8 +106,7 @@ static void testGetGameByName(void) {
     ASSERT_TRUE(db != NULL);
 
     GameInfo g = {.gameId = 0, .name = "ByName", .version = "0.1"};
-    ASSERT_INT_EQ(
-        registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
 
     GameInfo out;
     memset(&out, 0, sizeof(out));
@@ -128,12 +124,10 @@ static void testUnregisterGameCascade(void) {
     ASSERT_TRUE(db != NULL);
 
     GameInfo g = {.gameId = 0, .name = "CascadeGame", .version = "1.0"};
-    ASSERT_INT_EQ(
-        registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
 
-    GamePlatformInfo plat = {.fileName = "game.exe",
-                             .hash = "abc123",
-                             .fileSize = TestFileSize};
+    GamePlatformInfo plat = {
+        .fileName = "game.exe", .hash = "abc123", .fileSize = TestFileSize};
     strncpy(plat.platform, "windows", PLATFORM_NAME_LEN - 1);
     plat.platform[PLATFORM_NAME_LEN - 1] = '\0';
     ASSERT_INT_EQ(registerGamePlatform(db, g.gameId, &plat), DB_SUCC);
@@ -152,8 +146,7 @@ static void testRegisterPlatform(void) {
     ASSERT_TRUE(db != NULL);
 
     GameInfo g = {.gameId = 0, .name = "PlatGame", .version = "1.0"};
-    ASSERT_INT_EQ(
-        registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
 
     GamePlatformInfo plat = {.fileName = "game.bin",
                              .hash = "sha256hex",
@@ -170,8 +163,7 @@ static void testGetPlatform(void) {
     ASSERT_TRUE(db != NULL);
 
     GameInfo g = {.gameId = 0, .name = "GetPlat", .version = "2.0"};
-    ASSERT_INT_EQ(
-        registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
 
     GamePlatformInfo plat = {.fileName = "app.dmg",
                              .hash = "deadbeef",
@@ -197,8 +189,7 @@ static void testListPlatforms(void) {
     ASSERT_TRUE(db != NULL);
 
     GameInfo g = {.gameId = 0, .name = "MultiPlat", .version = "1.0"};
-    ASSERT_INT_EQ(
-        registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
 
     GamePlatformInfo p1 = {
         .fileName = "game.exe", .hash = "h1", .fileSize = TestFileSize};
@@ -233,8 +224,7 @@ static void testGetEncKey(void) {
     ASSERT_TRUE(db != NULL);
 
     GameInfo g = {.gameId = 0, .name = "KeyGame", .version = "1.0"};
-    ASSERT_INT_EQ(
-        registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
 
     uint8_t *envelope = NULL;
     size_t len = 0;
@@ -253,12 +243,12 @@ static void testListRegisteredGames(void) {
     GameInfo g1 = {.gameId = 0, .name = "Game1", .version = "1.0"};
     GameInfo g2 = {.gameId = 0, .name = "Game2", .version = "2.0"};
     GameInfo g3 = {.gameId = 0, .name = "Game3", .version = "3.0"};
-    ASSERT_INT_EQ(
-        registerGame(db, &g1, testEnvelope, TestEnvelopeLen), DB_SUCC);
-    ASSERT_INT_EQ(
-        registerGame(db, &g2, testEnvelope, TestEnvelopeLen), DB_SUCC);
-    ASSERT_INT_EQ(
-        registerGame(db, &g3, testEnvelope, TestEnvelopeLen), DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &g1, testEnvelope, TestEnvelopeLen),
+                  DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &g2, testEnvelope, TestEnvelopeLen),
+                  DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &g3, testEnvelope, TestEnvelopeLen),
+                  DB_SUCC);
 
     GameInfo *arr = NULL;
     size_t count = 0;
@@ -288,8 +278,7 @@ static void testUpdateGameVersion(void) {
     ASSERT_TRUE(db != NULL);
 
     GameInfo g = {.gameId = 0, .name = "UpdGame", .version = "1.0"};
-    ASSERT_INT_EQ(
-        registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
+    ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
     time_t origUpdated = g.updatedAt;
 
     sleep(SleepSec);
@@ -303,6 +292,332 @@ static void testUpdateGameVersion(void) {
     ASSERT_TRUE(out.updatedAt >= origUpdated);
 
     gameInfoFree(&out);
+    dbClose(db);
+}
+
+/* ═══════════════════ listGameBrief / description tests ═══════════════════ */
+
+enum { BriefGameCount = 5 };
+enum { BriefRangeStart = 2 };
+enum { BriefRangeEnd = 4 };
+enum { BriefRangeExpected = 3 };
+
+static void registerBriefGames(DB *db) {
+    const char *names[] = {"BriefA", "BriefB", "BriefC", "BriefD", "BriefE"};
+    const char *descs[] = {"Alpha desc", "Beta desc", "Gamma desc",
+                           "Delta desc", "Epsilon desc"};
+    for (int i = 0; i < BriefGameCount; i++) {
+        GameInfo g;
+        memset(&g, 0, sizeof(g));
+        g.name = (char *)names[i];
+        g.version = "1.0";
+        g.description = (char *)descs[i];
+        ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen),
+                      DB_SUCC);
+    }
+}
+
+static void testListGameBriefEmpty(void) {
+    DB *db = openGameDB();
+    ASSERT_TRUE(db != NULL);
+
+    GameInfoEntry *entries = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(listGameBrief(db, 0, 0, "", &entries, &count), DB_SUCC);
+    ASSERT_TRUE(count == 0);
+    ASSERT_TRUE(entries == NULL);
+
+    dbClose(db);
+}
+
+static void testListGameBriefAll(void) {
+    DB *db = openGameDB();
+    ASSERT_TRUE(db != NULL);
+
+    registerBriefGames(db);
+
+    GameInfoEntry *entries = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(listGameBrief(db, 0, 0, "", &entries, &count), DB_SUCC);
+    ASSERT_TRUE(count == BriefGameCount);
+    ASSERT_TRUE(entries != NULL);
+
+    ASSERT_STR_EQ(entries[0].name, "BriefA");
+    ASSERT_STR_EQ(entries[1].name, "BriefB");
+    ASSERT_STR_EQ(entries[2].name, "BriefC");
+    ASSERT_STR_EQ(entries[3].name, "BriefD");
+    ASSERT_STR_EQ(entries[4].name, "BriefE");
+
+    for (size_t i = 0; i < count; i++) {
+        ASSERT_TRUE(entries[i].gameId > 0);
+        ASSERT_TRUE(entries[i].createdAt > 0);
+        ASSERT_TRUE(entries[i].updatedAt > 0);
+    }
+
+    free(entries);
+    dbClose(db);
+}
+
+static void testListGameBriefRange(void) {
+    DB *db = openGameDB();
+    ASSERT_TRUE(db != NULL);
+
+    registerBriefGames(db);
+
+    GameInfoEntry *entries = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(
+        listGameBrief(db, BriefRangeStart, BriefRangeEnd, "", &entries, &count),
+        DB_SUCC);
+    ASSERT_TRUE(count == BriefRangeExpected);
+    ASSERT_TRUE(entries != NULL);
+
+    ASSERT_UINT_EQ(entries[0].gameId, BriefRangeStart);
+    ASSERT_UINT_EQ(entries[count - 1].gameId, BriefRangeEnd);
+
+    free(entries);
+    dbClose(db);
+}
+
+static void testListGameBriefInvertedRange(void) {
+    DB *db = openGameDB();
+    ASSERT_TRUE(db != NULL);
+
+    registerBriefGames(db);
+
+    GameInfoEntry *entries = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(
+        listGameBrief(db, BriefRangeEnd, BriefRangeStart, "", &entries, &count),
+        DB_SUCC);
+    ASSERT_TRUE(count == 0);
+    ASSERT_TRUE(entries == NULL);
+
+    dbClose(db);
+}
+
+static void testListGameBriefDescription(void) {
+    DB *db = openGameDB();
+    ASSERT_TRUE(db != NULL);
+
+    registerBriefGames(db);
+
+    GameInfoEntry *entries = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(listGameBrief(db, 0, 0, "", &entries, &count), DB_SUCC);
+    ASSERT_TRUE(count == BriefGameCount);
+
+    ASSERT_STR_EQ(entries[0].description, "Alpha desc");
+    ASSERT_STR_EQ(entries[1].description, "Beta desc");
+    ASSERT_STR_EQ(entries[2].description, "Gamma desc");
+    ASSERT_STR_EQ(entries[3].description, "Delta desc");
+    ASSERT_STR_EQ(entries[4].description, "Epsilon desc");
+
+    free(entries);
+    dbClose(db);
+}
+
+static void testGetGameByIdDescription(void) {
+    DB *db = openGameDB();
+    ASSERT_TRUE(db != NULL);
+
+    GameInfo g;
+    memset(&g, 0, sizeof(g));
+    g.name = "DescGame";
+    g.version = "2.0";
+    g.description = "A very cool game";
+    ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
+
+    GameInfo out;
+    memset(&out, 0, sizeof(out));
+    ASSERT_INT_EQ(getGameById(db, g.gameId, &out), DB_SUCC);
+    ASSERT_TRUE(out.description != NULL);
+    ASSERT_STR_EQ(out.description, "A very cool game");
+
+    gameInfoFree(&out);
+    dbClose(db);
+}
+
+static void testRegisterGameNullDescription(void) {
+    DB *db = openGameDB();
+    ASSERT_TRUE(db != NULL);
+
+    GameInfo g = {.gameId = 0, .name = "NullDesc", .version = "1.0"};
+    ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
+
+    GameInfo out;
+    memset(&out, 0, sizeof(out));
+    ASSERT_INT_EQ(getGameById(db, g.gameId, &out), DB_SUCC);
+    ASSERT_TRUE(out.description != NULL);
+    ASSERT_STR_EQ(out.description, "");
+
+    gameInfoFree(&out);
+    dbClose(db);
+}
+
+static void testListGameBriefSingleElement(void) {
+    DB *db = openGameDB();
+    ASSERT_TRUE(db != NULL);
+
+    registerBriefGames(db);
+
+    GameInfoEntry *entries = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(listGameBrief(db, 1, 1, "", &entries, &count), DB_SUCC);
+    ASSERT_TRUE(count == 1);
+    ASSERT_TRUE(entries != NULL);
+    ASSERT_UINT_EQ(entries[0].gameId, 1u);
+
+    free(entries);
+    dbClose(db);
+}
+
+static void testListGameBriefBoundaryRange(void) {
+    DB *db = openGameDB();
+    ASSERT_TRUE(db != NULL);
+
+    registerBriefGames(db);
+
+    GameInfoEntry *entries = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(listGameBrief(db, UINT32_MAX, UINT32_MAX, "", &entries, &count),
+                  DB_SUCC);
+    ASSERT_TRUE(count == 0);
+    ASSERT_TRUE(entries == NULL);
+
+    dbClose(db);
+}
+
+/* ════════════════ listGameBrief platform-filter tests ════════════════ */
+
+enum { PlatFilterMatchCount = 3, PlatFilterNoMatchCount = 0, PlatIdxB = 1,
+       PlatNameBufLen = 64 };
+
+static void registerGameWithPlatform(DB *db, const char *gameName,
+                                      const char *platformName) {
+    GameInfo g = {.gameId = 0, .name = (char *)gameName, .version = "1.0",
+                  .description = "has platform"};
+    ASSERT_INT_EQ(registerGame(db, &g, testEnvelope, TestEnvelopeLen), DB_SUCC);
+
+    GamePlatformInfo plat = {.fileName = "game.bin", .hash = "abc123",
+                              .fileSize = TestFileSizeSmall};
+    strncpy(plat.platform, platformName, PLATFORM_NAME_LEN - 1);
+    plat.platform[PLATFORM_NAME_LEN - 1] = '\0';
+    ASSERT_INT_EQ(registerGamePlatform(db, g.gameId, &plat), DB_SUCC);
+}
+
+static void testListGameBriefPlatformFilterMatch(void) {
+    DB *db = openGameDB();
+    ASSERT_TRUE(db != NULL);
+
+    registerBriefGames(db);
+    for (int i = 0; i < PlatFilterMatchCount; i++) {
+        char nameBuf[PlatNameBufLen];
+        snprintf(nameBuf, sizeof(nameBuf), "PlatGame_%d", i);
+        registerGameWithPlatform(db, nameBuf, "linux-x86_64");
+    }
+
+    GameInfoEntry *entries = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(
+        listGameBrief(db, 0, 0, "linux-x86_64", &entries, &count), DB_SUCC);
+    ASSERT_TRUE(count == (size_t)PlatFilterMatchCount);
+    ASSERT_TRUE(entries != NULL);
+    ASSERT_STR_EQ(entries[0].name, "PlatGame_0");
+    ASSERT_STR_EQ(entries[PlatIdxB].name, "PlatGame_1");
+    ASSERT_STR_EQ(entries[PlatFilterMatchCount - 1].name, "PlatGame_2");
+
+    free(entries);
+    dbClose(db);
+}
+
+static void testListGameBriefPlatformNoMatch(void) {
+    DB *db = openGameDB();
+    ASSERT_TRUE(db != NULL);
+
+    registerBriefGames(db);
+    registerGameWithPlatform(db, "LinuxOnly", "linux-x86_64");
+
+    GameInfoEntry *entries = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(listGameBrief(db, 0, 0, "windows", &entries, &count),
+                  DB_SUCC);
+    ASSERT_TRUE(count == PlatFilterNoMatchCount);
+    ASSERT_TRUE(entries == NULL);
+
+    dbClose(db);
+}
+
+static void testListGameBriefPlatformEmptyFilter(void) {
+    DB *db = openGameDB();
+    ASSERT_TRUE(db != NULL);
+
+    registerBriefGames(db);
+    registerGameWithPlatform(db, "WithPlat", "linux-x86_64");
+
+    GameInfoEntry *entries = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(listGameBrief(db, 0, 0, "", &entries, &count), DB_SUCC);
+    ASSERT_TRUE(count == BriefGameCount + 1);
+    ASSERT_TRUE(entries != NULL);
+
+    free(entries);
+    dbClose(db);
+}
+
+static void testListGameBriefNullPlatform(void) {
+    DB *db = openGameDB();
+    ASSERT_TRUE(db != NULL);
+
+    registerBriefGames(db);
+
+    GameInfoEntry *entries = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(listGameBrief(db, 0, 0, NULL, &entries, &count), DB_FAIL);
+
+    dbClose(db);
+}
+
+static void testListGameBriefGameWithNoPlatforms(void) {
+    DB *db = openGameDB();
+    ASSERT_TRUE(db != NULL);
+
+    registerBriefGames(db);
+
+    GameInfoEntry *entries = NULL;
+    size_t count = 0;
+    ASSERT_INT_EQ(
+        listGameBrief(db, 0, 0, "linux-x86_64", &entries, &count), DB_SUCC);
+    ASSERT_TRUE(count == PlatFilterNoMatchCount);
+    ASSERT_TRUE(entries == NULL);
+
+    dbClose(db);
+}
+
+static void testListGameBriefPlatformRangeFilter(void) {
+    DB *db = openGameDB();
+    ASSERT_TRUE(db != NULL);
+
+    registerBriefGames(db);
+    for (int i = 0; i < PlatFilterMatchCount; i++) {
+        char nameBuf[PlatNameBufLen];
+        snprintf(nameBuf, sizeof(nameBuf), "RangePlat_%d", i);
+        registerGameWithPlatform(db, nameBuf, "linux-x86_64");
+    }
+
+    GameInfoEntry *entries = NULL;
+    size_t count = 0;
+    uint32_t startId = (uint32_t)(BriefGameCount + 1);
+    uint32_t endId = (uint32_t)(BriefGameCount + 2);
+    ASSERT_INT_EQ(
+        listGameBrief(db, startId, endId, "linux-x86_64", &entries, &count),
+        DB_SUCC);
+    ASSERT_TRUE(count == 2u);
+    ASSERT_TRUE(entries != NULL);
+    ASSERT_STR_EQ(entries[0].name, "RangePlat_0");
+    ASSERT_STR_EQ(entries[1].name, "RangePlat_1");
+
+    free(entries);
     dbClose(db);
 }
 
@@ -324,6 +639,21 @@ int main(void) {
     RUN_TEST(testListRegisteredGames);
     RUN_TEST(testGameInfoFreeNullSafe);
     RUN_TEST(testUpdateGameVersion);
+    RUN_TEST(testListGameBriefEmpty);
+    RUN_TEST(testListGameBriefAll);
+    RUN_TEST(testListGameBriefRange);
+    RUN_TEST(testListGameBriefInvertedRange);
+    RUN_TEST(testListGameBriefDescription);
+    RUN_TEST(testGetGameByIdDescription);
+    RUN_TEST(testRegisterGameNullDescription);
+    RUN_TEST(testListGameBriefSingleElement);
+    RUN_TEST(testListGameBriefBoundaryRange);
+    RUN_TEST(testListGameBriefPlatformFilterMatch);
+    RUN_TEST(testListGameBriefPlatformNoMatch);
+    RUN_TEST(testListGameBriefPlatformEmptyFilter);
+    RUN_TEST(testListGameBriefNullPlatform);
+    RUN_TEST(testListGameBriefGameWithNoPlatforms);
+    RUN_TEST(testListGameBriefPlatformRangeFilter);
 
     TEST_REPORT();
     return 0;

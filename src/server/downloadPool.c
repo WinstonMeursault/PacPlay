@@ -20,7 +20,8 @@ enum {
     DeriveFail = -1,
     PoolSuccess = 0,
     PoolFail = -1,
-    DataAuthRespStatusOk = 0
+    DataAuthRespStatusOk = 0,
+    MaxChunkRetries = 3
 };
 
 static int deriveDataChannelKey(const uint8_t mainKey[AES_GCM_KEY_LEN],
@@ -297,42 +298,73 @@ static void *workerThreadFunc(void *arg) {
 
         bool transferOk = true;
         for (uint32_t i = task.resumeChunkIndex; i < task.totalChunks; i++) {
-            uint64_t offset = (uint64_t)i * GAME_CHUNK_SIZE;
-            uint32_t chunkSize = GAME_CHUNK_SIZE;
-            if (offset + chunkSize > plainLen) {
-                chunkSize = (uint32_t)(plainLen - offset);
-            }
+            bool chunkOk = false;
+            for (uint32_t retry = 0; retry <= MaxChunkRetries; retry++) {
+                uint64_t offset = (uint64_t)i * GAME_CHUNK_SIZE;
+                uint32_t chunkSize = GAME_CHUNK_SIZE;
+                if (offset + chunkSize > plainLen) {
+                    chunkSize = (uint32_t)(plainLen - offset);
+                }
 
-            size_t pktLen = sizeof(GameChunkPayload) + chunkSize;
-            uint8_t *pktBuf = malloc(pktLen);
-            if (pktBuf == NULL) {
-                transferOk = false;
-                break;
-            }
+                size_t pktLen = sizeof(GameChunkPayload) + chunkSize;
+                uint8_t *pktBuf = malloc(pktLen);
+                if (pktBuf == NULL) {
+                    transferOk = false;
+                    goto cleanup;
+                }
 
-            GameChunkPayload *chunkHdr = (GameChunkPayload *)pktBuf;
-            chunkHdr->chunkIndex = i;
-            chunkHdr->chunkSize = chunkSize;
-            memcpy(pktBuf + sizeof(GameChunkPayload), plainData + offset,
-                   chunkSize);
+                GameChunkPayload *chunkHdr = (GameChunkPayload *)pktBuf;
+                chunkHdr->chunkIndex = i;
+                chunkHdr->chunkSize = chunkSize;
+                memcpy(pktBuf + sizeof(GameChunkPayload), plainData + offset,
+                       chunkSize);
 
-            if (packetSendEncryptedData(task.dataFd, MsgGameChunk, &seqID,
-                                        task.dataKey, pktBuf,
-                                        pktLen) != PROTOCOL_SUCC) {
+                if (packetSendEncryptedData(task.dataFd, MsgGameChunk, &seqID,
+                                            task.dataKey, pktBuf,
+                                            pktLen) != PROTOCOL_SUCC) {
+                    free(pktBuf);
+                    transferOk = false;
+                    goto cleanup;
+                }
                 free(pktBuf);
-                transferOk = false;
-                break;
-            }
-            free(pktBuf);
 
-            Packet ackPkt;
-            memset(&ackPkt, 0, sizeof(ackPkt));
-            if (packetRecvEncrypted(task.dataFd, &ackPkt, task.dataKey) !=
-                PROTOCOL_SUCC) {
+                Packet ackPkt;
+                memset(&ackPkt, 0, sizeof(ackPkt));
+                if (packetRecvEncrypted(task.dataFd, &ackPkt, task.dataKey) !=
+                    PROTOCOL_SUCC) {
+                    transferOk = false;
+                    goto cleanup;
+                }
+
+                if (ackPkt.header.messageType != (uint32_t)MsgGameChunkAck ||
+                    ackPkt.header.payloadLength < sizeof(GameChunkAckPayload)) {
+                    LOG_WARN("Worker: invalid ACK for game %u chunk %u "
+                             "(retry %u)",
+                             task.gameId, i, retry);
+                    packetClear(&ackPkt);
+                    continue;
+                }
+
+                const GameChunkAckPayload *ack =
+                    (const GameChunkAckPayload *)ackPkt.payload;
+                if (ack->chunkIndex != i) {
+                    LOG_WARN("Worker: ACK mismatch for game %u "
+                             "(expected %u, got %u, retry %u)",
+                             task.gameId, i, ack->chunkIndex, retry);
+                    packetClear(&ackPkt);
+                    continue;
+                }
+
+                packetClear(&ackPkt);
+                chunkOk = true;
+                break;
+            }
+            if (!chunkOk) {
+                LOG_ERROR("Worker: chunk %u exhausted retries for game %u", i,
+                          task.gameId);
                 transferOk = false;
                 break;
             }
-            packetClear(&ackPkt);
         }
 
         if (transferOk) {
@@ -340,6 +372,7 @@ static void *workerThreadFunc(void *arg) {
                                     task.dataKey, NULL, 0);
         }
 
+    cleanup:
         free(plainData);
         close(task.dataFd);
         OPENSSL_cleanse(task.dataKey, AES_GCM_KEY_LEN);

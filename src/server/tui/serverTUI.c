@@ -400,6 +400,7 @@ void tuiServerEntry(Server *serverInstance, bool firstRun,
     server = serverInstance;
     isFirstRun = firstRun;
     masterKeyDisplay = masterKeyHex;
+    logSetQuiet(true);
     tuiAppInit();
     tuiServerInit();
     if (isFirstRun) {

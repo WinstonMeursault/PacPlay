@@ -164,6 +164,8 @@ int serverHandleTOTPSetup(Server *s, ClientSession *cs) {
     memcpy(resp.secret, b32, Base32EncodedLen);
     int ret =
         serverSendEncryptedPacket(cs, MsgTOTPSetupResp, &resp, sizeof(resp));
+    cs->currentUser.totpSecret = strdup(b32);
+    cs->state = SessionTOTPVerify;
     OPENSSL_cleanse(b32, Base32EncodedLen);
     free(b32);
     return ret;
@@ -178,6 +180,13 @@ int serverHandleTOTPVerify(Server *s, ClientSession *cs, const Packet *pkt) {
     int code = (int)vp->code;
     if (vp->code < MinCode || vp->code > MaxCode)
         return SERVER_FAIL;
+    if (cs->currentUser.totpSecret == NULL) {
+        LoginResponsePayload fr;
+        memset(&fr, 0, sizeof(fr));
+        serverSendEncryptedPacket(cs, MsgLoginResp, &fr, sizeof(fr));
+        cs->state = SessionLogin;
+        return SERVER_SUCC;
+    }
     int vr = verifyTOTPCode(cs->currentUser.totpSecret, &code);
     OPENSSL_cleanse(cs->currentUser.totpSecret,
                     strlen(cs->currentUser.totpSecret));

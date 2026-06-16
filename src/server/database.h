@@ -136,6 +136,10 @@ typedef struct DB {
     sqlite3_stmt *stmtGameSelectByName;
     sqlite3_stmt *stmtGameList;
     sqlite3_stmt *stmtGameGetKey;
+    sqlite3_stmt *stmtGameListAll;
+    sqlite3_stmt *stmtGameListRange;
+    sqlite3_stmt *stmtGameListPlatformAll;
+    sqlite3_stmt *stmtGameListPlatformRange;
     sqlite3_stmt *stmtPlatformInsert;
     sqlite3_stmt *stmtPlatformSelect;
     sqlite3_stmt *stmtPlatformList;
@@ -492,14 +496,16 @@ int updateGameVersion(DB *database, uint32_t gameId, const char *version);
 int getGameById(DB *database, uint32_t gameId, GameInfo *out);
 int getGameByName(DB *database, const char *name, GameInfo *out);
 int listRegisteredGames(DB *database, GameInfo **out, size_t *count);
+int listGameBrief(DB *database, uint32_t rangeStart, uint32_t rangeEnd,
+                  const char *platform, GameInfoEntry **out, size_t *count);
 int getGameEncKey(DB *database, uint32_t gameId, uint8_t **outEnvelope,
                   size_t *outLen);
 int registerGamePlatform(DB *database, uint32_t gameId,
                          const GamePlatformInfo *platform);
 int getGamePlatform(DB *database, uint32_t gameId, const char *platform,
                     GamePlatformInfo *out);
-int listGamePlatforms(DB *database, uint32_t gameId,
-                      GamePlatformInfo **out, size_t *count);
+int listGamePlatforms(DB *database, uint32_t gameId, GamePlatformInfo **out,
+                      size_t *count);
 void gameInfoFree(GameInfo *info);
 void gameInfoArrayFree(GameInfo *arr, size_t count);
 void gamePlatformInfoFree(GamePlatformInfo *info);

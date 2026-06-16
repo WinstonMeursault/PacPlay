@@ -51,6 +51,7 @@ _Static_assert(LOGIN_NICKNAME_LEN == NICKNAME_MAX_LEN,
 /* ────────────────────────── forward declarations ────────────────────────── */
 
 struct DB;
+struct DownloadPool;
 
 /* ───────────────────────── constants (continued) ────────────────────────── */
 
@@ -66,6 +67,8 @@ struct DB;
 
 /** @brief Length of per-database encryption keys (256-bit). */
 #define DB_ENC_KEY_LEN 32
+
+#define DATA_PORT_OFFSET 1 /**< Data channel port = control port + offset. */
 
 /* ────────────────────────────── return codes ────────────────────────────── */
 
@@ -105,6 +108,7 @@ typedef struct {
     uint32_t gameId;
     char *name;
     char *version;
+    char *description;
     GamePlatformInfo *platforms;
     size_t platformCount;
     time_t createdAt;
@@ -151,7 +155,10 @@ typedef struct {
     struct DB *chatDB;
     struct DB *roomDB;
     struct DB *gameDB;
-    struct DB *serverDB;     /**< Server key-value store. */
+    struct DB *serverDB;               /**< Server key-value store. */
+    struct DownloadPool *downloadPool; /**< Game download thread pool (NULL if
+                                         not started). */
+    uint16_t port;                     /**< Control channel port number. */
     bool freshKeysGenerated; /**< True if keys were freshly generated (first
                                 run). */
     volatile bool running;   /**< Event loop continues while true. */

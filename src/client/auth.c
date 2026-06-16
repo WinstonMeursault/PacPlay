@@ -119,6 +119,7 @@ int clientLogin(Client *client, char *username, char *password, char *response,
 
     client->uid = resp->uid;
     *totpEnabled = resp->totpEnabled;
+    strcpy(client->nickname, resp->nickname);
 
     strcpy(outNickname, resp->nickname);
 
@@ -255,10 +256,7 @@ int clientTOTPSetup(Client *client, char *response, char *secret, char **uri,
 
     strcpy(secret, payload->secret);
 
-    // display secret and otpauth:// URI
-    char username[TOTP_SETUP_SECRET_LEN];
-    snprintf(username, sizeof(username), "user%u", client->uid);
-    *uriSucc = generateOTPAuthURI(payload->secret, username, uri, uriLen) ==
+    *uriSucc = generateOTPAuthURI(payload->secret, client->nickname, uri, uriLen) ==
                CRYPTO_SUCC;
 
     packetClear(&resp);
@@ -306,7 +304,11 @@ int clientTOTPVerify(Client *client, char *code, char *response, char *outNickna
     }
 
     strcpy(outNickname, resp->nickname);
+    strcpy(client->nickname, resp->nickname);
 
     packetClear(&respPkt);
+    if (client->db != NULL) {
+        return CLIENT_SUCC;
+    }
     return clientLoadDB(client, response);
 }

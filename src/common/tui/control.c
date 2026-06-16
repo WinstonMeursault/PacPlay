@@ -1332,7 +1332,101 @@ void controlListBoxConstruct(ControlListBox *self, int height, int width, int y,
     self->base.commonMsgHandlers.refresh = (void (*)(Control *))refresh;
 }
 
+static void listBoxDrawEntryLine(WINDOW *win, int y, int x, int width,
+                                    const char *text, int lineIdx) {
+    const char *start = text;
+    int i;
+    for (i = 0; i < lineIdx; i++) {
+        const char *nl = strchr(start, '\n');
+        if (nl == NULL) {
+            return;
+        }
+        start = nl + 1;
+    }
+    {
+        const char *nl = strchr(start, '\n');
+        int len = (nl != NULL) ? (int)(nl - start) : (int)strlen(start);
+        mvwprintw(win, y, x, "%-*.*s", width, len, start);
+    }
+}
+
+static size_t listBoxCountVisibleEntries(ControlListBox *self) {
+    enum { BorderLines = 2 };
+    size_t visible = 0;
+    size_t cumulativeHeight = 0;
+    size_t i;
+    for (i = self->viewBegin; i < self->entryCnt; i++) {
+        ControlListBoxEntry entry;
+        ContainerRes res =
+            arrayControlListBoxEntryGet(&self->list, i, &entry);
+        if (res != ContainerSucc) {
+            continue;
+        }
+        if (cumulativeHeight + entry.height >
+            (size_t)(self->base.height - BorderLines)) {
+            break;
+        }
+        cumulativeHeight += entry.height;
+        visible++;
+    }
+    enum { MinVisible = 1 };
+    return visible > 0 ? visible : MinVisible;
+}
+
+static void listBoxAdjustViewBegin(ControlListBox *self) {
+    enum { BorderLines = 2 };
+    size_t i;
+
+    if (self->curLine < self->viewBegin) {
+        self->viewBegin = self->curLine;
+        return;
+    }
+
+    {
+        size_t cumH = 0;
+        size_t lastVisible = self->viewBegin;
+        for (i = self->viewBegin; i < self->entryCnt; i++) {
+            ControlListBoxEntry e;
+            ContainerRes res =
+                arrayControlListBoxEntryGet(&self->list, i, &e);
+            if (res != ContainerSucc) {
+                continue;
+            }
+            if (cumH + e.height >
+                (size_t)(self->base.height - BorderLines)) {
+                break;
+            }
+            cumH += e.height;
+            lastVisible = i;
+        }
+        if (self->curLine > lastVisible) {
+            cumH = 0;
+            for (i = self->curLine; i > 0; i--) {
+                ControlListBoxEntry e;
+                ContainerRes res =
+                    arrayControlListBoxEntryGet(&self->list, i, &e);
+                if (res != ContainerSucc) {
+                    continue;
+                }
+                if (cumH + e.height >
+                    (size_t)(self->base.height - BorderLines)) {
+                    self->viewBegin = i + 1;
+                    return;
+                }
+                cumH += e.height;
+            }
+            self->viewBegin = 0;
+        }
+    }
+}
+
 void controlListBoxDraw(ControlListBox *self) {
+    enum { BorderLines = 2, ContentStartX = 1, ContentStartY = 1 };
+    int visibleHeight;
+    int innerWidth;
+    int curY;
+    size_t i;
+
     werase(self->base.windowHandler);
 
     if (self->base.focused) {
@@ -1346,19 +1440,42 @@ void controlListBoxDraw(ControlListBox *self) {
         box(self->base.windowHandler, 0, 0);
     }
 
-    for (size_t i = self->viewBegin;
-         i < (size_t)self->base.height - 2 + self->viewBegin &&
-         i < self->entryCnt;
-         ++i) {
-        ControlListBoxEntry cur;
-        ContainerRes res = arrayControlListBoxEntryGet(&self->list, i, &cur);
+    visibleHeight = self->base.height - BorderLines;
+    innerWidth = self->base.width - BorderLines;
+    curY = ContentStartY;
+
+    for (i = self->viewBegin; i < self->entryCnt && curY <= visibleHeight;
+         i++) {
+        ControlListBoxEntry entry;
+        ContainerRes res =
+            arrayControlListBoxEntryGet(&self->list, i, &entry);
+        int entryHeight;
+        int linesToShow;
+        int line;
+
+        if (res != ContainerSucc) {
+            continue;
+        }
+
+        entryHeight = (int)entry.height;
+        linesToShow = entryHeight;
+        if (curY + entryHeight - 1 > visibleHeight) {
+            linesToShow = visibleHeight - curY + 1;
+        }
+        if (linesToShow <= 0) {
+            break;
+        }
+
         if (i == self->curLine) {
             wattron(self->base.windowHandler, A_REVERSE);
         }
-        if (res == ContainerSucc) {
-            mvwprintw(self->base.windowHandler, i - self->viewBegin + 1, 1,
-                      "%-*s", self->base.width - 2, cur.disp);
+
+        for (line = 0; line < linesToShow; line++) {
+            listBoxDrawEntryLine(self->base.windowHandler, curY, ContentStartX,
+                                 innerWidth, entry.disp, line);
+            curY++;
         }
+
         if (i == self->curLine) {
             wattroff(self->base.windowHandler, A_REVERSE);
         }
@@ -1368,10 +1485,22 @@ void controlListBoxDraw(ControlListBox *self) {
 }
 
 void controlListBoxAppend(ControlListBox *self, const char *disp, size_t id) {
+    enum { DefaultHeight = 1 };
     char *cur = malloc(strlen(disp) + 1);
     strcpy(cur, disp);
     arrayControlListBoxEntryPushBack(
-        &self->list, (ControlListBoxEntry){.disp = cur, .id = id});
+        &self->list,
+        (ControlListBoxEntry){.disp = cur, .id = id, .height = DefaultHeight});
+    ++self->entryCnt;
+}
+
+void controlListBoxAppendMulti(ControlListBox *self, const char *disp,
+                               size_t id, uint8_t height) {
+    char *cur = malloc(strlen(disp) + 1);
+    strcpy(cur, disp);
+    arrayControlListBoxEntryPushBack(
+        &self->list,
+        (ControlListBoxEntry){.disp = cur, .id = id, .height = height});
     ++self->entryCnt;
 }
 
@@ -1416,11 +1545,27 @@ static void controlListBoxMsgHandler(ControlListBox *self, TuiMsg msg) {
                 self->curLine = 0;
             }
             break;
-        case KEY_PPAGE:
+        case KEY_PPAGE: {
+            size_t visible = listBoxCountVisibleEntries(self);
+            if (self->curLine > visible) {
+                self->curLine -= visible;
+            } else {
+                self->curLine = 0;
+            }
+            break;
+        }
         case KEY_HOME:
             self->curLine = 0;
             break;
-        case KEY_NPAGE:
+        case KEY_NPAGE: {
+            size_t visible = listBoxCountVisibleEntries(self);
+            if (self->curLine + visible < self->entryCnt) {
+                self->curLine += visible;
+            } else if (self->entryCnt > 0) {
+                self->curLine = self->entryCnt - 1;
+            }
+            break;
+        }
         case KEY_END:
             if (self->entryCnt > 0) {
                 self->curLine = self->entryCnt - 1;
@@ -1444,17 +1589,26 @@ static void controlListBoxMsgHandler(ControlListBox *self, TuiMsg msg) {
     case MsgMouse:
         if ((msg.arg2.input & BUTTON1_CLICKED) != 0) {
             int x = msg.mouseX, y = msg.mouseY;
+            size_t cumulativeY = 0;
+            size_t i;
             wmouse_trafo(self->base.windowHandler, &y, &x, false);
-            self->curLine = y - 1 + self->viewBegin;
+            for (i = self->viewBegin; i < self->entryCnt; i++) {
+                ControlListBoxEntry entry;
+                ContainerRes res =
+                    arrayControlListBoxEntryGet(&self->list, i, &entry);
+                if (res != ContainerSucc) {
+                    continue;
+                }
+                cumulativeY += entry.height;
+                if ((size_t)(y - 1) < cumulativeY) {
+                    self->curLine = i;
+                    break;
+                }
+            }
         }
         break;
     default:
         break;
     }
-    if (self->curLine < self->viewBegin) {
-        self->viewBegin = self->curLine;
-    }
-    if (self->viewBegin + self->base.height - 3 < self->curLine) {
-        self->viewBegin = self->curLine - (self->base.height - 3);
-    }
+    listBoxAdjustViewBegin(self);
 }

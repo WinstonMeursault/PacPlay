@@ -1,6 +1,6 @@
 /**
  * @file mainPage.c
- * @brief
+ * @brief Client TUI home page and game page.
  *
  * @date 2026-06-13
  * @copyright GPLv3 License
@@ -25,8 +25,10 @@
 #include "mainPage.h"
 #include "client/connection.h"
 #include "client/database.h"
+#include "client/gameDownload.h"
 #include "client/gameLoad.h"
 #include "clientTUI.h"
+#include <stdlib.h>
 #include <string.h>
 #include "client/room.h"
 #include "clientTUI.h"
@@ -37,12 +39,46 @@
 #define TUI_HOME_STATUSGRID_WIDTH 40
 #define TUI_HOME_OPERGRID_WIDTH TUI_HOME_STATUSGRID_WIDTH
 
+#if defined(__linux__)
+#define CLIENT_DEFAULT_PLATFORM "linux-x86_64"
+#elif defined(_WIN32) || defined(_WIN64)
+#define CLIENT_DEFAULT_PLATFORM "win-x64"
+#elif defined(__APPLE__)
+#define CLIENT_DEFAULT_PLATFORM "macos-arm64"
+#else
+#define CLIENT_DEFAULT_PLATFORM "unknown"
+#endif
+
 struct {
     GameRecord **record;
     size_t cnt;
 } gameList;
 
 bool onlyChat = false;
+
+static DownloadManager *downloadMgr = NULL;
+static GameInfoEntry *serverGameEntries = NULL;
+static size_t serverGameCount = 0;
+static bool downloadWasActive = false;
+
+enum {
+    DescMaxLines = 3,
+    EntryFormatBufLen = 2048
+};
+
+static void formatServerGameEntry(const GameInfoEntry *entry, int availWidth,
+                                   char *out, size_t outSize) {
+    const char *desc = entry->description;
+    size_t descLen = strlen(desc);
+    int descMaxChars = availWidth * DescMaxLines;
+    bool truncated = (descLen > (size_t)descMaxChars);
+
+    if (truncated) {
+        snprintf(out, outSize, "%s\n%.*s...", entry->name, descMaxChars, desc);
+    } else {
+        snprintf(out, outSize, "%s\n%s", entry->name, desc);
+    }
+}
 
 // Home page
 ControlPage homePage;
@@ -109,6 +145,22 @@ static void updateUserData(char *nickname, char *username) {
     }
 }
 
+static void freeGameListRecords(void) {
+    if (gameList.record != NULL) {
+        for (size_t i = 0; i < gameList.cnt; ++i) {
+            free(gameList.record[i]->gameName);
+            free(gameList.record[i]->gamePath);
+            free(gameList.record[i]->gameVersion);
+            free(gameList.record[i]->platform);
+            free(gameList.record[i]->fileHash);
+            free(gameList.record[i]);
+        }
+        free(gameList.record);
+        gameList.record = NULL;
+        gameList.cnt = 0;
+    }
+}
+
 static void fetchGames() {
     listGames(client, &gameList.record, &gameList.cnt);
     for (size_t i = 0; i < gameList.cnt; ++i) {
@@ -121,6 +173,15 @@ void homePageInitUpdate(char *nickname, char *username) {
     updateUserData(nickname, username);
     fetchGames();
     switchTag(GameTag);
+    if (downloadMgr == NULL) {
+        downloadManagerInit(&downloadMgr, client);
+    }
+    if (serverGameEntries != NULL) {
+        clientFreeGameList(serverGameEntries);
+        serverGameEntries = NULL;
+    }
+    serverGameCount = 0;
+    downloadWasActive = false;
 }
 
 static void homePageGridResize(ControlGrid *self) {
@@ -171,6 +232,14 @@ static void homeStatusGridResize(ControlGrid *self) {
 static void homeStatusExitOnClick(ControlButton *self) {
     (void)self;
     tuiAppStop();
+    if (downloadMgr != NULL) {
+        downloadManagerDestroy(downloadMgr);
+        downloadMgr = NULL;
+    }
+    if (serverGameEntries != NULL) {
+        clientFreeGameList(serverGameEntries);
+        serverGameEntries = NULL;
+    }
     clientDisconnect(client);
 }
 
@@ -196,6 +265,76 @@ static void homeOperGridUpdate(ControlGrid *self) {
     (void)self;
     ControlListBoxEntry selected;
     if (arrayControlListBoxEntryGet(&homeGameList.list, homeGameList.curLine,
+                                    &selected) == ContainerSucc) {
+        GameRecord *cur = NULL;
+        for (size_t i = 0; i < gameList.cnt; ++i) {
+            if (gameList.record[i]->gameId == selected.id) {
+                cur = gameList.record[i];
+            }
+        }
+        if (cur != NULL) {
+            strcpy(homeOperGameName.text, cur->gameName);
+            strcpy(homeOperGamePath.text, cur->gamePath);
+
+            uint64_t time = cur->playTime;
+            if (time < 60) {
+                sprintf(homeOperGameTime.text, "Play time: %lds", time);
+            } else if (time % 60 == 0) {
+                sprintf(homeOperGameTime.text, "Play time: %ldm", time / 60);
+            } else {
+                sprintf(homeOperGameTime.text, "Play time: %ldm%lds", time / 60,
+                        time % 60);
+            }
+        }
+    }
+
+    if (downloadMgr != NULL) {
+        DownloadProgress progress[MAX_CLIENT_DOWNLOADS];
+        size_t count = 0;
+        if (downloadManagerGetProgress(downloadMgr, progress, &count) ==
+            CLIENT_SUCC) {
+            if (count > 0) {
+                downloadWasActive = true;
+                DownloadProgress *dl = &progress[0];
+                switch (dl->status) {
+                case DlPending:
+                    sprintf(homeOperDownloadStatus.text, "Download: pending...");
+                    break;
+                case DlDownloading:
+                    sprintf(homeOperDownloadStatus.text,
+                            "Download: %u/%u chunks", dl->receivedChunks,
+                            dl->totalChunks);
+                    break;
+                case DlVerifying:
+                    sprintf(homeOperDownloadStatus.text,
+                            "Download: verifying...");
+                    break;
+                case DlDone:
+                    sprintf(homeOperDownloadStatus.text, "Download: complete!");
+                    break;
+                case DlFailed:
+                    sprintf(homeOperDownloadStatus.text, "Download: failed");
+                    break;
+                case DlCancelled:
+                    sprintf(homeOperDownloadStatus.text, "Download: cancelled");
+                    break;
+                }
+            } else if (downloadWasActive) {
+                downloadWasActive = false;
+                sprintf(homeOperDownloadStatus.text,
+                        "Download: complete, refreshing...");
+                freeGameListRecords();
+                controlListBoxClear(&homeGameList);
+                fetchGames();
+            }
+        }
+    }
+}
+
+static void homeOperPlayOnClick(ControlButton *self) {
+    (void)self;
+    ControlListBoxEntry selected;
+    if (arrayControlListBoxEntryGet(&homeGameList.list, homeGameList.curLine,
                                     &selected) != ContainerSucc) {
         return;
     }
@@ -205,27 +344,12 @@ static void homeOperGridUpdate(ControlGrid *self) {
             cur = gameList.record[i];
         }
     }
-    if (cur != NULL) {
-        strcpy(homeOperGameName.text, cur->gameName);
-        strcpy(homeOperGamePath.text, cur->gamePath);
-
-        uint64_t time = cur->playTime;
-        if (time < 60) {
-            sprintf(homeOperGameTime.text, "Play time: %lds", time);
-        } else if (time % 60 == 0) {
-            sprintf(homeOperGameTime.text, "Play time: %ldm", time / 60);
-        } else {
-            sprintf(homeOperGameTime.text, "Play time: %ldm%lds", time / 60,
-                    time % 60);
-        }
+    if (cur == NULL) {
+        return;
     }
-}
-
-static void homeOperPlayOnClick(ControlButton *self) {
-    (void)self;
     switchTag(GameTag);
     tuiAppChangePage(&gamePage);
-    controlGameViewRun(&gameView, "123");
+    controlGameViewRun(&gameView, cur->gamePath);
 }
 
 static void gameGridDraw(ControlGrid *self) {
@@ -283,17 +407,76 @@ static void backBtnOnClick(ControlButton *self) {
 
 static void homeOperDownloadOnClick(ControlButton *self) {
     (void)self;
-    strcpy(homeOperDownloadStatus.text, "Download: not yet implemented");
+    ControlListBoxEntry selected;
+    if (arrayControlListBoxEntryGet(&homeOperServerGames.list,
+                                    homeOperServerGames.curLine,
+                                    &selected) != ContainerSucc) {
+        strcpy(homeOperDownloadStatus.text, "Download: no game selected");
+        return;
+    }
+
+    if (downloadMgr == NULL) {
+        downloadManagerInit(&downloadMgr, client);
+        if (downloadMgr == NULL) {
+            strcpy(homeOperDownloadStatus.text,
+                   "Download: failed to init manager");
+            return;
+        }
+    }
+
+    const char *platform = CLIENT_DEFAULT_PLATFORM;
+    downloadWasActive = true;
+    int ret = downloadManagerStartDownload(downloadMgr, (uint32_t)selected.id,
+                                           platform);
+    if (ret != CLIENT_SUCC) {
+        downloadWasActive = false;
+        sprintf(homeOperDownloadStatus.text,
+                "Download: failed to start (game %u)", (uint32_t)selected.id);
+    } else {
+        sprintf(homeOperDownloadStatus.text, "Download: starting game %u...",
+                (uint32_t)selected.id);
+    }
 }
 
 static void homeOperRefreshOnClick(ControlButton *self) {
     (void)self;
-    strcpy(homeOperDownloadStatus.text, "Refresh: not yet implemented");
+    if (serverGameEntries != NULL) {
+        clientFreeGameList(serverGameEntries);
+        serverGameEntries = NULL;
+    }
+    serverGameCount = 0;
+
+    int ret = clientRequestGameList(client, 0, 0, CLIENT_DEFAULT_PLATFORM,
+                                    &serverGameEntries, &serverGameCount);
+    if (ret != CLIENT_SUCC || serverGameCount == 0) {
+        strcpy(homeOperDownloadStatus.text, "Refresh: no games available");
+        return;
+    }
+
+    controlListBoxClear(&homeOperServerGames);
+    int entryWidth = homeOperServerGames.base.width - 2;
+    for (size_t i = 0; i < serverGameCount; i++) {
+        char entryBuf[EntryFormatBufLen];
+        formatServerGameEntry(&serverGameEntries[i], entryWidth, entryBuf,
+                              sizeof(entryBuf));
+        controlListBoxAppendMulti(&homeOperServerGames, entryBuf,
+                                  serverGameEntries[i].gameId, 2);
+    }
+    sprintf(homeOperDownloadStatus.text, "Loaded %zu games", serverGameCount);
 }
 
 static void homeOperRemoveOnClick(ControlButton *self) {
     (void)self;
-    // TODO: implement game removal
+    ControlListBoxEntry selected;
+    if (arrayControlListBoxEntryGet(&homeGameList.list, homeGameList.curLine,
+                                    &selected) != ContainerSucc) {
+        return;
+    }
+    deleteGame(client, (uint32_t)selected.id);
+    freeGameListRecords();
+    controlListBoxClear(&homeGameList);
+    fetchGames();
+    strcpy(homeOperDownloadStatus.text, "Game removed");
 }
 
 void tuiClientMainPageInit() {
@@ -396,7 +579,7 @@ void tuiClientMainPageInit() {
                            NULL, NULL, NULL);
     controlGameViewConstruct(&gameView, 3, 3, TUI_BTN_HEIGHT + 1, 1);
     controlGridConstruct(&chatGrid, 0, 0, TUI_BTN_HEIGHT + 1, 1, LayoutNone, 0,
-                         0, NULL, NULL, NULL, NULL, NULL);
+                          0, NULL, NULL, NULL, NULL, NULL);
     controlListBoxConstruct(&chatRoomList, 20, 20, 0, 0, NULL, NULL, NULL,
                             NULL);
     controlButtonConstruct(&chatEnterRoomBtn, TUI_BTN_HEIGHT, TUI_BTN_WIDTH, 0,

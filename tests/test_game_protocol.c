@@ -32,10 +32,7 @@ enum {
     GameDownloadRespHashOffset = 51
 };
 
-enum {
-    ExpectedGameChunkBaseSize = 8,
-    ExpectedDataAuthPayloadSize = 32
-};
+enum { ExpectedGameChunkBaseSize = 8, ExpectedDataAuthPayloadSize = 32 };
 
 enum {
     ExpectedGameMetadataSize = 189,
@@ -48,10 +45,23 @@ enum {
 };
 
 enum {
-    TestSeqID = 42,
-    FillByte = 0xAB,
-    RoundtripDataLen = 512
+    ExpectedGameListReqSize = 24,
+    GameListReqRangeStartOffset = 0,
+    GameListReqRangeEndOffset = 4,
+    GameListReqPlatformOffset = 8
 };
+
+enum {
+    ExpectedGameInfoEntrySize = 1140,
+    GameInfoEntryGameIdOffset = 0,
+    GameInfoEntryNameOffset = 4,
+    GameInfoEntryVersionOffset = 68,
+    GameInfoEntryDescriptionOffset = 100,
+    GameInfoEntryCreatedAtOffset = 1124,
+    GameInfoEntryUpdatedAtOffset = 1132
+};
+
+enum { TestSeqID = 42, FillByte = 0xAB, RoundtripDataLen = 512 };
 
 static void testGameListEntryLayout(void) {
     ASSERT_UINT_EQ(sizeof(GameListEntry), (size_t)ExpectedGameListEntrySize);
@@ -213,6 +223,42 @@ static void testPacketSendEncryptedDataRoundtrip(void) {
     packetClear(&restored);
 }
 
+static void testGameListReqLayout(void) {
+    ASSERT_UINT_EQ(sizeof(GameListReqPayload), (size_t)ExpectedGameListReqSize);
+    ASSERT_UINT_EQ(offsetof(GameListReqPayload, rangeStart),
+                   (size_t)GameListReqRangeStartOffset);
+    ASSERT_UINT_EQ(offsetof(GameListReqPayload, rangeEnd),
+                   (size_t)GameListReqRangeEndOffset);
+    ASSERT_UINT_EQ(offsetof(GameListReqPayload, platform),
+                   (size_t)GameListReqPlatformOffset);
+}
+
+static void testGameInfoEntryLayout(void) {
+    ASSERT_UINT_EQ(sizeof(GameInfoEntry), (size_t)ExpectedGameInfoEntrySize);
+    ASSERT_UINT_EQ(offsetof(GameInfoEntry, gameId),
+                   (size_t)GameInfoEntryGameIdOffset);
+    ASSERT_UINT_EQ(offsetof(GameInfoEntry, name),
+                   (size_t)GameInfoEntryNameOffset);
+    ASSERT_UINT_EQ(offsetof(GameInfoEntry, version),
+                   (size_t)GameInfoEntryVersionOffset);
+    ASSERT_UINT_EQ(offsetof(GameInfoEntry, description),
+                   (size_t)GameInfoEntryDescriptionOffset);
+    ASSERT_UINT_EQ(offsetof(GameInfoEntry, createdAt),
+                   (size_t)GameInfoEntryCreatedAtOffset);
+    ASSERT_UINT_EQ(offsetof(GameInfoEntry, updatedAt),
+                   (size_t)GameInfoEntryUpdatedAtOffset);
+}
+
+static void testGameDescLenConstant(void) {
+    ASSERT_UINT_EQ(GAME_DESC_LEN, 1024u);
+}
+
+static void testGameInfoEntryFitsInDataPayload(void) {
+    ASSERT_TRUE(sizeof(GameInfoEntry) <= DATA_MAX_PAYLOAD_LEN);
+    size_t maxEntries = DATA_MAX_PAYLOAD_LEN / sizeof(GameInfoEntry);
+    ASSERT_TRUE(maxEntries >= 1);
+}
+
 static void testGameDownloadRespZeroFileSize(void) {
     GameDownloadRespPayload resp;
     memset(&resp, 0, sizeof(resp));
@@ -239,6 +285,10 @@ int main(void) {
     RUN_TEST(testPacketInitDataTooLarge);
     RUN_TEST(testPacketInitDataNullPayload);
     RUN_TEST(testPacketSendEncryptedDataRoundtrip);
+    RUN_TEST(testGameListReqLayout);
+    RUN_TEST(testGameInfoEntryLayout);
+    RUN_TEST(testGameDescLenConstant);
+    RUN_TEST(testGameInfoEntryFitsInDataPayload);
     RUN_TEST(testGameDownloadRespZeroFileSize);
     RUN_TEST(testGameChunkPayloadMaxChunkSize);
 

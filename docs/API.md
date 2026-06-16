@@ -289,9 +289,15 @@ typedef enum {
     MsgRoomListReq, MsgRoomListResp,              // 房间管理
     MsgCreateRoom, MsgCreateRoomResp,
     MsgJoinRoom, MsgJoinRoomResp,
-    MsgChat,                                       // 聊天
+    MsgChat, MsgQuitRoom,                         // 聊天、退出房间
     MsgLogout, MsgHeartbeat,                      // 会话生命周期
-    MsgGameStart, MsgGameStop                      // 游戏（预留）
+    MsgGameListReq, MsgGameListResp,              // 游戏目录浏览
+    MsgGameDownloadReq, MsgGameDownloadResp,      // 下载握手
+    MsgGameDownloadCancel,                        // 取消下载
+    MsgDataAuth, MsgDataAuthResp,                 // 数据通道认证
+    MsgGameMetadata,                              // 游戏元数据
+    MsgGameChunk, MsgGameChunkAck,                // 分块传输
+    MsgGameDownloadDone                           // 传输完成
 } MessageType;
 ```
 
@@ -966,12 +972,13 @@ struct ControlListBox {
 
 ```c
 typedef struct {
-    char *disp;     // 显示文本（堆分配）
-    size_t id;      // 条目标识（可用于关联业务 ID）
+    char *disp;         // 显示文本（堆分配）。多行条目可内含 \n 分隔符
+    size_t id;          // 条目标识（可用于关联业务 ID）
+    uint8_t height;     // 条目占用行数（1 = 单行，2 = 双行）。控制 draw/nav/mouse 坐标计算
 } ControlListBoxEntry;
 ```
 
-可滚动的单列选择列表。通过 `controlListBoxAppend()` 动态添加条目， `KEY_UP` / `KEY_DOWN` 切换选中行，当前选中行以反色高亮。 `list` 通过 `ARRAY_DEFINE(ControlListBoxEntry)` 实例化。
+可滚动的列表选择框。通过 `controlListBoxAppend()` 添加单行条目，通过 `controlListBoxAppendMulti()` 添加变高条目（如游戏名+描述的双行展示）。 `KEY_UP` / `KEY_DOWN` 切换选中行，当前选中行以反色高亮（多行条目时高亮覆盖所有行）。鼠标点击和 PageUp/PageDown 均按累积条目高度计算。 `list` 通过 `ARRAY_DEFINE(ControlListBoxEntry)` 实例化。
 
 #### 1.7.4 应用生命周期 API
 
@@ -1035,7 +1042,9 @@ typedef struct {
 | 函数                                                            | 说明                                                                                                   |
 | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `void controlScrollTextBoxAppend(ControlScrollTextBox *self, const char *text)` | 向滚动文本框追加文本。超过 `maxLines` 时裁剪最旧行。追加后自动滚动至底部 |
-| `void controlListBoxAppend(ControlListBox *self, const char *disp, size_t id)` | 向列表框追加一条条目。 `disp` 通过内部 `strdup` 复制， `id` 用于关联业务标识 |
+| `void controlListBoxAppend(ControlListBox *self, const char *disp, size_t id)` | 向列表框追加一条单行条目。 `disp` 通过内部 `strdup` 复制， `id` 用于关联业务标识。 `height` 设为 1 |
+| `void controlListBoxAppendMulti(ControlListBox *self, const char *disp, size_t id, uint8_t height)` | 向列表框追加一条变高条目。 `height=1` 等价于 `controlListBoxAppend`；`height=2` 用于双行展示（ `disp` 内含 `\n` 分隔两行） |
+| `void controlListBoxClear(ControlListBox *self)` | 清空列表框所有条目（释放 `disp` 字符串） |
 | `bool controlSelectionHandleMouse(Control *self, TuiMsg msg)` | 处理鼠标点击选择逻辑。检查点击坐标是否落入控件区域，若命中则将该控件设为选中状态并返回 `true` |
 
 #### 1.7.8 架构与消息流
@@ -1884,65 +1893,141 @@ if (serverLogFetch(LogLevelWarn, &lines, &count) == 0) {
 
 ### 2.9 Server GameDB 游戏元数据模块
 
-**接口**： `src/server/database.h` （GameDB 部分）
+**接口**： `src/server/database.h` （GameDB 部分）、 `src/server/gameControl.h`
 
-**实现**： `src/server/database/gameDb.c`
+**实现**： `src/server/database/gameDb.c` 、 `src/server/gameControl.c`
 
-提供游戏元数据的持久化注册表，用于管理平台上可用游戏的元信息（名称、版本、校验哈希、可执行路径）。数据库通过 SQLCipher 加密，密钥为 `Server.gameDbEncKey` 。
+提供游戏元数据的持久化注册表与管理员控制功能。采用双表设计（ `games` + `game_platforms` ），支持多平台二进制文件管理、AES-256-GCM 静态加密、DEK 信封密钥封装及 SHA-256 完整性校验。数据库通过 SQLCipher 加密，密钥为 `Server.gameDbEncKey` 。
 
 #### 2.9.1 数据库 Schema
 
 **GameDB**（ `db/game.db` ）
 
 ```sql
-CREATE TABLE IF NOT EXISTS gameList (
-    gameId INTEGER PRIMARY KEY,
-    name TEXT UNIQUE NOT NULL,
-    version TEXT NOT NULL,
-    hash TEXT NOT NULL,
-    path TEXT NOT NULL,
-    createdAt INTEGER NOT NULL,
-    updatedAt INTEGER NOT NULL
+CREATE TABLE IF NOT EXISTS games (
+    gameId      INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL UNIQUE,
+    version     TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    encKey      BLOB NOT NULL,        -- AES-256-GCM envelope (DEK-wrapped game key)
+    createdAt   INTEGER NOT NULL,
+    updatedAt   INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS game_platforms (
+    gameId   INTEGER NOT NULL,
+    platform TEXT NOT NULL,            -- e.g. "linux-x86_64", "win-x64"
+    fileName TEXT NOT NULL,
+    hash     TEXT NOT NULL,            -- SHA-256 hex of the CLEARTEXT binary
+    fileSize INTEGER NOT NULL,         -- ENCRYPTED file size on disk
+    PRIMARY KEY (gameId, platform),
+    FOREIGN KEY (gameId) REFERENCES games(gameId) ON DELETE CASCADE
 );
 ```
 
-`gameId` 为外部分配的唯一标识符。 `name` 建有 `UNIQUE` 约束，同一游戏名不可重复注册。 `createdAt` 和 `updatedAt` 为 UNIX 时间戳（秒），由数据库操作函数自动设置。
+**文件系统布局**： `./gameLib/<gameId>/<platform>/<fileName>`
 
-#### 2.9.2 公开 API
+#### 2.9.2 类型定义
 
-| 函数                                                                               | 说明                                                  | 失败原因                          | 内存释放                        |
-| ---------------------------------------------------------------------------------- | ----------------------------------------------------- | --------------------------------- | ------------------------------- |
-| `int registerGame(DB *database, GameInfo *game)` | 注册新游戏，自动设置 `createdAt` 和 `updatedAt` | `gameId` 或 `name` 重复、DB 错误 | —                              |
-| `int unregisterGame(DB *database, uint32_t gameId)` | 移除游戏记录                                          | 不存在时返回 `DB_FAIL` | —                              |
-| `int updateGameVersion(DB *database, uint32_t gameId, const char *version, const char *hash)` | 更新版本与哈希，同时刷新 `updatedAt` | 不存在时返回 `DB_FAIL` | —                              |
-| `int getGameById(DB *database, uint32_t gameId, GameInfo *out)` | 按 ID 查询单条记录                                    | 不存在时返回 `DB_FAIL` | `gameInfoFree(out)` |
-| `int getGameByName(DB *database, const char *name, GameInfo *out)` | 按名称查询单条记录                                    | 不存在时返回 `DB_FAIL` | `gameInfoFree(out)` |
-| `int listRegisteredGames(DB *database, GameInfo **out, size_t *count)` | 列出所有已注册游戏（按 `gameId` 升序）              | DB 错误                           | `gameInfoArrayFree(out, count)` |
-| `void gameInfoFree(GameInfo *info)` | 释放单个 `GameInfo` 的内部字符串字段                | —                                | 不释放结构体本身                |
-| `void gameInfoArrayFree(GameInfo *arr, size_t count)` | 释放 `listRegisteredGames()` 返回的数组             | NULL 安全                         | —                              |
+**GameInfo**
 
-**`registerGame(DB *database, GameInfo *game)`**
+```c
+typedef struct {
+    uint32_t gameId;
+    char *name;             // 堆分配，调用者通过 gameInfoFree() 释放
+    char *version;          // 堆分配
+    char *description;      // 堆分配，缺失时为空字符串 ""
+    GamePlatformInfo *platforms;  // 平台数组
+    size_t platformCount;
+    time_t createdAt;
+    time_t updatedAt;
+} GameInfo;
+```
 
-* **前置条件**：`database` 为已打开的 GameDB 句柄，`game->gameId > 0`，`game->name` 非 NULL
-* **行为**：插入记录，`createdAt` 和 `updatedAt` 均设为当前 UNIX 时间戳
-* **唯一性约束**：`gameId` 或 `name` 已存在时返回 `DB_FAIL`
+**GamePlatformInfo**
 
-**`updateGameVersion(DB *database, uint32_t gameId, const char *version, const char *hash)`**
+```c
+typedef struct {
+    char platform[PLATFORM_NAME_LEN];   // 固定大小 (16 字节)
+    char *fileName;                     // 堆分配，调用者释放
+    char *hash;                         // 堆分配，SHA-256 十六进制字符串
+    uint64_t fileSize;                  // 加密后磁盘文件大小
+} GamePlatformInfo;
+```
 
-* **行为**：更新 `version`、`hash` 和 `updatedAt` 三个字段
-* **前置条件**：`version` 和 `hash` 不可为 NULL
+**GameInfoEntry**（网络传输格式，紧凑打包）
 
-**`getGameById(DB *database, uint32_t gameId, GameInfo *out)` / `getGameByName(...)`**
+```c
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t gameId;
+    char name[GAME_NAME_LEN];           // 64 字节，固定
+    char version[GAME_VERSION_LEN];     // 32 字节，固定
+    char description[GAME_DESC_LEN];    // 1024 字节，固定
+    int64_t createdAt;
+    int64_t updatedAt;
+} GameInfoEntry;                        // 总计 1140 字节
+#pragma pack(pop)
+```
 
-* **行为**：查询成功时，`out` 的所有字符串字段（`name`、`version`、`hash`、`path`）通过 `strdup` 分配
-* **释放**：调用者须通过 `gameInfoFree(out)` 释放内部字段
+#### 2.9.3 游戏元数据操作
 
-**`listRegisteredGames(DB *database, GameInfo **out, size_t *count)`**
+| 函数 | 说明 | 失败原因 | 释放 |
+|------|------|----------|------|
+| `registerGame(db, game, encKeyEnvelope, envelopeLen)` | 注册新游戏，自动设置 createdAt/updatedAt，回填 gameId | 名称重复、DB 错误 | — |
+| `unregisterGame(db, gameId)` | 移除游戏（CASCADE 删除关联平台） | 不存在时返回 DB_FAIL | — |
+| `updateGameVersion(db, gameId, version)` | 更新版本号与 updatedAt | 不存在时返回 DB_FAIL | — |
+| `getGameById(db, gameId, out)` | 按 ID 查询完整记录（含平台列表） | 不存在时返回 DB_FAIL | `gameInfoFree(out)` |
+| `getGameByName(db, name, out)` | 按名称查询完整记录（含平台列表） | 不存在时返回 DB_FAIL | `gameInfoFree(out)` |
+| `listRegisteredGames(db, out, count)` | 列出全部已注册游戏（按 gameId 升序） | DB 错误 | `gameInfoArrayFree(out, count)` |
+| `listGameBrief(db, rangeStart, rangeEnd, platform, out, count)` | 范围查询 + 可选平台过滤，返回 GameInfoEntry[] | NULL 参数、DB 错误 | `free(*out)` |
+| `getGameEncKey(db, gameId, outEnvelope, outLen)` | 获取加密密钥信封（BLOB） | 不存在时返回 DB_FAIL | `free(*outEnvelope)` |
 
-* **空库**：返回 `DB_SUCC` 且 `*out = NULL`、`*count = 0`
-* **释放**：调用者须通过 `gameInfoArrayFree(*out, *count)` 释放结果数组
+#### 2.9.4 平台操作
 
-#### 2.9.3 释放示例
+| 函数 | 说明 |
+|------|------|
+| `registerGamePlatform(db, gameId, platform)` | INSERT OR REPLACE 平台记录 |
+| `getGamePlatform(db, gameId, platform, out)` | 按 gameId + platform 查询 |
+| `listGamePlatforms(db, gameId, out, count)` | 列出某游戏所有平台 |
+
+#### 2.9.5 函数详细说明
+
+**`int listGameBrief(DB *database, uint32_t rangeStart, uint32_t rangeEnd, const char *platform, GameInfoEntry **out, size_t *count)`**
+
+* **前置条件**：`platform != NULL`
+* **行为**：`platform[0] == '\0'` 时不过滤平台（查询 `games` 表）；非空时 JOIN `game_platforms` 表，`WHERE p.platform = ?`。`rangeStart=rangeEnd=0` 返回全部匹配条目
+* **返回**：`DB_SUCC` 成功（空结果时 `*out=NULL, *count=0`），`DB_FAIL` 失败
+* **释放**：调用者须 `free(*out)`
+
+#### 2.9.6 管理员控制命令（服务端 TUI）
+
+在服务端 TUI 的 Command 面板中输入：
+
+| 命令 | 功能 | 实现 |
+|------|------|------|
+| `gamelist` | 列出所有已注册游戏 | `gameCtlList()` |
+| `gameupdate <path.tar.gz>` | 上架/更新游戏包（解析 metadata.json，验证 SHA-256，静态加密存储） | `gameCtlUpdate()` |
+| `gamedelete <id>` | 删除游戏及关联平台 | `gameCtlDelete()` |
+| `gamescan` | 扫描 `./gameLib/` 目录校验完整性 | `gameCtlScan()` |
+| `gameinfo <id>` | 查看游戏详细元数据（含所有平台） | `gameCtlInfo()` |
+
+#### 2.9.7 静态加密模型
+
+```
+每游戏独立 AES-256-GCM Key (gameKey)
+        │
+        │  AES-256-GCM encrypt with DEK
+        ▼
+encKey BLOB = nonce(12) ‖ ciphertext(32) ‖ tag(16) = 60 bytes
+   (stored in games.encKey)
+```
+
+* **注册时**：`cryptoRandomBytes` 生成 32 字节 `gameKey` → DEK 信封加密 → 存库
+* **分发时**：从库读取 envelope → DEK 解密 → 用 `gameKey` 在内存中解密文件 → 分块发送
+* **磁盘文件**：始终以加密形态存储（`nonce(12) ‖ ciphertext ‖ tag(16)`），绝不落地为明文
+
+#### 2.9.8 释放示例
 
 ```c
 // 查询单条
@@ -1952,33 +2037,16 @@ if (getGameById(gameDB, 42, &info) == DB_SUCC) {
     gameInfoFree(&info);
 }
 
-// 列出全部
-GameInfo *list = NULL;
+// 平台过滤列表查询
+GameInfoEntry *entries = NULL;
 size_t count = 0;
-if (listRegisteredGames(gameDB, &list, &count) == DB_SUCC) {
-    for (size_t i = 0; i < count; i++) {
-        printf("[%u] %s\n", list[i].gameId, list[i].name);
-    }
-    gameInfoArrayFree(list, count);
+if (listGameBrief(gameDB, 0, 0, "linux-x86_64", &entries, &count) == DB_SUCC) {
+    for (size_t i = 0; i < count; i++)
+        printf("[%u] %s\n", entries[i].gameId, entries[i].name);
+    free(entries);
 }
 ```
 
-#### 2.9.4 GameDB 操作与密钥关系
-
-```mermaid
-flowchart LR
-    subgraph 启动时
-        MK["MK 解密"] --> GameKey["GameDBKey"]
-        GameKey -->|sqlite3_key| GDB["game.db SQLCipher"]
-    end
-    subgraph 运行时
-        REG["registerGame"] --> GDB
-        UPD["updateGameVersion"] --> GDB
-        QRY["getGameById / getGameByName"] --> GDB
-        LST["listRegisteredGames"] --> GDB
-        DEL["unregisterGame"] --> GDB
-    end
-```
 
 ---
 
@@ -3398,55 +3466,298 @@ tuiAppStop()           → 退出循环 → endwin
 
 ---
 
-## 第六部分：游戏分发 API
+## 第七部分：游戏分发 API
 
-### 6.1 概述
+### 7.1 架构概述
 
-游戏分发模块实现服务器对客户端的完整游戏包体传输，包括：管理员通过 TUI `gamectl` 命令上架/管理游戏、客户端浏览并按平台下载游戏文件、分片加密传输与断点续传。
+游戏分发采用**双通道模型**：控制通道复用现有 AES-256-GCM 加密 TCP 连接处理列表查询与下载握手；数据通道为独立 TCP 连接（`port+1`），通过 HKDF-SHA256 从主通道密钥派生独立密钥，承载分块文件传输。
 
-详细设计见 `docs/superpowers/specs/2026-06-16-game-distribution-design.md`。
+```
+控制通道 (port P)                    数据通道 (port P+1)
+┌──────────────────────┐            ┌──────────────────────────┐
+│ MsgGameListReq/Resp  │            │ MsgDataAuth (明文)        │
+│ MsgGameDownloadReq   │── token ─►│ MsgDataAuthResp           │
+│ MsgGameDownloadCancel│            │ MsgGameMetadata           │
+│ MsgGameDownloadResp  │◄─ token ──│ MsgGameChunk × N (加密)   │
+└──────────────────────┘            │ MsgGameChunkAck × N       │
+                                    │ MsgGameDownloadDone       │
+                                    └──────────────────────────┘
+```
 
-### 6.2 新增协议消息（控制通道）
+### 7.2 协议常量
 
-| 值 | 名称 | 方向 | 说明 |
-|---|------|------|------|
-| 23 | `MsgGameListReq` | C→S | 请求游戏列表（载荷：PlatformInfoPayload） |
-| 24 | `MsgGameListResp` | S→C | 游戏列表响应（载荷：GameListEntry[]） |
-| 25 | `MsgGameDownloadReq` | C→S | 请求下载（载荷：GameDownloadReqPayload） |
-| 26 | `MsgGameDownloadResp` | S→C | 下载响应（载荷：GameDownloadRespPayload） |
-| 27 | `MsgGameDownloadCancel` | C→S | 取消下载 |
+| 宏 | 值 | 说明 |
+|----|-----|------|
+| `GAME_NAME_LEN` | 64 | 游戏名称最大长度（含 NUL） |
+| `GAME_VERSION_LEN` | 32 | 版本号最大长度 |
+| `GAME_DESC_LEN` | 1024 | 游戏描述最大长度（1 KB） |
+| `GAME_HASH_LEN` | 65 | SHA-256 十六进制字符串长度（含 NUL） |
+| `PLATFORM_NAME_LEN` | 16 | 平台标识符最大长度 |
+| `GAME_CHUNK_SIZE` | 65536 | 每个分块的字节数（64 KiB） |
+| `DATA_AUTH_TOKEN_LEN` | 32 | 数据通道认证令牌长度 |
+| `TOKEN_EXPIRE_SECS` | 30 | 令牌有效期（秒） |
+| `DATA_PORT_OFFSET` | 1 | 数据端口偏移（控制端口 + 1） |
+| `DATA_MAX_PAYLOAD_LEN` | 65536 | 数据通道最大载荷 |
 
-### 6.3 新增协议消息（数据通道）
+### 7.3 载荷结构体
 
-| 值 | 名称 | 方向 | 说明 |
-|---|------|------|------|
-| 28 | `MsgDataAuth` | C→S | 数据通道认证（载荷：DataAuthPayload） |
-| 29 | `MsgDataAuthResp` | S→C | 认证结果（status byte） |
-| 30 | `MsgGameMetadata` | S→C | 游戏元数据（载荷：GameMetadataPayload） |
-| 31 | `MsgGameChunk` | S→C | 文件分片（载荷：GameChunkPayload） |
-| 32 | `MsgGameChunkAck` | C→S | 分片确认（载荷：GameChunkAckPayload） |
-| 33 | `MsgGameDownloadDone` | S→C | 传输完成 |
+#### 7.3.1 控制通道载荷
 
-### 6.4 服务器 gamectl 命令
+**GameListReqPayload**（24 字节，紧凑打包）
 
-在服务器 TUI 的 Command 面板中输入：
+```c
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t rangeStart;               // 起始 gameId（0 = 无下限）
+    uint32_t rangeEnd;                 // 终止 gameId（0 = 无上限）
+    char platform[PLATFORM_NAME_LEN];  // 平台过滤："" = 全平台，非空 = JOIN 过滤
+} GameListReqPayload;
+#pragma pack(pop)
+```
 
-| 命令 | 功能 |
+**语义**：
+| rangeStart | rangeEnd | platform | 结果 |
+|------------|----------|----------|------|
+| 0 | 0 | `""` | 全部游戏 |
+| 0 | 0 | `"linux-x86_64"` | 该平台的全部游戏 |
+| M | N (M≤N) | `""` | gameId ∈ [M, N] |
+| M | N (M>N, 均非零) | 任意 | 空列表 |
+
+**GameInfoEntry**（1140 字节，紧凑打包）
+
+```c
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t gameId;
+    char name[GAME_NAME_LEN];
+    char version[GAME_VERSION_LEN];
+    char description[GAME_DESC_LEN];
+    int64_t createdAt;
+    int64_t updatedAt;
+} GameInfoEntry;
+#pragma pack(pop)
+```
+
+`MsgGameListResp` 载荷为连续的 `GameInfoEntry[]` 数组。条目数 = `payloadLength / 1140`。
+
+**GameDownloadReqPayload**（24 字节）
+
+```c
+typedef struct {
+    uint32_t gameId;
+    uint32_t resumeChunkIndex;          // 0 = 新下载，>0 = 续传起始块
+    char platform[PLATFORM_NAME_LEN];
+} GameDownloadReqPayload;
+```
+
+**GameDownloadRespPayload**（116 字节）
+
+```c
+typedef struct {
+    uint8_t status;                     // 0 = OK, 1 = 错误
+    uint32_t gameId;
+    uint64_t fileSize;                  // 明文文件大小（字节）
+    uint32_t totalChunks;
+    uint16_t dataPort;                  // 数据通道端口号
+    uint8_t token[DATA_AUTH_TOKEN_LEN]; // 一次性认证令牌
+    char hash[GAME_HASH_LEN];           // SHA-256 hex
+} GameDownloadRespPayload;
+```
+
+#### 7.3.2 数据通道载荷
+
+| 载荷 | 大小 | 说明 |
+|------|------|------|
+| `DataAuthPayload` | 32 字节 | 仅含 `token[32]`，明文发送 |
+| `GameMetadataPayload` | 189 字节 | gameId + fileSize + name + version + hash + platform |
+| `GameChunkPayload` | 8 + FAM | chunkIndex + chunkSize + `data[]` |
+| `GameChunkAckPayload` | 4 字节 | chunkIndex（确认已接收的块号） |
+
+### 7.4 服务端分发模块
+
+**接口**： `src/server/gameDistribution.h`
+
+**实现**： `src/server/gameDistribution.c`
+
+| 函数 | 说明 |
 |------|------|
-| `gamectl list` | 列出所有已注册游戏 |
-| `gamectl update <path.tar.gz>` | 上架/更新游戏包 |
-| `gamectl delete <gameId>` | 删除游戏 |
-| `gamectl scan` | 扫描 gameLib 目录校验完整性 |
-| `gamectl info <gameId>` | 查看游戏详细信息 |
+| `serverHandleGameList(Server *s, ClientSession *cs, const Packet *pkt)` | 解析 GameListReqPayload → `listGameBrief()` → `packetSendEncryptedData(MsgGameListResp, entries[])` |
+| `serverHandleGameDownload(Server *s, ClientSession *cs, const Packet *pkt)` | 解析 GameDownloadReqPayload → 验证游戏/平台/文件 → 解密 gameEncKey → 注册 token 到 DownloadPool → 发送 GameDownloadRespPayload |
+| `serverHandleGameDownloadCancel(Server *s, ClientSession *cs, const Packet *pkt)` | 按 token 调用 `downloadPoolCancelByToken()`，不发送响应 |
 
-### 6.5 游戏包体格式
+**路由位置**： `server.c:processClient()` 在 `SessionRoom` 状态中，`MsgGameListReq` / `MsgGameDownloadReq` / `MsgGameDownloadCancel` 被分派到以上 handler。
 
-开发者提交 `.tar.gz` 压缩包，内含 `metadata.json` + 各平台包体。详见设计文档 §2。
+### 7.5 DownloadPool 下载线程池
 
-### 6.6 下载线程池
+**接口**： `src/server/downloadPool.h`
 
-服务器使用固定大小线程池（默认 4 worker）处理并发下载请求。每个下载通过独立 TCP 数据通道传输，密钥由主通道 AES 密钥通过 HKDF 派生。详见设计文档 §4.3。
+**实现**： `src/server/downloadPool.c`
 
-### 6.7 客户端下载管理器接口
+固定大小工作线程池，管理数据通道的生命周期。
 
-声明于 `src/client/gameLoad.h`。提供 `downloadManagerInit`、`downloadManagerStartDownload`、`downloadManagerCancel`、`downloadManagerGetProgress`、`downloadManagerDestroy` 等接口，由其他开发者实现实际 TUI 集成。
+| 函数 | 说明 |
+|------|------|
+| `downloadPoolInit(pool, dataPort, workerCount)` | 绑定 TCP 监听端口，启动 1 accept 线程 + N worker 线程 |
+| `downloadPoolRegisterToken(pool, token)` | 注册一次性认证令牌（30 秒过期，32 槽） |
+| `downloadPoolCancelByToken(pool, token)` | 按令牌取消待处理或进行中的传输 |
+| `downloadPoolDestroy(pool)` | 停止所有线程，释放所有资源 |
+
+**Worker 线程行为**：
+1. 发送 `MsgDataAuthResp(status=0)`
+2. 发送 `MsgGameMetadata`
+3. 从磁盘读取加密文件 → 内存中 AES-256-GCM 解密 → 分块发送 `MsgGameChunk`
+4. 每块等待 `MsgGameChunkAck`，最多重试 3 次（ACK 类型错误或 chunkIndex 不匹配时重传当前块）
+5. 发送 `MsgGameDownloadDone`
+
+**续传支持**：Worker 从 `resumeChunkIndex` 开始发送。
+
+### 7.6 客户端下载管理器
+
+**接口**： `src/client/gameDownload.h`
+
+**实现**： `src/client/gameDownload.c`
+
+#### 7.6.1 游戏列表查询
+
+```c
+int clientRequestGameList(Client *client, uint32_t rangeStart,
+                          uint32_t rangeEnd, const char *platform,
+                          GameInfoEntry **outList, size_t *outCount);
+```
+
+* **前置条件**：`client != NULL`，`platform != NULL`，`outList/outCount != NULL`
+* **行为**：发送 `MsgGameListReq` → 接收 `MsgGameListResp` → 分配 `GameInfoEntry[]` 数组
+* **释放**：`clientFreeGameList(*outList)`（等价于 `free()`）
+
+#### 7.6.2 DownloadManager 生命周期
+
+```c
+int  downloadManagerInit(DownloadManager **mgr, Client *client);
+void downloadManagerDestroy(DownloadManager *mgr);
+```
+
+* `downloadManagerInit`：分配 DownloadManager，初始化互斥锁，创建 `./gameLib/` 目录。登录成功后调用
+* `downloadManagerDestroy`：取消所有活跃下载 → `pthread_join` 等待线程退出 → 释放资源。退出前调用
+
+#### 7.6.3 下载操作
+
+```c
+int downloadManagerStartDownload(DownloadManager *mgr, uint32_t gameId,
+                                  const char *platform);
+```
+
+1. 查找空闲下载槽（最多 `MAX_CLIENT_DOWNLOADS=4` 并发）
+2. 检查 `./gameLib/<gameId>.downloading.meta` 续传元数据
+3. 发送 `MsgGameDownloadReq` → 接收 `MsgGameDownloadResp`
+4. 创建独立下载线程（`downloadThread`）
+5. 返回 `CLIENT_SUCC`（下载在后台进行）
+
+#### 7.6.4 下载线程流程
+
+```
+1. clientSetup(serverAddr, dataPort)       → 连接数据通道
+2. packetSend(MsgDataAuth, 明文 token)     → 认证
+3. HKDF-SHA256(mainKey, token)             → 派生 dataKey
+4. packetRecvEncrypted(MsgDataAuthResp)    → 校验 status=0
+5. packetRecvEncrypted(MsgGameMetadata)    → 填充游戏元数据
+6. open(./gameLib/<id>.downloading)        → 创建/续写临时文件
+7. for each chunk:
+     recv MsgGameChunk → pwrite() → 更新 .downloading.meta → send MsgGameChunkAck
+8. recv MsgGameDownloadDone
+9. computeFileHash() → 与预期 hash 比对
+10. extractTarGz() → 解压到 ./gameLib/<gameId>/
+11. addGame(clientDB)                      → 注册到本地加密数据库
+12. 删除 .downloading + .downloading.meta + metadata.json
+```
+
+#### 7.6.5 进度查询与取消
+
+```c
+int downloadManagerGetProgress(DownloadManager *mgr, DownloadProgress *out,
+                                size_t *count);
+int downloadManagerCancel(DownloadManager *mgr, uint32_t gameId);
+```
+
+**DownloadProgress** 结构：
+
+```c
+typedef struct {
+    uint32_t gameId;
+    char gameName[GAME_NAME_LEN];
+    char gameVersion[GAME_VERSION_LEN];
+    char platform[PLATFORM_NAME_LEN];
+    uint64_t fileSize;
+    uint32_t totalChunks;
+    uint32_t receivedChunks;
+    DownloadStatus status;   // DlPending / DlDownloading / DlVerifying / DlDone / DlFailed / DlCancelled
+} DownloadProgress;
+```
+
+### 7.7 客户端 TUI 集成
+
+**实现**： `src/client/tui/mainPage.c`
+
+| 按钮 | 行为 |
+|------|------|
+| **Refresh games** | 调用 `clientRequestGameList(client, 0, 0, CLIENT_DEFAULT_PLATFORM, ...)`，仅返回当前平台支持的游戏。条目以双行展示：第一行游戏名，第二行描述（截断 3 行 + `...`）。通过 `controlListBoxAppendMulti(height=2)` 渲染 |
+| **Download selected** | 从服务器游戏列表取选中条目的 gameId，调用 `downloadManagerStartDownload()` |
+| **Play...** | 从本地游戏库取选中条目的 `gamePath`，调用 `controlGameViewRun()` |
+| **Remove selected** | 调用 `deleteGame()` 从本地 ClientDB 删除 |
+| **下载进度** | 每帧在 `homeOperGridUpdate` 中调用 `downloadManagerGetProgress()`，显示 `receivedChunks/totalChunks`。下载完成后自动刷新本地游戏列表 |
+
+**`CLIENT_DEFAULT_PLATFORM`** 通过编译期宏确定：
+
+```c
+#if defined(__linux__)
+#define CLIENT_DEFAULT_PLATFORM "linux-x86_64"
+#elif defined(_WIN32) || defined(_WIN64)
+#define CLIENT_DEFAULT_PLATFORM "win-x64"
+#elif defined(__APPLE__)
+#define CLIENT_DEFAULT_PLATFORM "macos-arm64"
+#else
+#define CLIENT_DEFAULT_PLATFORM "unknown"
+#endif
+```
+
+### 7.8 安全模型
+
+| 层 | 机制 | 说明 |
+|----|------|------|
+| 控制通道 | AES-256-GCM | 复用 session 密钥，AAD 绑定 payloadLength + sequenceID |
+| 数据通道认证 | 32 字节随机令牌 | 一次性使用，30 秒过期 |
+| 数据通道加密 | AES-256-GCM | HKDF-SHA256 派生独立密钥（info=`"PacPlay-DataChannel"`，salt=token） |
+| 文件静态加密 | AES-256-GCM | 每游戏独立密钥，DEK 信封加密存入 GameDB |
+| 完整性校验 | SHA-256 | 客户端下载完成后全文件哈希比对 |
+| 密钥擦除 | OPENSSL_cleanse | dataKey、gameEncKey 使用后立即擦除 |
+
+### 7.9 错误处理
+
+| 场景 | 服务端 | 客户端 |
+|------|--------|--------|
+| 游戏/平台/文件不存在 | GameDownloadResp.status=1 | downloadManagerStartDownload 返回 FAIL |
+| 令牌过期/无效 | 数据通道拒绝连接 | downloadThread → DlFailed |
+| ACK 不匹配 | 重传当前块（最多 3 次） | 正常 ACK |
+| ACK 重试耗尽 | 中止传输，关闭连接 | DlFailed |
+| 哈希不匹配 | — | 删除下载文件 → DlFailed |
+| 网络中断 | worker 清理退出 | DlFailed |
+| slot 耗尽 | — | downloadManagerStartDownload 返回 FAIL |
+
+### 7.10 文件清单
+
+| 文件 | 说明 |
+|------|------|
+| `include/protocol.h` | GameListReqPayload, GameInfoEntry, GameDownloadReqPayload, GameDownloadRespPayload, DataAuthPayload, GameMetadataPayload, GameChunkPayload, GameChunkAckPayload |
+| `include/archive.h` | `extractTarGz()` 公共解压接口 |
+| `include/tui/control.h` | ControlListBoxEntry.height, controlListBoxAppendMulti() |
+| `src/common/tui/control.c` | 多行 ListBox draw/nav/mouse 实现 |
+| `src/common/archive.c` | tar.gz 解压实现（microtar + zlib-ng） |
+| `src/server/database.h` | listGameBrief, registerGamePlatform, getGamePlatform, listGamePlatforms, getGameEncKey |
+| `src/server/database/gameDb.c` | 双表 schema, listGameBrief (JOIN 平台过滤), 密钥信封操作 |
+| `src/server/database/common.c` | GameDB stmt finalize |
+| `src/server/gameDistribution.h/c` | serverHandleGameList / serverHandleGameDownload / serverHandleGameDownloadCancel |
+| `src/server/downloadPool.h/c` | 多线程下载池：accept + worker + token 池 + ACK 重传 |
+| `src/server/gameControl.h/c` | parseMetadataJson, gameCtlUpdate/Delete/List/Scan/Info |
+| `src/server/server.c` | processClient 路由, DownloadPool 生命周期 |
+| `src/client/client.h` | Client.serverAddr / serverPort |
+| `src/client/gameDownload.h/c` | clientRequestGameList, DownloadManager, downloadThread, 续传, tar.gz 提取 |
+| `src/client/tui/mainPage.c` | 游戏列表展示（双行+平台过滤）、下载启动、进度轮询、游戏启动/删除 |

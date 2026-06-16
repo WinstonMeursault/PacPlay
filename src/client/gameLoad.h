@@ -1,6 +1,6 @@
 /**
  * @file gameLoad.h
- * @brief Download manager interface for client-side game acquisition.
+ * @brief Load game from .so
  *
  * @date 2026-06-15
  * @copyright GPLv3 License
@@ -25,53 +25,15 @@
 #ifndef GAMELOAD_H
 #define GAMELOAD_H
 
-#include "client.h"
-#include "protocol.h"
 #include <stddef.h>
 #include <stdint.h>
 
 #define MAX_CLIENT_DOWNLOADS 4
-#define CLIENT_GAME_LIB_DIR "./gameLib"
 #include "vterm.h"
-#include <poll.h>
 
 int clientRunGame(VTerm **vterm, VTermScreen **vscreen, const char *path,
                   int height, int width, pid_t *pid, int *ptyFD);
 
 void clientStopGame(VTerm **vterm, pid_t *pid, int *ptyFD);
-
-typedef enum {
-    DlPending = 0,
-    DlDownloading,
-    DlVerifying,
-    DlDone,
-    DlFailed,
-    DlCancelled
-} DownloadStatus;
-
-typedef struct {
-    uint32_t gameId;
-    char gameName[GAME_NAME_LEN];
-    char gameVersion[GAME_VERSION_LEN];
-    char platform[PLATFORM_NAME_LEN];
-    uint64_t fileSize;
-    uint32_t totalChunks;
-    uint32_t receivedChunks;
-    DownloadStatus status;
-} DownloadProgress;
-
-typedef struct DownloadManager DownloadManager;
-
-int downloadManagerInit(DownloadManager **mgr, Client *client);
-int downloadManagerStartDownload(DownloadManager *mgr, uint32_t gameId,
-                                 const char *platform);
-int downloadManagerCancel(DownloadManager *mgr, uint32_t gameId);
-int downloadManagerGetProgress(DownloadManager *mgr,
-                               DownloadProgress *out, size_t *count);
-void downloadManagerDestroy(DownloadManager *mgr);
-
-int clientRequestGameList(Client *client, const char *platform,
-                          GameListEntry **outList, size_t *outCount);
-void clientFreeGameList(GameListEntry *list);
 
 #endif // GAMELOAD_H

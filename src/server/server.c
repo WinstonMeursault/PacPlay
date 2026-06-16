@@ -29,7 +29,9 @@
 #include "server/chat.h"
 #include "server/communication.h"
 #include "server/database.h"
+#include "server/downloadPool.h"
 #include "server/gameControl.h"
+#include "server/gameDistribution.h"
 #include "server/keyManager.h"
 #include "server/room.h"
 #include "server/tui/serverTUI.h"
@@ -129,6 +131,7 @@ int serverInit(Server *server, uint16_t port) {
     }
 
     server->listenFd = listenFd;
+    server->port = port;
     server->serverDB = serverDB;
 
     bool firstRun = serverIsFirstRun(server);
@@ -163,8 +166,7 @@ int serverLaunch(Server *server) {
     DB *chatDB = dbInit(ChatHistoryDB, server->chatDbEncKey);
     DB *roomDB = dbInit(RoomDB, server->roomDbEncKey);
     DB *gameDB = dbInit(GameDB, server->gameDbEncKey);
-    if (userDB == NULL || chatDB == NULL || roomDB == NULL ||
-        gameDB == NULL) {
+    if (userDB == NULL || chatDB == NULL || roomDB == NULL || gameDB == NULL) {
         LOG_ERROR("serverLaunch: encrypted database initialization failed");
         return SERVER_FAIL;
     }
@@ -177,6 +179,23 @@ int serverLaunch(Server *server) {
     dbSetDekKey(server->userDB, server->dekKey);
 
     platformMkdirp(GAME_LIB_DIR);
+
+    dbSetDekKey(server->gameDB, server->dekKey);
+
+    server->downloadPool = calloc(1, sizeof(DownloadPool));
+    if (server->downloadPool == NULL) {
+        LOG_ERROR("serverLaunch: calloc downloadPool failed");
+        return SERVER_FAIL;
+    }
+    uint16_t dataPort = (uint16_t)(server->port + DATA_PORT_OFFSET);
+    if (downloadPoolInit(server->downloadPool, dataPort,
+                         MAX_DOWNLOAD_WORKERS) != 0) {
+        LOG_ERROR("serverLaunch: downloadPool init failed on port %u",
+                  dataPort);
+        free(server->downloadPool);
+        server->downloadPool = NULL;
+        return SERVER_FAIL;
+    }
 
     server->clientCapacity = SERVER_INITIAL_CAPACITY;
     server->clients = (ClientSession **)calloc((size_t)server->clientCapacity,
@@ -296,6 +315,12 @@ void serverCleanup(Server *server) {
         }
         free((void *)server->activeRooms);
         server->activeRooms = NULL;
+    }
+
+    if (server->downloadPool != NULL) {
+        downloadPoolDestroy(server->downloadPool);
+        free(server->downloadPool);
+        server->downloadPool = NULL;
     }
 
     socketClose(&server->listenFd);
@@ -459,6 +484,12 @@ static int processClient(Server *s, ClientSession *cs) {
         } else if (mt == MsgQuitRoom) {
             serverHandleRoomQuit(s, cs);
             ret = SERVER_SUCC;
+        } else if (mt == MsgGameListReq) {
+            ret = serverHandleGameList(s, cs, &pkt);
+        } else if (mt == MsgGameDownloadReq) {
+            ret = serverHandleGameDownload(s, cs, &pkt);
+        } else if (mt == MsgGameDownloadCancel) {
+            ret = serverHandleGameDownloadCancel(s, cs, &pkt);
         } else if (mt == MsgLogout) {
             ret = handleLogout(s, cs);
         } else if (mt == MsgTOTPSetupReq) {

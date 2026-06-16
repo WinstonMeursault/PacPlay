@@ -70,6 +70,18 @@ enum {
     ScrollTextBoxDefMax = 100
 };
 
+/* ────────────────── ListBox test constants ────────────────────── */
+enum {
+    ListBoxTestHeight = 10,
+    ListBoxTestWidth = 40,
+    ListBoxEntryHeight1 = 1,
+    ListBoxEntryHeight2 = 2,
+    ListBoxThreeEntries = 3,
+    ListBoxEntryId1 = 1,
+    ListBoxEntryId2 = 2,
+    ListBoxEntryId3 = 3
+};
+
 static int gClickCount = 0;
 
 /* ────────────────────────── stub callbacks ──────────────────────────────── */
@@ -1262,6 +1274,123 @@ static void testScrollTextBoxAppendVeryLongLine(void) {
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+   ListBox multi-line tests
+   ════════════════════════════════════════════════════════════════════════ */
+
+static void testListBoxMultiLineConstruct(void) {
+    ControlListBox lb;
+    memset(&lb, 0, sizeof(lb));
+    controlListBoxConstruct(&lb, ListBoxTestHeight, ListBoxTestWidth, 0, 0,
+                            NULL, NULL, NULL, NULL);
+    ASSERT_INT_EQ(lb.entryCnt, 0);
+    ASSERT_INT_EQ(lb.curLine, 0);
+    ASSERT_INT_EQ(lb.viewBegin, 0);
+    controlListBoxClear(&lb);
+    arrayControlListBoxEntryDeinit(&lb.list);
+}
+
+static void testListBoxAppendMultiLine(void) {
+    ControlListBox lb;
+    memset(&lb, 0, sizeof(lb));
+    controlListBoxConstruct(&lb, ListBoxTestHeight, ListBoxTestWidth, 0, 0,
+                            NULL, NULL, NULL, NULL);
+
+    controlListBoxAppendMulti(&lb, "Game One\nDesc one", ListBoxEntryId1,
+                              ListBoxEntryHeight2);
+    ASSERT_INT_EQ(lb.entryCnt, 1);
+
+    {
+        ControlListBoxEntry entry;
+        ContainerRes res =
+            arrayControlListBoxEntryGet(&lb.list, 0, &entry);
+        ASSERT_INT_EQ(res, ContainerSucc);
+        ASSERT_INT_EQ(entry.height, ListBoxEntryHeight2);
+        ASSERT_INT_EQ(entry.id, ListBoxEntryId1);
+        ASSERT_TRUE(strcmp(entry.disp, "Game One\nDesc one") == 0);
+    }
+
+    controlListBoxAppend(&lb, "Game Two", ListBoxEntryId2);
+    ASSERT_INT_EQ(lb.entryCnt, 2);
+
+    {
+        ControlListBoxEntry entry;
+        ContainerRes res =
+            arrayControlListBoxEntryGet(&lb.list, 1, &entry);
+        ASSERT_INT_EQ(res, ContainerSucc);
+        ASSERT_INT_EQ(entry.height, ListBoxEntryHeight1);
+    }
+
+    controlListBoxClear(&lb);
+    arrayControlListBoxEntryDeinit(&lb.list);
+}
+
+static void testListBoxAppendMultiLineInvalidHeight(void) {
+    ControlListBox lb;
+    memset(&lb, 0, sizeof(lb));
+    controlListBoxConstruct(&lb, ListBoxTestHeight, ListBoxTestWidth, 0, 0,
+                            NULL, NULL, NULL, NULL);
+
+    controlListBoxAppendMulti(&lb, "entry", ListBoxEntryId1, 0);
+    ASSERT_INT_EQ(lb.entryCnt, 1);
+    {
+        ControlListBoxEntry entry;
+        ContainerRes res =
+            arrayControlListBoxEntryGet(&lb.list, 0, &entry);
+        ASSERT_INT_EQ(res, ContainerSucc);
+        ASSERT_INT_EQ(entry.height, 0);
+    }
+
+    controlListBoxClear(&lb);
+    arrayControlListBoxEntryDeinit(&lb.list);
+}
+
+static void testListBoxMultiLineNavigation(void) {
+    ControlListBox lb;
+    memset(&lb, 0, sizeof(lb));
+    controlListBoxConstruct(&lb, ListBoxTestHeight, ListBoxTestWidth, 0, 0,
+                            NULL, NULL, NULL, NULL);
+
+    controlListBoxAppendMulti(&lb, "A\ndesc", ListBoxEntryId1,
+                              ListBoxEntryHeight2);
+    controlListBoxAppend(&lb, "B", ListBoxEntryId2);
+    controlListBoxAppendMulti(&lb, "C\ndesc", ListBoxEntryId3,
+                              ListBoxEntryHeight2);
+
+    ASSERT_INT_EQ(lb.curLine, 0);
+
+    {
+        TuiMsg downMsg = {.type = MsgInput, .arg1 = {.input = KEY_DOWN}};
+        lb.base.vtable.msgHandler((Control *)&lb, downMsg);
+        ASSERT_INT_EQ(lb.curLine, 1);
+
+        lb.base.vtable.msgHandler((Control *)&lb, downMsg);
+        ASSERT_INT_EQ(lb.curLine, 2);
+
+        lb.base.vtable.msgHandler((Control *)&lb, downMsg);
+        ASSERT_INT_EQ(lb.curLine, 0);
+    }
+
+    controlListBoxClear(&lb);
+    arrayControlListBoxEntryDeinit(&lb.list);
+}
+
+static void testListBoxMultiLineClear(void) {
+    ControlListBox lb;
+    memset(&lb, 0, sizeof(lb));
+    controlListBoxConstruct(&lb, ListBoxTestHeight, ListBoxTestWidth, 0, 0,
+                            NULL, NULL, NULL, NULL);
+
+    controlListBoxAppendMulti(&lb, "A\nB", ListBoxEntryId1,
+                              ListBoxEntryHeight2);
+    controlListBoxAppend(&lb, "C", ListBoxEntryId2);
+    controlListBoxClear(&lb);
+    /* Verify no crash after clear — disp strings freed, entryCnt unchanged. */
+    (void)lb;
+
+    arrayControlListBoxEntryDeinit(&lb.list);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
    main
    ════════════════════════════════════════════════════════════════════════ */
 
@@ -1356,6 +1485,13 @@ int main(void) {
     RUN_TEST(testButtonMouseClickFiresOnClick);
     RUN_TEST(testButtonMouseDragNoClick);
     RUN_TEST(testTextBoxMouseClickSwitchesFocus);
+
+    /* ListBox multi-line */
+    RUN_TEST(testListBoxMultiLineConstruct);
+    RUN_TEST(testListBoxAppendMultiLine);
+    RUN_TEST(testListBoxAppendMultiLineInvalidHeight);
+    RUN_TEST(testListBoxMultiLineNavigation);
+    RUN_TEST(testListBoxMultiLineClear);
 
     return TEST_REPORT();
 }

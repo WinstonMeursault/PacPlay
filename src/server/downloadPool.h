@@ -40,7 +40,7 @@ typedef struct {
     bool used;
 } PendingToken;
 
-typedef struct {
+typedef struct DownloadPool {
     pthread_t workers[MAX_DOWNLOAD_WORKERS];
     size_t workerCount;
     DownloadTask taskQueue[MAX_QUEUED_TASKS];

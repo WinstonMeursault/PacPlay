@@ -235,6 +235,10 @@ DB *dbInit(DBType dbType, const uint8_t *encKey) {
         dbFinalize(&database->stmtGameSelectById);
         dbFinalize(&database->stmtGameSelectByName);
         dbFinalize(&database->stmtGameList);
+        dbFinalize(&database->stmtGameListAll);
+        dbFinalize(&database->stmtGameListRange);
+        dbFinalize(&database->stmtGameListPlatformAll);
+        dbFinalize(&database->stmtGameListPlatformRange);
         dbFinalize(&database->stmtGameGetKey);
         dbFinalize(&database->stmtPlatformInsert);
         dbFinalize(&database->stmtPlatformSelect);
@@ -275,6 +279,10 @@ void dbClose(DB *database) {
     dbFinalize(&database->stmtGameSelectById);
     dbFinalize(&database->stmtGameSelectByName);
     dbFinalize(&database->stmtGameList);
+    dbFinalize(&database->stmtGameListAll);
+    dbFinalize(&database->stmtGameListRange);
+    dbFinalize(&database->stmtGameListPlatformAll);
+    dbFinalize(&database->stmtGameListPlatformRange);
     dbFinalize(&database->stmtGameGetKey);
     dbFinalize(&database->stmtPlatformInsert);
     dbFinalize(&database->stmtPlatformSelect);

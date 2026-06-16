@@ -37,14 +37,20 @@ struct ClientDB; /* forward — full definition in client/database.h */
 #define CLIENT_SUCC (0)
 #define CLIENT_FAIL (-1)
 
+#define SERVER_ADDR_LEN 64
+
 /* ───────────────────────────────── types ────────────────────────────────── */
 
 typedef struct Client {
     SocketFD fd;
     AESGCMKey aesKey;
     uint32_t uid;
+    char nickname[LOGIN_NICKNAME_LEN];
     uint32_t currentRoomId;
     uint32_t seqID;
+    char serverAddr[SERVER_ADDR_LEN]; /**< Server address for data channel
+                                         connections. */
+    uint16_t serverPort;              /**< Server control port number. */
     uint8_t
         cdbkey[CLIENT_DB_KEY_LEN]; /**< Per-user CDBKey received from server. */
     struct ClientDB *db;           /**< Opaque encrypted client database. */

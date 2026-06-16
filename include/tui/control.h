@@ -37,12 +37,14 @@
 #include "tuimsg.h"
 #include <errno.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
 // typedef char *Str;
 typedef struct {
     char *disp;
     size_t id;
+    uint8_t height;
 } ControlListBoxEntry;
 ARRAY_DEFINE(ControlListBoxEntry);
 
@@ -234,5 +236,7 @@ void controlListBoxDraw(ControlListBox *self);
 void controlListBoxAppend(ControlListBox *self, const char *disp, size_t id);
 
 void controlListBoxClear(ControlListBox *self);
+
+void controlListBoxAppendMulti(ControlListBox *self, const char *disp, size_t id, uint8_t height);
 
 #endif // CONTROL_H

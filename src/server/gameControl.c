@@ -1,9 +1,9 @@
 #include "gameControl.h"
+#include "archive.h"
 #include "cJSON.h"
 #include "crypto.h"
 #include "database.h"
 #include "log.h"
-#include "microtar.h"
 #include "platform.h"
 
 #include <dirent.h>
@@ -13,11 +13,6 @@
 #include <unistd.h>
 
 #include <openssl/evp.h>
-
-#ifndef WITH_GZFILEOP
-#define WITH_GZFILEOP
-#endif
-#include <zlib-ng.h>
 
 enum {
     GzBufSize = 65536,
@@ -36,93 +31,11 @@ enum {
 
 static const char *hexDigits = "0123456789abcdef";
 
-static int extractTarGz(const char *tarGzPath, const char *destDir) {
-    if (tarGzPath == NULL || destDir == NULL) {
-        return GAME_CONTROL_FAIL;
-    }
-
-    gzFile gz = zng_gzopen(tarGzPath, "rb");
-    if (gz == NULL) {
-        return GAME_CONTROL_FAIL;
-    }
-
-    char tarPath[PathBufSize];
-    (void)snprintf(tarPath, sizeof(tarPath), "%s/temp.tar", destDir);
-
-    FILE *tarFile = fopen(tarPath, "wb");
-    if (tarFile == NULL) {
-        zng_gzclose(gz);
-        return GAME_CONTROL_FAIL;
-    }
-
-    uint8_t buf[GzBufSize];
-    int32_t bytesRead;
-    while ((bytesRead = zng_gzread(gz, buf, sizeof(buf))) > 0) {
-        if (fwrite(buf, 1, (size_t)bytesRead, tarFile) != (size_t)bytesRead) {
-            fclose(tarFile);
-            zng_gzclose(gz);
-            remove(tarPath);
-            return GAME_CONTROL_FAIL;
-        }
-    }
-    fclose(tarFile);
-    zng_gzclose(gz);
-
-    mtar_t tar;
-    if (mtar_open(&tar, tarPath, "r") != MTAR_ESUCCESS) {
-        remove(tarPath);
-        return GAME_CONTROL_FAIL;
-    }
-
-    mtar_header_t header;
-    while (mtar_read_header(&tar, &header) == MTAR_ESUCCESS) {
-        if (header.type == MTAR_TDIR) {
-            char dirPath[PathBufSize];
-            (void)snprintf(dirPath, sizeof(dirPath), "%s/%s", destDir,
-                           header.name);
-            platformMkdirp(dirPath);
-        } else if (header.type == MTAR_TREG) {
-            char filePath[PathBufSize];
-            (void)snprintf(filePath, sizeof(filePath), "%s/%s", destDir,
-                           header.name);
-
-            void *data = malloc(header.size);
-            if (data == NULL) {
-                mtar_close(&tar);
-                remove(tarPath);
-                return GAME_CONTROL_FAIL;
-            }
-
-            if (mtar_read_data(&tar, data, header.size) != MTAR_ESUCCESS) {
-                free(data);
-                mtar_close(&tar);
-                remove(tarPath);
-                return GAME_CONTROL_FAIL;
-            }
-
-            FILE *outFile = fopen(filePath, "wb");
-            if (outFile == NULL) {
-                free(data);
-                mtar_close(&tar);
-                remove(tarPath);
-                return GAME_CONTROL_FAIL;
-            }
-            fwrite(data, 1, header.size, outFile);
-            fclose(outFile);
-            free(data);
-        }
-        mtar_next(&tar);
-    }
-
-    mtar_close(&tar);
-    remove(tarPath);
-    return GAME_CONTROL_SUCC;
-}
-
 static int parseMetadata(const char *jsonPath, char **outName,
-                         char **outVersion, cJSON **outPlatforms) {
+                         char **outVersion, char **outDescription,
+                         cJSON **outPlatforms) {
     if (jsonPath == NULL || outName == NULL || outVersion == NULL ||
-        outPlatforms == NULL) {
+        outDescription == NULL || outPlatforms == NULL) {
         return GAME_CONTROL_FAIL;
     }
 
@@ -173,11 +86,16 @@ static int parseMetadata(const char *jsonPath, char **outName,
         return GAME_CONTROL_FAIL;
     }
 
+    cJSON *descItem = cJSON_GetObjectItem(root, "description");
+    char *descStr = cJSON_GetStringValue(descItem);
+
     *outName = strdup(nameStr);
     *outVersion = strdup(versionStr);
-    if (*outName == NULL || *outVersion == NULL) {
+    *outDescription = strdup(descStr != NULL ? descStr : "");
+    if (*outName == NULL || *outVersion == NULL || *outDescription == NULL) {
         free(*outName);
         free(*outVersion);
+        free(*outDescription);
         cJSON_Delete(root);
         return GAME_CONTROL_FAIL;
     }
@@ -229,7 +147,8 @@ static int computeFileSHA256(const char *filePath, char outHex[GAME_HASH_LEN]) {
     EVP_MD_CTX_free(ctx);
 
     for (unsigned int i = 0; i < digestLen; i++) {
-        outHex[i * HexCharCount] = hexDigits[(digest[i] >> NibbleShift) & NibbleMask];
+        outHex[i * HexCharCount] =
+            hexDigits[(digest[i] >> NibbleShift) & NibbleMask];
         outHex[i * HexCharCount + 1] = hexDigits[digest[i] & NibbleMask];
     }
     outHex[Sha256HexLen] = '\0';
@@ -280,7 +199,8 @@ static int encryptFileWithKey(const char *srcPath, const char *dstPath,
         return GAME_CONTROL_FAIL;
     }
 
-    AESGCMBuffer plainBuf = {.data = plainData, .capacity = dataLen, .len = dataLen};
+    AESGCMBuffer plainBuf = {
+        .data = plainData, .capacity = dataLen, .len = dataLen};
 
     AESGCMCipher cipher;
     if (aesGCMBufferInit(&cipher.buffer, dataLen) != CRYPTO_SUCC) {
@@ -323,8 +243,9 @@ static int dekEnvelopeEncrypt(const uint8_t *dekKey, const uint8_t *plainKey,
         return GAME_CONTROL_FAIL;
     }
 
-    AESGCMBuffer plainBuf = {
-        .data = (uint8_t *)(uintptr_t)plainKey, .capacity = KeyLen, .len = KeyLen};
+    AESGCMBuffer plainBuf = {.data = (uint8_t *)(uintptr_t)plainKey,
+                             .capacity = KeyLen,
+                             .len = KeyLen};
 
     AESGCMCipher cipher;
     if (aesGCMBufferInit(&cipher.buffer, KeyLen) != CRYPTO_SUCC) {
@@ -407,8 +328,7 @@ int gameCtlList(Server *s, ControlScrollTextBox *outBox) {
 
     char line[LineBufSize];
     for (size_t i = 0; i < count; i++) {
-        (void)snprintf(line, sizeof(line), "%-4u  %-19s  %s\n",
-                       games[i].gameId,
+        (void)snprintf(line, sizeof(line), "%-4u  %-19s  %s\n", games[i].gameId,
                        games[i].name != NULL ? games[i].name : "(null)",
                        games[i].version != NULL ? games[i].version : "(null)");
         controlScrollTextBoxAppend(outBox, line);
@@ -425,19 +345,19 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
     }
 
     if (access(tarGzPath, R_OK) != 0) {
-        controlScrollTextBoxAppend(outBox,
-                                   "Error: cannot read file\n");
+        controlScrollTextBoxAppend(outBox, "Error: cannot read file\n");
         return GAME_CONTROL_FAIL;
     }
 
     char tmpDir[PathBufSize];
     (void)snprintf(tmpDir, sizeof(tmpDir), "/tmp/pacplay_game_XXXXXX");
     if (platformMkdtemp(tmpDir, sizeof(tmpDir)) != PLATFORM_SUCC) {
-        controlScrollTextBoxAppend(outBox, "Error: failed to create temp dir\n");
+        controlScrollTextBoxAppend(outBox,
+                                   "Error: failed to create temp dir\n");
         return GAME_CONTROL_FAIL;
     }
 
-    if (extractTarGz(tarGzPath, tmpDir) != GAME_CONTROL_SUCC) {
+    if (extractTarGz(tarGzPath, tmpDir) != ARCHIVE_SUCC) {
         controlScrollTextBoxAppend(outBox, "Error: extraction failed\n");
         platformRmrf(tmpDir);
         return GAME_CONTROL_FAIL;
@@ -448,8 +368,9 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
 
     char *name = NULL;
     char *version = NULL;
+    char *description = NULL;
     cJSON *platforms = NULL;
-    if (parseMetadata(metaPath, &name, &version, &platforms) !=
+    if (parseMetadata(metaPath, &name, &version, &description, &platforms) !=
         GAME_CONTROL_SUCC) {
         controlScrollTextBoxAppend(outBox, "Error: invalid metadata.json\n");
         platformRmrf(tmpDir);
@@ -465,10 +386,11 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
         char *fileStr = cJSON_GetStringValue(fileItem);
         char *hashStr = cJSON_GetStringValue(hashItem);
         if (fileStr == NULL || hashStr == NULL) {
-            controlScrollTextBoxAppend(outBox,
-                                       "Error: platform entry missing fields\n");
+            controlScrollTextBoxAppend(
+                outBox, "Error: platform entry missing fields\n");
             free(name);
             free(version);
+            free(description);
             cJSON_Delete(platforms);
             platformRmrf(tmpDir);
             return GAME_CONTROL_FAIL;
@@ -485,6 +407,7 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
             controlScrollTextBoxAppend(outBox, errLine);
             free(name);
             free(version);
+            free(description);
             cJSON_Delete(platforms);
             platformRmrf(tmpDir);
             return GAME_CONTROL_FAIL;
@@ -492,9 +415,11 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
 
         char computedHash[Sha256HexLen + 1];
         if (computeFileSHA256(srcFilePath, computedHash) != GAME_CONTROL_SUCC) {
-            controlScrollTextBoxAppend(outBox, "Error: hash computation failed\n");
+            controlScrollTextBoxAppend(outBox,
+                                       "Error: hash computation failed\n");
             free(name);
             free(version);
+            free(description);
             cJSON_Delete(platforms);
             platformRmrf(tmpDir);
             return GAME_CONTROL_FAIL;
@@ -507,6 +432,7 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
             controlScrollTextBoxAppend(outBox, errLine);
             free(name);
             free(version);
+            free(description);
             cJSON_Delete(platforms);
             platformRmrf(tmpDir);
             return GAME_CONTROL_FAIL;
@@ -521,9 +447,11 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
 
     if (isNewGame) {
         if (cryptoRandomBytes(gameKey, KeyLen) != CRYPTO_SUCC) {
-            controlScrollTextBoxAppend(outBox, "Error: key generation failed\n");
+            controlScrollTextBoxAppend(outBox,
+                                       "Error: key generation failed\n");
             free(name);
             free(version);
+            free(description);
             cJSON_Delete(platforms);
             platformRmrf(tmpDir);
             return GAME_CONTROL_FAIL;
@@ -537,6 +465,7 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
                                        "Error: envelope encryption failed\n");
             free(name);
             free(version);
+            free(description);
             cJSON_Delete(platforms);
             platformRmrf(tmpDir);
             return GAME_CONTROL_FAIL;
@@ -546,12 +475,14 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
         memset(&newGame, 0, sizeof(newGame));
         newGame.name = name;
         newGame.version = version;
+        newGame.description = description;
 
         if (registerGame(s->gameDB, &newGame, envelope, envLen) != DB_SUCC) {
             controlScrollTextBoxAppend(outBox,
                                        "Error: game registration failed\n");
             free(name);
             free(version);
+            free(description);
             cJSON_Delete(platforms);
             platformRmrf(tmpDir);
             return GAME_CONTROL_FAIL;
@@ -569,6 +500,7 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
             gameInfoFree(&existing);
             free(name);
             free(version);
+            free(description);
             cJSON_Delete(platforms);
             platformRmrf(tmpDir);
             return GAME_CONTROL_FAIL;
@@ -582,6 +514,7 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
             gameInfoFree(&existing);
             free(name);
             free(version);
+            free(description);
             cJSON_Delete(platforms);
             platformRmrf(tmpDir);
             return GAME_CONTROL_FAIL;
@@ -594,6 +527,7 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
             gameInfoFree(&existing);
             free(name);
             free(version);
+            free(description);
             cJSON_Delete(platforms);
             platformRmrf(tmpDir);
             return GAME_CONTROL_FAIL;
@@ -636,6 +570,7 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
             controlScrollTextBoxAppend(outBox, errLine);
             free(name);
             free(version);
+            free(description);
             cJSON_Delete(platforms);
             platformRmrf(tmpDir);
             return GAME_CONTROL_FAIL;
@@ -671,6 +606,7 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
 
     free(name);
     free(version);
+    free(description);
     cJSON_Delete(platforms);
     return GAME_CONTROL_SUCC;
 }
@@ -730,8 +666,7 @@ int gameCtlScan(Server *s, ControlScrollTextBox *outBox) {
         }
 
         char *endPtr = NULL;
-        unsigned long gid =
-            strtoul(gameEntry->d_name, &endPtr, 10); // NOLINT
+        unsigned long gid = strtoul(gameEntry->d_name, &endPtr, 10); // NOLINT
         if (endPtr == gameEntry->d_name || *endPtr != '\0') {
             continue;
         }
@@ -788,11 +723,11 @@ int gameCtlInfo(Server *s, uint32_t gameId, ControlScrollTextBox *outBox) {
         platCount > 0) {
         controlScrollTextBoxAppend(outBox, "Platforms:\n");
         for (size_t i = 0; i < platCount; i++) {
-            (void)snprintf(
-                line, sizeof(line), "  %-10s  %s  (%lu bytes)\n",
-                plats[i].platform,
-                plats[i].fileName != NULL ? plats[i].fileName : "(null)",
-                (unsigned long)plats[i].fileSize);
+            (void)snprintf(line, sizeof(line), "  %-10s  %s  (%lu bytes)\n",
+                           plats[i].platform,
+                           plats[i].fileName != NULL ? plats[i].fileName
+                                                     : "(null)",
+                           (unsigned long)plats[i].fileSize);
             controlScrollTextBoxAppend(outBox, line);
         }
         gamePlatformInfoArrayFree(plats, platCount);

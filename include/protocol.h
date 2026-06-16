@@ -59,6 +59,7 @@
 #define GAME_NAME_LEN 64
 #define GAME_VERSION_LEN 32
 #define GAME_HASH_LEN 65
+#define GAME_DESC_LEN 1024
 #define PLATFORM_NAME_LEN 16
 #define GAME_CHUNK_SIZE 65536u
 #define DATA_MAX_PAYLOAD_LEN 65536u
@@ -336,6 +337,42 @@ typedef struct {
 } GameChunkAckPayload;
 #pragma pack(pop)
 
+/** @brief Game list request payload for range-based browsing with optional
+ *         platform filter.
+ *
+ *  Used by @c MsgGameListReq.  Specifies a [rangeStart, rangeEnd] inclusive
+ *  range of gameId values.  Both fields set to 0 means "return all games".
+ *  When rangeStart > rangeEnd (both non-zero), the server returns an empty
+ *  list without error.
+ *
+ *  @c platform is a NUL-terminated platform identifier (e.g. "linux-x86_64").
+ *  When non-empty the server filters results to games that support the given
+ *  platform.  An empty string disables platform filtering (backward
+ *  compatible). */
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t rangeStart;
+    uint32_t rangeEnd;
+    char platform[PLATFORM_NAME_LEN];
+} GameListReqPayload;
+#pragma pack(pop)
+
+/** @brief Full game metadata entry returned in @c MsgGameListResp.
+ *
+ *  The response payload is a contiguous array of @c GameInfoEntry structs.
+ *  Element count = payloadLength / sizeof(GameInfoEntry).  Sent via
+ *  @c packetSendEncryptedData (DATA_MAX_PAYLOAD_LEN = 65536, fits ~57). */
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t gameId;
+    char name[GAME_NAME_LEN];
+    char version[GAME_VERSION_LEN];
+    char description[GAME_DESC_LEN];
+    int64_t createdAt;
+    int64_t updatedAt;
+} GameInfoEntry;
+#pragma pack(pop)
+
 /**
  * @brief Setup a server.
  *
@@ -515,8 +552,8 @@ int packetInitData(Packet *packet, MessageType msgType, uint32_t seqID,
                    PacketType pktType, const void *data, size_t dataLen);
 
 int packetSendEncryptedData(SocketFD fd, MessageType mt, uint32_t *seqID,
-                            uint8_t key[AES_GCM_KEY_LEN],
-                            const void *data, size_t dataLen);
+                            uint8_t key[AES_GCM_KEY_LEN], const void *data,
+                            size_t dataLen);
 
 /**
  * @brief Receive and decrypt an AES-256-GCM packet.

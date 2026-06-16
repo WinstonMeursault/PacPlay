@@ -38,6 +38,16 @@
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
+static inline int clamp(int value, int lo, int hi) {
+    if (value < lo) {
+        return lo;
+    }
+    if (value > hi) {
+        return hi;
+    }
+    return value;
+}
+
 /* ─────────────────────────── platform utilities ─────────────────────────── */
 
 #ifdef _WIN32

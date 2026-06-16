@@ -30,7 +30,8 @@ enum {
 
 static const char *hexDigitsTable = "0123456789abcdef";
 
-static int testComputeFileSHA256(const char *filePath, char outHex[HashBufSize]) {
+static int testComputeFileSHA256(const char *filePath,
+                                 char outHex[HashBufSize]) {
     FILE *fp = fopen(filePath, "rb");
     if (fp == NULL) {
         return GAME_CONTROL_FAIL;
@@ -217,8 +218,8 @@ static void testEncryptDecryptRoundtrip(void) {
     fclose(fp);
 
     ASSERT_TRUE(cipher.buffer.len > 0);
-    ASSERT_TRUE(memcmp(cipher.buffer.data, originalData,
-                       sizeof(originalData)) != 0);
+    ASSERT_TRUE(
+        memcmp(cipher.buffer.data, originalData, sizeof(originalData)) != 0);
 
     fp = fopen(encPath, "rb");
     ASSERT_TRUE(fp != NULL);
@@ -529,6 +530,151 @@ static void testNullByteInName(void) {
     platformRmrf(tmpDir);
 }
 
+static int testParseMetadataFull(const char *jsonPath, char **outName,
+                                 char **outVersion, char **outDescription,
+                                 cJSON **outPlatforms) {
+    if (jsonPath == NULL || outName == NULL || outVersion == NULL ||
+        outDescription == NULL || outPlatforms == NULL) {
+        return GAME_CONTROL_FAIL;
+    }
+
+    FILE *fp = fopen(jsonPath, "rb");
+    if (fp == NULL) {
+        return GAME_CONTROL_FAIL;
+    }
+
+    fseek(fp, 0, SEEK_END);
+    long fileLen = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    if (fileLen <= 0) {
+        fclose(fp);
+        return GAME_CONTROL_FAIL;
+    }
+
+    char *content = (char *)malloc((size_t)fileLen + 1);
+    if (content == NULL) {
+        fclose(fp);
+        return GAME_CONTROL_FAIL;
+    }
+
+    if (fread(content, 1, (size_t)fileLen, fp) != (size_t)fileLen) {
+        free(content);
+        fclose(fp);
+        return GAME_CONTROL_FAIL;
+    }
+    content[fileLen] = '\0';
+    fclose(fp);
+
+    cJSON *root = cJSON_Parse(content);
+    free(content);
+    if (root == NULL) {
+        return GAME_CONTROL_FAIL;
+    }
+
+    cJSON *nameItem = cJSON_GetObjectItem(root, "name");
+    cJSON *versionItem = cJSON_GetObjectItem(root, "version");
+    cJSON *descItem = cJSON_GetObjectItem(root, "description");
+    cJSON *platformsItem = cJSON_GetObjectItem(root, "platforms");
+
+    char *nameStr = cJSON_GetStringValue(nameItem);
+    char *versionStr = cJSON_GetStringValue(versionItem);
+
+    if (nameStr == NULL || versionStr == NULL || platformsItem == NULL ||
+        !cJSON_IsArray(platformsItem)) {
+        cJSON_Delete(root);
+        return GAME_CONTROL_FAIL;
+    }
+
+    *outName = strdup(nameStr);
+    *outVersion = strdup(versionStr);
+    char *descStr = cJSON_GetStringValue(descItem);
+    *outDescription = strdup(descStr != NULL ? descStr : "");
+    if (*outName == NULL || *outVersion == NULL || *outDescription == NULL) {
+        free(*outName);
+        free(*outVersion);
+        free(*outDescription);
+        cJSON_Delete(root);
+        return GAME_CONTROL_FAIL;
+    }
+
+    *outPlatforms = cJSON_DetachItemFromObject(root, "platforms");
+    cJSON_Delete(root);
+    return GAME_CONTROL_SUCC;
+}
+
+static void testMetadataParseDescription(void) {
+    char tmpDir[PathBufSize];
+    (void)snprintf(tmpDir, sizeof(tmpDir), "/tmp/test_meta_desc_XXXXXX");
+    ASSERT_INT_EQ(platformMkdtemp(tmpDir, sizeof(tmpDir)), PLATFORM_SUCC);
+
+    char metaPath[PathBufSize];
+    (void)snprintf(metaPath, sizeof(metaPath), "%s/metadata.json", tmpDir);
+
+    const char *json =
+        "{\"name\":\"DescGame\",\"version\":\"2.0.0\","
+        "\"description\":\"A very cool game\","
+        "\"platforms\":[{\"platform\":\"linux\",\"file\":\"game.tar.gz\","
+        "\"hash\":\"abc123\"}]}";
+
+    FILE *fp = fopen(metaPath, "wb");
+    ASSERT_TRUE(fp != NULL);
+    fwrite(json, 1, strlen(json), fp);
+    fclose(fp);
+
+    char *name = NULL;
+    char *version = NULL;
+    char *description = NULL;
+    cJSON *platforms = NULL;
+    int ret = testParseMetadataFull(metaPath, &name, &version, &description,
+                                    &platforms);
+    ASSERT_INT_EQ(ret, GAME_CONTROL_SUCC);
+    ASSERT_NOT_NULL(description);
+    ASSERT_STR_EQ(description, "A very cool game");
+    ASSERT_STR_EQ(name, "DescGame");
+
+    free(name);
+    free(version);
+    free(description);
+    cJSON_Delete(platforms);
+    platformRmrf(tmpDir);
+}
+
+static void testMetadataParseNoDescription(void) {
+    char tmpDir[PathBufSize];
+    (void)snprintf(tmpDir, sizeof(tmpDir), "/tmp/test_meta_nd_XXXXXX");
+    ASSERT_INT_EQ(platformMkdtemp(tmpDir, sizeof(tmpDir)), PLATFORM_SUCC);
+
+    char metaPath[PathBufSize];
+    (void)snprintf(metaPath, sizeof(metaPath), "%s/metadata.json", tmpDir);
+
+    const char *json =
+        "{\"name\":\"NoDescGame\",\"version\":\"1.0.0\","
+        "\"platforms\":[{\"platform\":\"linux\",\"file\":\"game.tar.gz\","
+        "\"hash\":\"abc123\"}]}";
+
+    FILE *fp = fopen(metaPath, "wb");
+    ASSERT_TRUE(fp != NULL);
+    fwrite(json, 1, strlen(json), fp);
+    fclose(fp);
+
+    char *name = NULL;
+    char *version = NULL;
+    char *description = NULL;
+    cJSON *platforms = NULL;
+    int ret = testParseMetadataFull(metaPath, &name, &version, &description,
+                                    &platforms);
+    ASSERT_INT_EQ(ret, GAME_CONTROL_SUCC);
+    ASSERT_NOT_NULL(description);
+    ASSERT_STR_EQ(description, "");
+
+    free(name);
+    free(version);
+    free(description);
+    cJSON_Delete(platforms);
+    platformRmrf(tmpDir);
+}
+
 int main(void) {
     printf("test_game_control:\n");
 
@@ -542,6 +688,8 @@ int main(void) {
     RUN_TEST(testPathTraversalInMetadata);
     RUN_TEST(testOversizedMetadata);
     RUN_TEST(testNullByteInName);
+    RUN_TEST(testMetadataParseDescription);
+    RUN_TEST(testMetadataParseNoDescription);
 
     return TEST_REPORT();
 }

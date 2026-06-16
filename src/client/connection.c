@@ -50,6 +50,9 @@ int clientConnect(Client *client, const char *addr, uint16_t port) {
     }
 
     client->fd = fd;
+    strncpy(client->serverAddr, addr, SERVER_ADDR_LEN - 1);
+    client->serverAddr[SERVER_ADDR_LEN - 1] = '\0';
+    client->serverPort = port;
     memcpy(&client->aesKey, &key, sizeof(key));
     OPENSSL_cleanse(&key, sizeof(key));
     LOG_INFO("Connected and key exchanged with %s:%u", addr,
