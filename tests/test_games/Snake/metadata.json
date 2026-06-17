@@ -1,0 +1,18 @@
+{
+    "gameName": "Snake",
+    "version": "1.0.0",
+    "description": "Classic Snake game - eat food to grow, avoid walls and yourself. Single-player standalone mode with speed progression, obstacles, and wrap-around walls.",
+    "sdkVersion": "1.0.0",
+    "server": {
+        "archive": "server.tar.gz",
+        "linux": {
+            "libraryPath": "./linux/snakeServer.so"
+        }
+    },
+    "client": {
+        "archive": "client.tar.gz",
+        "linux": {
+            "libraryPath": "./linux/snakeClient.so"
+        }
+    }
+}
