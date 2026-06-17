@@ -63,7 +63,6 @@ int clientRunGame(VTerm **vterm, VTermScreen **vscreen, const char *path,
         close(*ptyFD);
         dup2(slaveFD, STDIN_FILENO);
         dup2(slaveFD, STDOUT_FILENO);
-        dup2(slaveFD, STDERR_FILENO);
         close(slaveFD);
         execl("./loader", "loader", path, NULL);
         // execl("/home/kiraterin/playgroun d/ncursesplg/bin/main", path, NULL);

@@ -26,6 +26,8 @@
 #include "log.h"
 #include <dlfcn.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <limits.h>
 
 GameFunctions gameFunctions;
 
@@ -40,7 +42,10 @@ int main(int argc, const char *argv[]) {
     void *handle = dlopen(argv[1], RTLD_LAZY);
 
     if (!handle) {
+        char cwd[PATH_MAX];
         LOG_ERROR("loader: cannot open game shared object: %s", argv[1]);
+        LOG_ERROR("dlopen failed: %s", dlerror());
+        LOG_ERROR("pwd: %s", getcwd(cwd, PATH_MAX));
         return EXIT_FAILURE;
     }
 
@@ -52,6 +57,7 @@ int main(int argc, const char *argv[]) {
 
     gameFunctions.pacplayMain();
 
+    usleep(10000000); // NOLINT
     dlclose(handle);
     return EXIT_SUCCESS;
 }

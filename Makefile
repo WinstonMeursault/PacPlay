@@ -94,6 +94,7 @@ C_RESET := \033[0m
 .PHONY: all server client sdk clean run run-server run-client analyze test json json-server json-client debug
 
 all: analyze $(SERVER_BIN) $(CLIENT_BIN) $(LOADER_BIN) $(CLIENT_SDK_LIB) $(SERVER_SDK_LIB)
+	cp $(CLIENT_SDK_LIB) $(BIN_DIR)/client/libpacplay_client_sdk.so
 
 server: $(SERVER_BIN)
 

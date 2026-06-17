@@ -1505,10 +1505,13 @@ void controlListBoxAppendMulti(ControlListBox *self, const char *disp,
 }
 
 void controlListBoxClear(ControlListBox *self) {
-    for (size_t i = 0; i < arrayControlListBoxEntrySize(&self->list); ++i) {
+    size_t sz = 0;
+    while ((sz = arrayControlListBoxEntrySize(&self->list)) > 0) {
         ControlListBoxEntry cur = {0};
-        arrayControlListBoxEntryGet(&self->list, i, &cur);
+        arrayControlListBoxEntryGet(&self->list, sz - 1, &cur);
         free(cur.disp);
+        arrayControlListBoxEntryPopBack(&self->list);
+        --self->entryCnt;
     }
 }
 
