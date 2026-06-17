@@ -7,8 +7,8 @@ CFLAGS   := -fsanitize=address -fno-omit-frame-pointer -Wall -Wextra -Werror -g 
 CFLAGS   += -I../../../include -I../../../src -I../../../sdk/include
 CFLAGS   += -Icommon -Iserver -Iclient
 
-LDFLAGS_SRV := -shared -L../../../sdk/lib -lpacplay_server_sdk -Wl,-rpath,../../../sdk/lib -lpthread
-LDFLAGS_CLI := -shared -L../../../sdk/lib -lpacplay_client_sdk -Wl,-rpath,../../../sdk/lib -lpthread
+LDFLAGS_SRV := -shared -L../../../sdk/lib -lpacplay_server_sdk -Wl,-rpath,'$$ORIGIN/../sdk/lib' -lpthread
+LDFLAGS_CLI := -shared -L../../../sdk/lib -lpacplay_client_sdk -Wl,-rpath,'$$ORIGIN/../sdk/lib' -lpthread
 
 OUT_DIR   := ../../../bin
 BUILD_DIR := build

@@ -121,7 +121,8 @@ $(CLIENT_BIN): $(CLIENT_ALL_OBJ) $(CLIENT_SDK_LIB) | $(BIN_DIR)/client
 # Link loader executable
 $(LOADER_BIN): $(LOADER_ALL_OBJ) | $(BIN_DIR)/client
 	@echo -e '$(C_GREEN)Linking loader: $@$(C_RESET)'
-	@$(CC) $(CFLAGS) -ldl $^ -o $@ $(LDLIBS)
+	@$(CC) $(CFLAGS) -ldl $^ -o $@ $(LDLIBS) \
+		-Wl,--disable-new-dtags,-rpath,'$$ORIGIN/../../sdk/lib'
 
 # SDK: Client shared library
 $(CLIENT_SDK_LIB): $(SDK_SRC_COMMON) $(SDK_SRC_CLIENT)
