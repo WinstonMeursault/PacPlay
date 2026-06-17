@@ -9,8 +9,8 @@ CFLAGS   += -Icommon -Iserver -Iclient
 
 PROJ_ROOT   := $(CURDIR)/../../..
 
-LDFLAGS_SRV := -shared -L$(PROJ_ROOT)/sdk/lib -lpacplay_server_sdk -Wl,-rpath,'$$ORIGIN/../sdk/lib' -lpthread
-LDFLAGS_CLI := -shared -L$(PROJ_ROOT)/sdk/lib -lpacplay_client_sdk -Wl,-rpath,'$$ORIGIN/../sdk/lib' -lpthread
+LDFLAGS_SRV := -shared -L$(PROJ_ROOT)/sdk/lib -lpacplay_server_sdk -Wl,-rpath,'$$ORIGIN/../../../' -lpthread
+LDFLAGS_CLI := -shared -L$(PROJ_ROOT)/sdk/lib -lpacplay_client_sdk -Wl,-rpath,'$$ORIGIN/../../../' -lpthread
 
 OUT_DIR   := ../../../bin
 BUILD_DIR := build
