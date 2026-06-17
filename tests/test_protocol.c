@@ -147,10 +147,9 @@ static void testPacketMagicValue(void) {
     ASSERT_UINT_EQ(PACKET_MAGIC, 0x5050504Du);
 }
 
-/** @brief MAX_PAYLOAD_LEN is the documented 1024. */
+/** @brief MAX_PAYLOAD_LEN equals GAME_CHUNK_SIZE * 2. */
 static void testMaxPayloadLen(void) {
-    enum { ExpectedMax = 1024 };
-    ASSERT_UINT_EQ(MAX_PAYLOAD_LEN, ExpectedMax);
+    ASSERT_UINT_EQ(MAX_PAYLOAD_LEN, GAME_CHUNK_SIZE * 2);
     ASSERT_TRUE(MAX_PAYLOAD_LEN > 0);
 }
 

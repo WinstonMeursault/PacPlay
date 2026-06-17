@@ -40,11 +40,11 @@
 #define TUI_HOME_OPERGRID_WIDTH TUI_HOME_STATUSGRID_WIDTH
 
 #if defined(__linux__)
-#define CLIENT_DEFAULT_PLATFORM "linux-x86_64"
+#define CLIENT_DEFAULT_PLATFORM "linux"
 #elif defined(_WIN32) || defined(_WIN64)
-#define CLIENT_DEFAULT_PLATFORM "win-x64"
+#define CLIENT_DEFAULT_PLATFORM "windows"
 #elif defined(__APPLE__)
-#define CLIENT_DEFAULT_PLATFORM "macos-arm64"
+#define CLIENT_DEFAULT_PLATFORM "macos"
 #else
 #define CLIENT_DEFAULT_PLATFORM "unknown"
 #endif

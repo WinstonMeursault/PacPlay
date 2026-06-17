@@ -17,4 +17,16 @@
  */
 int extractTarGz(const char *tarGzPath, const char *destDir);
 
+/**
+ * @brief Create a .tar.gz archive from a source directory.
+ *
+ * Recursively walks @p sourceDir and packs all files and subdirectories
+ * into a gzip-compressed tar archive at @p destPath.
+ *
+ * @param sourceDir  Source directory to pack.
+ * @param destPath   Destination .tar.gz file path.
+ * @return @c ARCHIVE_SUCC on success, @c ARCHIVE_FAIL on failure.
+ */
+int createTarGz(const char *sourceDir, const char *destPath);
+
 #endif /* ARCHIVE_H */

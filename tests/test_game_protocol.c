@@ -134,51 +134,51 @@ static void testGameMetadataPayloadLayout(void) {
                    (size_t)GameMetadataPlatformOffset);
 }
 
-static void testPacketInitDataNormal(void) {
-    uint8_t *data = malloc(DATA_MAX_PAYLOAD_LEN);
+static void testPacketInitNormal(void) {
+    uint8_t *data = malloc(MAX_PAYLOAD_LEN);
     ASSERT_TRUE(data != NULL);
-    memset(data, FillByte, DATA_MAX_PAYLOAD_LEN);
+    memset(data, FillByte, MAX_PAYLOAD_LEN);
 
     Packet pkt;
     memset(&pkt, 0, sizeof(pkt));
     pkt.payload = NULL;
 
-    int ret = packetInitData(&pkt, MsgGameChunk, TestSeqID, PlaintextPacket,
-                             data, DATA_MAX_PAYLOAD_LEN);
+    int ret = packetInit(&pkt, MsgGameChunk, TestSeqID, PlaintextPacket,
+                         data, MAX_PAYLOAD_LEN);
     ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
     ASSERT_UINT_EQ(pkt.header.magic, PACKET_MAGIC);
     ASSERT_INT_EQ((int)pkt.header.messageType, MsgGameChunk);
-    ASSERT_UINT_EQ(pkt.header.payloadLength, DATA_MAX_PAYLOAD_LEN);
+    ASSERT_UINT_EQ(pkt.header.payloadLength, MAX_PAYLOAD_LEN);
     ASSERT_UINT_EQ(pkt.header.sequenceID, TestSeqID);
     ASSERT_TRUE(pkt.payload != NULL);
-    ASSERT_MEM_EQ(pkt.payload, data, DATA_MAX_PAYLOAD_LEN);
+    ASSERT_MEM_EQ(pkt.payload, data, MAX_PAYLOAD_LEN);
 
     packetClear(&pkt);
     free(data);
 }
 
-static void testPacketInitDataTooLarge(void) {
+static void testPacketInitTooLarge(void) {
     Packet pkt;
     memset(&pkt, 0, sizeof(pkt));
     pkt.payload = NULL;
 
-    int ret = packetInitData(&pkt, MsgGameChunk, 0, PlaintextPacket, NULL,
-                             (size_t)DATA_MAX_PAYLOAD_LEN + 1);
+    int ret = packetInit(&pkt, MsgGameChunk, 0, PlaintextPacket, NULL,
+                         (size_t)MAX_PAYLOAD_LEN + 1);
     ASSERT_INT_EQ(ret, PROTOCOL_FAIL);
 }
 
-static void testPacketInitDataNullPayload(void) {
+static void testPacketInitNullPayload(void) {
     Packet pkt;
     memset(&pkt, 0, sizeof(pkt));
     pkt.payload = NULL;
 
     enum { NonZeroLen = 100 };
-    int ret = packetInitData(&pkt, MsgGameChunk, 0, PlaintextPacket, NULL,
-                             NonZeroLen);
+    int ret = packetInit(&pkt, MsgGameChunk, 0, PlaintextPacket, NULL,
+                         NonZeroLen);
     ASSERT_INT_EQ(ret, PROTOCOL_FAIL);
 }
 
-static void testPacketSendEncryptedDataRoundtrip(void) {
+static void testPacketSendEncryptedRoundtrip(void) {
     static const uint8_t testKey[AES_GCM_KEY_LEN] = {
         0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A,
         0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
@@ -191,8 +191,8 @@ static void testPacketSendEncryptedDataRoundtrip(void) {
     memset(&pkt, 0, sizeof(pkt));
     pkt.payload = NULL;
 
-    int ret = packetInitData(&pkt, MsgGameMetadata, TestSeqID, PlaintextPacket,
-                             data, sizeof(data));
+    int ret = packetInit(&pkt, MsgGameMetadata, TestSeqID, PlaintextPacket,
+                          data, sizeof(data));
     ASSERT_INT_EQ(ret, PROTOCOL_SUCC);
 
     ret = packetAESEncrypt(&pkt, (uint8_t *)testKey);
@@ -253,9 +253,9 @@ static void testGameDescLenConstant(void) {
     ASSERT_UINT_EQ(GAME_DESC_LEN, 1024u);
 }
 
-static void testGameInfoEntryFitsInDataPayload(void) {
-    ASSERT_TRUE(sizeof(GameInfoEntry) <= DATA_MAX_PAYLOAD_LEN);
-    size_t maxEntries = DATA_MAX_PAYLOAD_LEN / sizeof(GameInfoEntry);
+static void testGameInfoEntryFitsInMaxPayload(void) {
+    ASSERT_TRUE(sizeof(GameInfoEntry) <= MAX_PAYLOAD_LEN);
+    size_t maxEntries = MAX_PAYLOAD_LEN / sizeof(GameInfoEntry);
     ASSERT_TRUE(maxEntries >= 1);
 }
 
@@ -269,7 +269,7 @@ static void testGameDownloadRespZeroFileSize(void) {
 
 static void testGameChunkPayloadMaxChunkSize(void) {
     ASSERT_UINT_EQ(GAME_CHUNK_SIZE, 65536u);
-    ASSERT_UINT_EQ(DATA_MAX_PAYLOAD_LEN, 65536u);
+    ASSERT_UINT_EQ(MAX_PAYLOAD_LEN, GAME_CHUNK_SIZE * 2);
 }
 
 int main(void) {
@@ -281,14 +281,14 @@ int main(void) {
     RUN_TEST(testGameChunkPayloadBaseSize);
     RUN_TEST(testDataAuthPayloadSize);
     RUN_TEST(testGameMetadataPayloadLayout);
-    RUN_TEST(testPacketInitDataNormal);
-    RUN_TEST(testPacketInitDataTooLarge);
-    RUN_TEST(testPacketInitDataNullPayload);
-    RUN_TEST(testPacketSendEncryptedDataRoundtrip);
+    RUN_TEST(testPacketInitNormal);
+    RUN_TEST(testPacketInitTooLarge);
+    RUN_TEST(testPacketInitNullPayload);
+    RUN_TEST(testPacketSendEncryptedRoundtrip);
     RUN_TEST(testGameListReqLayout);
     RUN_TEST(testGameInfoEntryLayout);
     RUN_TEST(testGameDescLenConstant);
-    RUN_TEST(testGameInfoEntryFitsInDataPayload);
+    RUN_TEST(testGameInfoEntryFitsInMaxPayload);
     RUN_TEST(testGameDownloadRespZeroFileSize);
     RUN_TEST(testGameChunkPayloadMaxChunkSize);
 

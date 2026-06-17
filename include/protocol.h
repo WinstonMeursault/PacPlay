@@ -41,8 +41,6 @@
 #define PROTOCOL_FAIL (-1)
 #define PROTOCOL_AUTH_FAIL (-2)
 
-#define MAX_PAYLOAD_LEN 1024
-
 /** @brief Fixed username length in login request payload (NUL-terminated). */
 #define LOGIN_USERNAME_LEN 32
 
@@ -62,7 +60,7 @@
 #define GAME_DESC_LEN 1024
 #define PLATFORM_NAME_LEN 16
 #define GAME_CHUNK_SIZE 65536u
-#define DATA_MAX_PAYLOAD_LEN 65536u
+#define MAX_PAYLOAD_LEN (GAME_CHUNK_SIZE * 2)
 #define DATA_AUTH_TOKEN_LEN 32
 #define TOKEN_EXPIRE_SECS 30
 
@@ -379,7 +377,7 @@ typedef struct {
  *
  *  The response payload is a contiguous array of @c GameInfoEntry structs.
  *  Element count = payloadLength / sizeof(GameInfoEntry).  Sent via
- *  @c packetSendEncryptedData (DATA_MAX_PAYLOAD_LEN = 65536, fits ~57). */
+ *  @c packetSendEncrypted (MAX_PAYLOAD_LEN = 65536, fits ~57). */
 #pragma pack(push, 1)
 typedef struct {
     uint32_t gameId;
@@ -565,13 +563,6 @@ int packetRecv(Packet *dest, SocketFD socketFD);
 int packetSendEncrypted(SocketFD fd, MessageType mt, uint32_t *seqID,
                         uint8_t key[AES_GCM_KEY_LEN], const void *data,
                         size_t dataLen);
-
-int packetInitData(Packet *packet, MessageType msgType, uint32_t seqID,
-                   PacketType pktType, const void *data, size_t dataLen);
-
-int packetSendEncryptedData(SocketFD fd, MessageType mt, uint32_t *seqID,
-                            uint8_t key[AES_GCM_KEY_LEN], const void *data,
-                            size_t dataLen);
 
 /**
  * @brief Receive and decrypt an AES-256-GCM packet.

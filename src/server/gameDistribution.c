@@ -37,7 +37,7 @@ int serverHandleGameList(Server *s, ClientSession *cs, const Packet *pkt) {
     }
 
     if (count == 0) {
-        if (packetSendEncryptedData(cs->fd, MsgGameListResp, &cs->seqID,
+        if (packetSendEncrypted(cs->fd, MsgGameListResp, &cs->seqID,
                                     cs->aesKey.key, NULL, 0) != PROTOCOL_SUCC) {
             return SERVER_FAIL;
         }
@@ -45,7 +45,7 @@ int serverHandleGameList(Server *s, ClientSession *cs, const Packet *pkt) {
     }
 
     size_t payloadSize = count * sizeof(GameInfoEntry);
-    if (packetSendEncryptedData(cs->fd, MsgGameListResp, &cs->seqID,
+    if (packetSendEncrypted(cs->fd, MsgGameListResp, &cs->seqID,
                                 cs->aesKey.key, entries,
                                 payloadSize) != PROTOCOL_SUCC) {
         free(entries);
@@ -98,8 +98,8 @@ int serverHandleGameDownload(Server *s, ClientSession *cs, const Packet *pkt) {
     }
 
     char filePath[FILE_PATH_MAX_LEN];
-    (void)snprintf(filePath, sizeof(filePath), GAME_LIB_DIR "/%u/%s/client/%s/%s",
-                   gameId, gameInfo.version, platform, platInfo.fileName);
+    (void)snprintf(filePath, sizeof(filePath), GAME_LIB_DIR "/%u/%s/download.tar.gz",
+                   gameId, gameInfo.version);
 
     if (access(filePath, R_OK) != 0) {
         LOG_WARN("serverHandleGameDownload: file not readable: %s", filePath);

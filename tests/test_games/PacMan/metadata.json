@@ -1,0 +1,18 @@
+{
+    "gameName": "Pacman",
+    "version": "1.0.0",
+    "description": "Multiplayer classic PacMan game - compete with friends to eat the most beans while avoiding ghosts in a maze.",
+    "sdkVersion": "1.0.0",
+    "server": {
+        "archive": "server.tar.gz",
+        "linux": {
+            "libraryPath": "./linux/pacmanServer.so"
+        }
+    },
+    "client": {
+        "archive": "client.tar.gz",
+        "linux": {
+            "libraryPath": "./linux/pacmanClient.so"
+        }
+    }
+}

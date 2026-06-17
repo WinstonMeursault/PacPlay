@@ -680,16 +680,14 @@ gamectl update Pacman_v1.0.0.tar.gz
 │     server: { archive: "server.tar.gz", linux: { libraryPath: "..." }, ... }
 │     client: { archive: "client.tar.gz", linux: { libraryPath: "..." }, ... }
 │
-├─ 3. 解压 server.tar.gz
-│     └ 对每个平台（如 linux）:
-│       读取 libraryPath → 计算 SHA-256 → 存盘
-│       → ./gameLib/<gameId>/<version>/server/<platform>/<fileName>.so
-│       → 写入 game_platforms: (gameId, platform, fileName, hash, fileSize, role="server")
+├─ 3. 解压 server.tar.gz，仅提取当前服务器平台的 .so
+│     → lib/<id>/<ver>/server/<plat>/<file>.so
+│     → 注册 game_platforms (role="server", 仅当前平台)
 │
-├─ 4. 解压 client.tar.gz
-│     └ 对每个平台:
-│       → ./gameLib/<gameId>/<version>/client/<platform>/<fileName>.so
-│       → 写入 game_platforms: (role="client")
+├─ 4. 将 metadata.json 与 client.tar.gz 各平台文件重新打包为 download.tar.gz
+│     → lib/<id>/<ver>/download.tar.gz
+│     → 计算 SHA-256
+│     → 注册 game_platforms (role="client", 每个平台一条，fileName="download.tar.gz")
 │
 └─ 5. 完成注册
 ```
@@ -700,23 +698,18 @@ gamectl update Pacman_v1.0.0.tar.gz
 └── <gameId>/
     └── <version>/
         ├── server/
-        │   ├── linux/
-        │   │   └── pacmanServer.so
-        │   └── windows/
-        │       └── pacmanServer.dll
-        └── client/
-            ├── linux/
-            │   └── pacmanClient.so
-            └── windows/
-                └── pacmanClient.dll
-```
+        │   └── <platform>/
+        │       └── <fileName>.so     # 仅当前服务器平台
+        └── download.tar.gz           # client 各平台 + metadata.json
 
 **game_platforms 表**（GameDB）：
 | gameId | platform    | fileName         | role   | hash | fileSize |
 |--------|-------------|------------------|--------|------|----------|
 | 1      | linux       | pacmanServer.so  | server | abc  | 102400   |
-| 1      | linux       | pacmanClient.so  | client | def  | 204800   |
-| 1      | windows     | pacmanServer.dll | server | ghi  | 51200    |
+| 1      | linux       | download.tar.gz  | client | def  | 204800   |
+| 1      | windows     | download.tar.gz  | client | def  | 204800   |
+
+> **注意**：server 端仅注册当前服务器平台。client 端各平台均指向同一个 `download.tar.gz`。
 
 #### 9.8.2 下载：Client 获取游戏
 
@@ -744,12 +737,17 @@ Client                                  Server
   │ <─ GameChunk ×N ────────────────────> │ workerThread: readFilePlaintext → 分块发送
   │ <─ GameDownloadDone ───────────────── │
   │                                      │
-  │ 存盘: ./gameLib/<gameId>_<file>      │
-  │ 校验 SHA-256 → 写入本地 ClientDB       │
+  │ 存盘: ./gameLib/<gameId>.downloading  │
+  │ <─ GameDownloadDone ───────────────── │
+  │                                      │
+  │ SHA-256 校验 → 解压 download.tar.gz    │
+  │ → ./gameLib/<id>/{metadata.json,各平台.so}│
+  │ 读取 metadata.json 获取 libraryPath   │
+  │ → 写入本地 ClientDB (gamePath="<so完整路径>")│
   └──────────────────────────────────────┘
 ```
 
-Client 本地存储（`client.db`, gameList 表）记录 `gamePath` 指向下载的 `.so` 文件，后续 TUI 中点击"开始游戏"时通过 `clientRunGame()` → fork + exec `./loader <soPath>` → `dlopen` → `pacplayMain()` 启动。
+Client 本地存储（`client.db`, gameList 表）记录 `gamePath` 指向解压后的 `.so` 文件完整路径（如 `./gameLib/1/linux/pacmanClient.so`），后续 TUI 中点击"开始游戏"时通过 `clientRunGame()` → fork + exec `./loader <soPath>` → `dlopen` → `pacplayMain()` 启动。
 
 #### 9.8.3 启动：服务端游戏逻辑
 

@@ -24,6 +24,7 @@ SDK_LIB_DIR := $(SDK_DIR)/lib
 INC_DIR := include $(SRC_DIR) $(SDK_INC_DIR)
 INC_FLAGS := $(addprefix -I, $(INC_DIR))
 TEST_DIR := tests
+GAME_TEST_INC := -I$(TEST_DIR)/test_games/PacMan/common -I$(TEST_DIR)/test_games/PacMan/server -I$(TEST_DIR)/test_games/PacMan/client
 
 # Targets
 SERVER_BIN := $(BIN_DIR)/server/server
@@ -72,8 +73,8 @@ SERVER_DEP := $(SERVER_ALL_OBJ:.o=.d)
 CLIENT_DEP := $(CLIENT_ALL_OBJ:.o=.d)
 LOADER_DEP := $(LOADER_ALL_OBJ:.o=.d)
 
-# Test Discovery
-TEST_SRC := $(shell find $(TEST_DIR) -type f -name 'test_*.c')
+# Test Discovery (exclude PacMan game tests — they need special linking via their own Makefile)
+TEST_SRC := $(shell find $(TEST_DIR) -type f -name 'test_*.c' ! -name 'test_pacman_*')
 TEST_BIN := $(patsubst $(TEST_DIR)/%.c, $(BIN_DIR)/tests/%, $(TEST_SRC))
 
 # Server and client objects excluding main.o, for test linking
@@ -214,7 +215,7 @@ $(BUILD_DIR)/tests/%.o: $(TEST_DIR)/%.c
 		mkdir -p $(dir $@); \
 	fi
 	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
-	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INC_FLAGS) -I$(TEST_DIR) -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INC_FLAGS) -I$(TEST_DIR) $(GAME_TEST_INC) -c $< -o $@
 
 # Link each test binary against its object + server & client build of common objects
 # (excluding main.o), plus both SDK shared libraries.
@@ -256,7 +257,7 @@ json:
 		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) $(INC_FLAGS) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
 	@$(foreach src, $(TEST_SRC), \
 		obj=$(patsubst $(TEST_DIR)/%.c,$(BUILD_DIR)/tests/%.o,$(src)); \
-		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) $(INC_FLAGS) -I$(TEST_DIR) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
+		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) $(INC_FLAGS) -I$(TEST_DIR) $(GAME_TEST_INC) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
 	@sed -i '$$ s/,$$//' compile_commands.json
 	@echo "]" >> compile_commands.json
 	@echo -e '$(C_GREEN)compile_commands.json generated$(C_RESET)'

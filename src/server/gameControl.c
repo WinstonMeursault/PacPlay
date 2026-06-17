@@ -14,6 +14,14 @@
 
 #include <openssl/evp.h>
 
+#if defined(__linux__)
+#define SERVER_DEFAULT_PLATFORM "linux"
+#elif defined(_WIN32) || defined(_WIN64)
+#define SERVER_DEFAULT_PLATFORM "windows"
+#else
+#define SERVER_DEFAULT_PLATFORM "unknown"
+#endif
+
 enum {
     GzBufSize = 65536,
     Sha256HexLen = 64,
@@ -242,6 +250,7 @@ static void freeAll(char *name, char *version, char *description,
 static int storePlatformFiles(Server *s, uint32_t gameId, const char *version,
                                const char *tmpDir, cJSON *section,
                                const char *role,
+                               const char *filterPlatform,
                                ControlScrollTextBox *outBox) {
     for (cJSON *platform = section->child; platform != NULL;
          platform = platform->next) {
@@ -250,6 +259,11 @@ static int storePlatformFiles(Server *s, uint32_t gameId, const char *version,
         char *libPath = cJSON_GetStringValue(libItem);
 
         if (platName == NULL || libPath == NULL) {
+            continue;
+        }
+
+        if (filterPlatform != NULL && filterPlatform[0] != '\0' &&
+            strcmp(platName, filterPlatform) != 0) {
             continue;
         }
 
@@ -331,6 +345,164 @@ static int storePlatformFiles(Server *s, uint32_t gameId, const char *version,
         }
         gamePlatformInfoFree(&platInfo);
     }
+    return GAME_CONTROL_SUCC;
+}
+
+static int storeClientDownloadArchive(Server *s, uint32_t gameId,
+                                       const char *version,
+                                       const char *tmpDir,
+                                       cJSON *clientPlatforms,
+                                       ControlScrollTextBox *outBox) {
+    char dlTmpDir[PathBufSize];
+    snprintf(dlTmpDir, sizeof(dlTmpDir), "/tmp/pacplay_dl_XXXXXX");
+    if (platformMkdtemp(dlTmpDir, sizeof(dlTmpDir)) != PLATFORM_SUCC) {
+        controlScrollTextBoxAppend(outBox,
+                                    "Error: failed to create temp dir\n");
+        return GAME_CONTROL_FAIL;
+    }
+
+    char metaSrc[PathBufSize];
+    snprintf(metaSrc, sizeof(metaSrc), "%s/metadata.json", tmpDir);
+    char metaDst[PathBufSize];
+    snprintf(metaDst, sizeof(metaDst), "%s/metadata.json", dlTmpDir);
+
+    FILE *metaIn = fopen(metaSrc, "rb");
+    if (metaIn == NULL) {
+        platformRmrf(dlTmpDir);
+        controlScrollTextBoxAppend(outBox,
+                                    "Error: metadata.json not found\n");
+        return GAME_CONTROL_FAIL;
+    }
+    FILE *metaOut = fopen(metaDst, "wb");
+    if (metaOut == NULL) {
+        fclose(metaIn);
+        platformRmrf(dlTmpDir);
+        return GAME_CONTROL_FAIL;
+    }
+    char metaBuf[GzBufSize];
+    size_t n;
+    while ((n = fread(metaBuf, 1, sizeof(metaBuf), metaIn)) > 0) {
+        fwrite(metaBuf, 1, n, metaOut);
+    }
+    fclose(metaIn);
+    fclose(metaOut);
+
+    for (cJSON *platform = clientPlatforms->child; platform != NULL;
+         platform = platform->next) {
+        const char *platName = platform->string;
+        cJSON *libItem = cJSON_GetObjectItem(platform, "libraryPath");
+        char *libPath = cJSON_GetStringValue(libItem);
+
+        if (platName == NULL || libPath == NULL) {
+            continue;
+        }
+
+        char srcFilePath[PathBufSize];
+        snprintf(srcFilePath, sizeof(srcFilePath), "%s/%s", tmpDir,
+                 libPath + 2);
+
+        if (access(srcFilePath, R_OK) != 0) {
+            char errLine[LineBufSize];
+            snprintf(errLine, sizeof(errLine),
+                     "Error: client file '%s' not found in archive\n", libPath);
+            controlScrollTextBoxAppend(outBox, errLine);
+            platformRmrf(dlTmpDir);
+            return GAME_CONTROL_FAIL;
+        }
+
+        char platDir[PathBufSize];
+        snprintf(platDir, sizeof(platDir), "%s/%s", dlTmpDir, platName);
+        platformMkdirp(platDir);
+
+        const char *fileName = strrchr(libPath, '/');
+        if (fileName == NULL) {
+            fileName = libPath;
+        } else {
+            fileName++;
+        }
+
+        char dstFilePath[PathBufSize];
+        snprintf(dstFilePath, sizeof(dstFilePath), "%s/%s/%s", dlTmpDir,
+                 platName, fileName);
+
+        FILE *src = fopen(srcFilePath, "rb");
+        if (src == NULL) {
+            platformRmrf(dlTmpDir);
+            return GAME_CONTROL_FAIL;
+        }
+        FILE *dst = fopen(dstFilePath, "wb");
+        if (dst == NULL) {
+            fclose(src);
+            platformRmrf(dlTmpDir);
+            return GAME_CONTROL_FAIL;
+        }
+        char cpyBuf[GzBufSize];
+        size_t cpyN;
+        while ((cpyN = fread(cpyBuf, 1, sizeof(cpyBuf), src)) > 0) {
+            fwrite(cpyBuf, 1, cpyN, dst);
+        }
+        fclose(src);
+        fclose(dst);
+    }
+
+    char destDir[PathBufSize];
+    snprintf(destDir, sizeof(destDir), "%s/%u/%s", GAME_LIB_DIR, gameId,
+             version);
+    platformMkdirp(destDir);
+
+    char destPath[PathBufSize];
+    snprintf(destPath, sizeof(destPath), "%s/download.tar.gz", destDir);
+
+    if (createTarGz(dlTmpDir, destPath) != ARCHIVE_SUCC) {
+        platformRmrf(dlTmpDir);
+        controlScrollTextBoxAppend(outBox,
+                                    "Error: failed to create download archive\n");
+        return GAME_CONTROL_FAIL;
+    }
+    platformRmrf(dlTmpDir);
+
+    char computedHash[Sha256HexLen + 1];
+    if (computeFileSHA256(destPath, computedHash) != GAME_CONTROL_SUCC) {
+        controlScrollTextBoxAppend(outBox,
+                                    "Error: hash computation failed\n");
+        return GAME_CONTROL_FAIL;
+    }
+
+    uint64_t fileSz = 0;
+    platformFileSize(destPath, &fileSz);
+
+    for (cJSON *platform = clientPlatforms->child; platform != NULL;
+         platform = platform->next) {
+        const char *platName = platform->string;
+        cJSON *libItem = cJSON_GetObjectItem(platform, "libraryPath");
+        char *libPath = cJSON_GetStringValue(libItem);
+
+        if (platName == NULL || libPath == NULL) {
+            continue;
+        }
+
+        GamePlatformInfo platInfo;
+        memset(&platInfo, 0, sizeof(platInfo));
+        snprintf(platInfo.platform, sizeof(platInfo.platform), "%s", platName);
+        platInfo.fileName = strdup("download.tar.gz");
+        platInfo.hash = strdup(computedHash);
+        strncpy(platInfo.role, "client", sizeof(platInfo.role) - 1);
+        platInfo.fileSize = fileSz;
+
+        if (platInfo.fileName == NULL || platInfo.hash == NULL) {
+            gamePlatformInfoFree(&platInfo);
+            return GAME_CONTROL_FAIL;
+        }
+
+        if (registerGamePlatform(s->gameDB, gameId, &platInfo) != DB_SUCC) {
+            char errLine[LineBufSize];
+            snprintf(errLine, sizeof(errLine),
+                     "Warning: platform '%s' registration failed\n", platName);
+            controlScrollTextBoxAppend(outBox, errLine);
+        }
+        gamePlatformInfoFree(&platInfo);
+    }
+
     return GAME_CONTROL_SUCC;
 }
 
@@ -524,15 +696,16 @@ int gameCtlUpdate(Server *s, const char *tarGzPath,
     }
 
     if (storePlatformFiles(s, gameId, version, tmpDir, serverPlatforms, "server",
-                           outBox) != GAME_CONTROL_SUCC) {
+                           SERVER_DEFAULT_PLATFORM, outBox) != GAME_CONTROL_SUCC) {
         freeAll(name, version, description, serverArchive, clientArchive,
                 serverPlatforms, clientPlatforms);
         platformRmrf(tmpDir);
         return GAME_CONTROL_FAIL;
     }
 
-    if (storePlatformFiles(s, gameId, version, tmpDir, clientPlatforms, "client",
-                           outBox) != GAME_CONTROL_SUCC) {
+    if (storeClientDownloadArchive(s, gameId, version, tmpDir,
+                                    clientPlatforms,
+                                    outBox) != GAME_CONTROL_SUCC) {
         freeAll(name, version, description, serverArchive, clientArchive,
                 serverPlatforms, clientPlatforms);
         platformRmrf(tmpDir);

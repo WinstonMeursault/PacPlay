@@ -26,6 +26,7 @@
 #include "client/client.h"
 #include "connectPage.h"
 #include "loginReg.h"
+#include "log.h"
 #include "mainPage.h"
 #include "tui/tuiapp.h"
 
@@ -43,6 +44,7 @@ static void tuiClientColorInit() {
 
 void tuiClientEntry(Client *clientInstance) {
     client = clientInstance;
+    logSetQuiet(true);
     tuiAppInit();
     tuiClientColorInit();
     tuiClientConnectPageInit();

@@ -2,10 +2,12 @@
 #include "microtar.h"
 #include "platform.h"
 
+#include <dirent.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #ifndef WITH_GZFILEOP
 #define WITH_GZFILEOP
@@ -94,5 +96,138 @@ int extractTarGz(const char *tarGzPath, const char *destDir) {
 
     mtar_close(&tar);
     remove(tarPath);
+    return ARCHIVE_SUCC;
+}
+
+static int addEntryToTar(mtar_t *tar, const char *baseDir,
+                         const char *relPath) {
+    char fullPath[PathBufSize];
+    snprintf(fullPath, sizeof(fullPath), "%s/%s", baseDir, relPath);
+
+    struct stat st;
+    if (stat(fullPath, &st) != 0) {
+        return ARCHIVE_FAIL;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        if (mtar_write_dir_header(tar, relPath) != MTAR_ESUCCESS) {
+            return ARCHIVE_FAIL;
+        }
+
+        DIR *dir = opendir(fullPath);
+        if (dir == NULL) {
+            return ARCHIVE_FAIL;
+        }
+
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 ||
+                strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+            char childRel[PathBufSize];
+            snprintf(childRel, sizeof(childRel), "%s/%s", relPath,
+                     entry->d_name);
+            if (addEntryToTar(tar, baseDir, childRel) != ARCHIVE_SUCC) {
+                closedir(dir);
+                return ARCHIVE_FAIL;
+            }
+        }
+        closedir(dir);
+    } else if (S_ISREG(st.st_mode)) {
+        if (mtar_write_file_header(tar, relPath,
+                                   (unsigned)st.st_size) != MTAR_ESUCCESS) {
+            return ARCHIVE_FAIL;
+        }
+
+        FILE *fp = fopen(fullPath, "rb");
+        if (fp == NULL) {
+            return ARCHIVE_FAIL;
+        }
+
+        uint8_t buf[GzBufSize];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), fp)) > 0) {
+            if (mtar_write_data(tar, buf, (unsigned)n) != MTAR_ESUCCESS) {
+                fclose(fp);
+                return ARCHIVE_FAIL;
+            }
+        }
+        fclose(fp);
+    }
+
+    return ARCHIVE_SUCC;
+}
+
+int createTarGz(const char *sourceDir, const char *destPath) {
+    if (sourceDir == NULL || destPath == NULL) {
+        return ARCHIVE_FAIL;
+    }
+
+    char tarPath[PathBufSize];
+    snprintf(tarPath, sizeof(tarPath), "%s.tmp.tar", destPath);
+
+    mtar_t tar;
+    if (mtar_open(&tar, tarPath, "w") != MTAR_ESUCCESS) {
+        return ARCHIVE_FAIL;
+    }
+
+    DIR *dir = opendir(sourceDir);
+    if (dir == NULL) {
+        mtar_close(&tar);
+        remove(tarPath);
+        return ARCHIVE_FAIL;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 ||
+            strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        if (addEntryToTar(&tar, sourceDir,
+                          entry->d_name) != ARCHIVE_SUCC) {
+            closedir(dir);
+            mtar_close(&tar);
+            remove(tarPath);
+            return ARCHIVE_FAIL;
+        }
+    }
+    closedir(dir);
+
+    if (mtar_finalize(&tar) != MTAR_ESUCCESS) {
+        mtar_close(&tar);
+        remove(tarPath);
+        return ARCHIVE_FAIL;
+    }
+    mtar_close(&tar);
+
+    gzFile gz = zng_gzopen(destPath, "wb");
+    if (gz == NULL) {
+        remove(tarPath);
+        return ARCHIVE_FAIL;
+    }
+
+    FILE *tarFile = fopen(tarPath, "rb");
+    if (tarFile == NULL) {
+        zng_gzclose(gz);
+        remove(tarPath);
+        return ARCHIVE_FAIL;
+    }
+
+    uint8_t buf[GzBufSize];
+    int bytesRead;
+    while ((bytesRead = (int)fread(buf, 1, sizeof(buf), tarFile)) > 0) {
+        if (zng_gzwrite(gz, buf, (unsigned)bytesRead) != bytesRead) {
+            fclose(tarFile);
+            zng_gzclose(gz);
+            remove(tarPath);
+            return ARCHIVE_FAIL;
+        }
+    }
+    fclose(tarFile);
+    zng_gzclose(gz);
+    remove(tarPath);
+
     return ARCHIVE_SUCC;
 }

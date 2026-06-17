@@ -223,7 +223,7 @@ static void *workerThreadFunc(void *arg) {
         uint32_t seqID = 0;
 
         uint8_t statusOk = DataAuthRespStatusOk;
-        if (packetSendEncryptedData(task.dataFd, MsgDataAuthResp, &seqID,
+        if (packetSendEncrypted(task.dataFd, MsgDataAuthResp, &seqID,
                                     task.dataKey, &statusOk,
                                     sizeof(statusOk)) != PROTOCOL_SUCC) {
             LOG_WARN("Worker: failed to send DataAuthResp for game %u",
@@ -233,7 +233,7 @@ static void *workerThreadFunc(void *arg) {
             continue;
         }
 
-        if (packetSendEncryptedData(task.dataFd, MsgGameMetadata, &seqID,
+        if (packetSendEncrypted(task.dataFd, MsgGameMetadata, &seqID,
                                     task.dataKey, &task.metadata,
                                     sizeof(task.metadata)) != PROTOCOL_SUCC) {
             LOG_WARN("Worker: failed to send GameMetadata for game %u",
@@ -277,7 +277,7 @@ static void *workerThreadFunc(void *arg) {
                 memcpy(pktBuf + sizeof(GameChunkPayload), plainData + offset,
                        chunkSize);
 
-                if (packetSendEncryptedData(task.dataFd, MsgGameChunk, &seqID,
+                if (packetSendEncrypted(task.dataFd, MsgGameChunk, &seqID,
                                             task.dataKey, pktBuf,
                                             pktLen) != PROTOCOL_SUCC) {
                     free(pktBuf);
@@ -326,7 +326,7 @@ static void *workerThreadFunc(void *arg) {
         }
 
         if (transferOk) {
-            packetSendEncryptedData(task.dataFd, MsgGameDownloadDone, &seqID,
+            packetSendEncrypted(task.dataFd, MsgGameDownloadDone, &seqID,
                                     task.dataKey, NULL, 0);
         }
 

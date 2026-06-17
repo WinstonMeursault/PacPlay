@@ -560,7 +560,7 @@ static void *downloadThread(void *arg) {
 
         packetClear(&pkt);
 
-        if (packetSendEncryptedData(ctx->dataFd, MsgGameChunkAck, &dataSeqID,
+        if (packetSendEncrypted(ctx->dataFd, MsgGameChunkAck, &dataSeqID,
                                     ctx->dataKey, &ack,
                                     sizeof(ack)) != PROTOCOL_SUCC) {
             LOG_ERROR("Download thread: failed to send chunk ACK");
@@ -629,8 +629,9 @@ static void *downloadThread(void *arg) {
             if (root != NULL) {
                 const char *gameName = ctx->progress.gameName;
                 const char *gameVersion = ctx->progress.gameVersion;
+                const char *soRelPath = NULL;
 
-                cJSON *nameItem = cJSON_GetObjectItem(root, "name");
+                cJSON *nameItem = cJSON_GetObjectItem(root, "gameName");
                 cJSON *versionItem = cJSON_GetObjectItem(root, "version");
 
                 if (cJSON_IsString(nameItem) &&
@@ -642,7 +643,42 @@ static void *downloadThread(void *arg) {
                     gameVersion = cJSON_GetStringValue(versionItem);
                 }
 
-                addGame(ctx->client, ctx->gameId, gameName, gameDirPath,
+                cJSON *clientSection =
+                    cJSON_GetObjectItem(root, "client");
+                if (clientSection != NULL) {
+                    cJSON *platItem =
+                        cJSON_GetObjectItem(clientSection,
+                                            ctx->progress.platform);
+                    if (platItem != NULL) {
+                        cJSON *lpItem =
+                            cJSON_GetObjectItem(platItem, "libraryPath");
+                        if (cJSON_IsString(lpItem)) {
+                            soRelPath = cJSON_GetStringValue(lpItem);
+                        }
+                    }
+                }
+
+                if (soRelPath == NULL) {
+                    LOG_ERROR("Download thread: libraryPath not found "
+                              "in metadata for platform %s",
+                              ctx->progress.platform);
+                    cJSON_Delete(root);
+                    remove(dlPath);
+                    remove(metaPath);
+                    ctx->progress.status = DlFailed;
+                    goto cleanup;
+                }
+
+                const char *relPath = soRelPath;
+                if (relPath[0] == '.' && relPath[1] == '/') {
+                    relPath += 2;
+                }
+
+                char gameSoPath[PathBufLen];
+                snprintf(gameSoPath, sizeof(gameSoPath), "%s/%s",
+                         gameDirPath, relPath);
+
+                addGame(ctx->client, ctx->gameId, gameName, gameSoPath,
                         gameVersion, ctx->progress.platform, ctx->hash);
                 cJSON_Delete(root);
             }
