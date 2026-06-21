@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 GAME_NAME="Snake"
 VERSION="1.0.0"
 OUTPUT="${PROJECT_ROOT}/bin/${GAME_NAME}_v${VERSION}.tar.gz"

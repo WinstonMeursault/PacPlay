@@ -16,6 +16,7 @@
 #include "server/communication.h"
 #include "server/database.h"
 #include "server/group.h"
+#include "server/onlineTracker.h"
 #include "server/server.h"
 #include "test_utils.h"
 
@@ -65,7 +66,7 @@ static int makeSocketPair(SocketFD pair[2]) {
         pair[1] = NULL_SOCKETFD;
         return -1;
     }
-    enum { SocketTimeoutSec = 30 };
+    enum { SocketTimeoutSec = 2 };
     struct timeval tv = {.tv_sec = SocketTimeoutSec, .tv_usec = 0};
     setsockopt(fds[0], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(fds[1], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
@@ -266,10 +267,12 @@ static void testGroupCreateAndList(void) {
         s.clients = clients;
         s.clientCount = 1;
         s.clientCapacity = 4;
+        s.onlineTrk = onlineTrackerCreate();
 
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairA[0], &csA.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csA), 0);
+        onlineTrackerAdd(s.onlineTrk, csA.currentUser.uid, &csA);
 
         {
             Packet pkt;
@@ -292,6 +295,7 @@ static void testGroupCreateAndList(void) {
         dbClose(userDB);
         dbClose(gdb);
         socketClose(&pairA[0]);
+        onlineTrackerDestroy(s.onlineTrk);
         _exit(0);
     }
 
@@ -400,13 +404,16 @@ static void testGroupJoinAndChat(void) {
         s.clients = clients;
         s.clientCount = 2;
         s.clientCapacity = 4;
+        s.onlineTrk = onlineTrackerCreate();
 
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairA[0], &csA.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairB[0], &csB.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csA), 0);
+        onlineTrackerAdd(s.onlineTrk, csA.currentUser.uid, &csA);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csB), 0);
+        onlineTrackerAdd(s.onlineTrk, csB.currentUser.uid, &csB);
 
         {
             Packet pkt;
@@ -439,6 +446,7 @@ static void testGroupJoinAndChat(void) {
         dbClose(gdb);
         socketClose(&pairA[0]);
         socketClose(&pairB[0]);
+        onlineTrackerDestroy(s.onlineTrk);
         _exit(0);
     }
 
@@ -582,13 +590,16 @@ static void testGroupQuit(void) {
         s.clients = clients;
         s.clientCount = 2;
         s.clientCapacity = 4;
+        s.onlineTrk = onlineTrackerCreate();
 
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairA[0], &csA.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairB[0], &csB.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csA), 0);
+        onlineTrackerAdd(s.onlineTrk, csA.currentUser.uid, &csA);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csB), 0);
+        onlineTrackerAdd(s.onlineTrk, csB.currentUser.uid, &csB);
 
         {
             Packet pkt;
@@ -619,6 +630,7 @@ static void testGroupQuit(void) {
         dbClose(gdb);
         socketClose(&pairA[0]);
         socketClose(&pairB[0]);
+        onlineTrackerDestroy(s.onlineTrk);
         _exit(0);
     }
 
@@ -748,13 +760,16 @@ static void testGroupKickByOwner(void) {
         s.clients = clients;
         s.clientCount = 2;
         s.clientCapacity = 4;
+        s.onlineTrk = onlineTrackerCreate();
 
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairA[0], &csA.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairB[0], &csB.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csA), 0);
+        onlineTrackerAdd(s.onlineTrk, csA.currentUser.uid, &csA);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csB), 0);
+        onlineTrackerAdd(s.onlineTrk, csB.currentUser.uid, &csB);
 
         {
             Packet pkt;
@@ -784,6 +799,7 @@ static void testGroupKickByOwner(void) {
         dbClose(gdb);
         socketClose(&pairA[0]);
         socketClose(&pairB[0]);
+        onlineTrackerDestroy(s.onlineTrk);
         _exit(0);
     }
 
@@ -924,6 +940,7 @@ static void testGroupKickByNonOwnerFails(void) {
         s.clients = clients;
         s.clientCount = 3;
         s.clientCapacity = 4;
+        s.onlineTrk = onlineTrackerCreate();
 
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairA[0], &csA.aesKey),
                       PROTOCOL_SUCC);
@@ -932,8 +949,11 @@ static void testGroupKickByNonOwnerFails(void) {
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairC[0], &csC.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csA), 0);
+        onlineTrackerAdd(s.onlineTrk, csA.currentUser.uid, &csA);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csB), 0);
+        onlineTrackerAdd(s.onlineTrk, csB.currentUser.uid, &csB);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csC), 0);
+        onlineTrackerAdd(s.onlineTrk, csC.currentUser.uid, &csC);
 
         {
             Packet pkt;
@@ -970,6 +990,7 @@ static void testGroupKickByNonOwnerFails(void) {
         socketClose(&pairA[0]);
         socketClose(&pairB[0]);
         socketClose(&pairC[0]);
+        onlineTrackerDestroy(s.onlineTrk);
         _exit(0);
     }
 
@@ -1112,13 +1133,16 @@ static void testGroupDisband(void) {
         s.clients = clients;
         s.clientCount = 2;
         s.clientCapacity = 4;
+        s.onlineTrk = onlineTrackerCreate();
 
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairA[0], &csA.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairB[0], &csB.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csA), 0);
+        onlineTrackerAdd(s.onlineTrk, csA.currentUser.uid, &csA);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csB), 0);
+        onlineTrackerAdd(s.onlineTrk, csB.currentUser.uid, &csB);
 
         {
             Packet pkt;
@@ -1151,6 +1175,7 @@ static void testGroupDisband(void) {
         dbClose(gdb);
         socketClose(&pairA[0]);
         socketClose(&pairB[0]);
+        onlineTrackerDestroy(s.onlineTrk);
         _exit(0);
     }
 
@@ -1273,10 +1298,12 @@ static void testGroupJoinNonexistent(void) {
         s.clients = clients;
         s.clientCount = 1;
         s.clientCapacity = 4;
+        s.onlineTrk = onlineTrackerCreate();
 
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairA[0], &csA.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csA), 0);
+        onlineTrackerAdd(s.onlineTrk, csA.currentUser.uid, &csA);
 
         {
             Packet pkt;
@@ -1289,6 +1316,7 @@ static void testGroupJoinNonexistent(void) {
         dbClose(userDB);
         dbClose(gdb);
         socketClose(&pairA[0]);
+        onlineTrackerDestroy(s.onlineTrk);
         _exit(0);
     }
 
@@ -1362,13 +1390,16 @@ static void testGroupChatBroadcastExcludesSender(void) {
         s.clients = clients;
         s.clientCount = 2;
         s.clientCapacity = 4;
+        s.onlineTrk = onlineTrackerCreate();
 
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairA[0], &csA.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairB[0], &csB.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csA), 0);
+        onlineTrackerAdd(s.onlineTrk, csA.currentUser.uid, &csA);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csB), 0);
+        onlineTrackerAdd(s.onlineTrk, csB.currentUser.uid, &csB);
 
         {
             Packet pkt;
@@ -1397,6 +1428,7 @@ static void testGroupChatBroadcastExcludesSender(void) {
         dbClose(gdb);
         socketClose(&pairA[0]);
         socketClose(&pairB[0]);
+        onlineTrackerDestroy(s.onlineTrk);
         _exit(0);
     }
 
@@ -1523,10 +1555,12 @@ static void testGroupChatHistoryEmpty(void) {
         s.clients = clients;
         s.clientCount = 1;
         s.clientCapacity = 4;
+        s.onlineTrk = onlineTrackerCreate();
 
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairA[0], &csA.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csA), 0);
+        onlineTrackerAdd(s.onlineTrk, csA.currentUser.uid, &csA);
 
         {
             Packet pkt;
@@ -1540,14 +1574,15 @@ static void testGroupChatHistoryEmpty(void) {
             Packet pkt;
             memset(&pkt, 0, sizeof(pkt));
             ASSERT_INT_EQ(serverRecvEncryptedPacket(&csA, &pkt), SERVER_SUCC);
-            ASSERT_INT_EQ(
-                serverHandleGroupChatHistory(&s, &csA, &pkt), SERVER_SUCC);
+            ASSERT_INT_EQ(serverHandleGroupChatHistory(&s, &csA, &pkt),
+                          SERVER_SUCC);
             packetClear(&pkt);
         }
 
         dbClose(userDB);
         dbClose(gdb);
         socketClose(&pairA[0]);
+        onlineTrackerDestroy(s.onlineTrk);
         _exit(0);
     }
 
@@ -1581,10 +1616,9 @@ static void testGroupChatHistoryEmpty(void) {
         req.groupId = groupId;
         req.beforeMsgId = UINT32_MAX;
         req.limit = HistoryDefaultLimit;
-        ASSERT_INT_EQ(
-            sendEnc(pairA[1], &cliKeyA, &seqA, MsgGroupChatHistoryReq, &req,
-                    sizeof(req)),
-            PROTOCOL_SUCC);
+        ASSERT_INT_EQ(sendEnc(pairA[1], &cliKeyA, &seqA, MsgGroupChatHistoryReq,
+                              &req, sizeof(req)),
+                      PROTOCOL_SUCC);
         Packet rpkt;
         memset(&rpkt, 0, sizeof(rpkt));
         ASSERT_INT_EQ(recvDec(pairA[1], &cliKeyA, &rpkt), 0);
@@ -1635,10 +1669,12 @@ static void testGroupChatHistoryBasic(void) {
         s.clients = clients;
         s.clientCount = 1;
         s.clientCapacity = 4;
+        s.onlineTrk = onlineTrackerCreate();
 
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairA[0], &csA.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csA), 0);
+        onlineTrackerAdd(s.onlineTrk, csA.currentUser.uid, &csA);
 
         {
             Packet pkt;
@@ -1664,14 +1700,15 @@ static void testGroupChatHistoryBasic(void) {
             Packet pkt;
             memset(&pkt, 0, sizeof(pkt));
             ASSERT_INT_EQ(serverRecvEncryptedPacket(&csA, &pkt), SERVER_SUCC);
-            ASSERT_INT_EQ(
-                serverHandleGroupChatHistory(&s, &csA, &pkt), SERVER_SUCC);
+            ASSERT_INT_EQ(serverHandleGroupChatHistory(&s, &csA, &pkt),
+                          SERVER_SUCC);
             packetClear(&pkt);
         }
 
         dbClose(userDB);
         dbClose(gdb);
         socketClose(&pairA[0]);
+        onlineTrackerDestroy(s.onlineTrk);
         _exit(0);
     }
 
@@ -1705,10 +1742,9 @@ static void testGroupChatHistoryBasic(void) {
         req.groupId = groupId;
         req.beforeMsgId = UINT32_MAX;
         req.limit = HistoryDefaultLimit;
-        ASSERT_INT_EQ(
-            sendEnc(pairA[1], &cliKeyA, &seqA, MsgGroupChatHistoryReq, &req,
-                    sizeof(req)),
-            PROTOCOL_SUCC);
+        ASSERT_INT_EQ(sendEnc(pairA[1], &cliKeyA, &seqA, MsgGroupChatHistoryReq,
+                              &req, sizeof(req)),
+                      PROTOCOL_SUCC);
         Packet rpkt;
         memset(&rpkt, 0, sizeof(rpkt));
         ASSERT_INT_EQ(recvDec(pairA[1], &cliKeyA, &rpkt), 0);
@@ -1723,8 +1759,7 @@ static void testGroupChatHistoryBasic(void) {
         /* Verify messages are in chronological (ASC) order */
         uint8_t *cursor = rpkt.payload + sizeof(uint32_t);
         for (uint32_t i = 0; i < count; i++) {
-            GroupChatBroadcastPayload *gc =
-                (GroupChatBroadcastPayload *)cursor;
+            GroupChatBroadcastPayload *gc = (GroupChatBroadcastPayload *)cursor;
             ASSERT_UINT_EQ(gc->uid, UidAlice);
             size_t msgLen = strlen((const char *)gc->message) + 1;
             (void)msgLen;
@@ -1773,10 +1808,12 @@ static void testGroupChatHistoryLimit(void) {
         s.clients = clients;
         s.clientCount = 1;
         s.clientCapacity = 4;
+        s.onlineTrk = onlineTrackerCreate();
 
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairA[0], &csA.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csA), 0);
+        onlineTrackerAdd(s.onlineTrk, csA.currentUser.uid, &csA);
 
         {
             Packet pkt;
@@ -1787,29 +1824,30 @@ static void testGroupChatHistoryLimit(void) {
         }
 
         uint32_t groupId = csA.currentGroupId;
-        ASSERT_INT_EQ(
-            groupStoreChat(gdb, groupId, UidAlice, "A", 1000, NULL), DB_SUCC);
-        ASSERT_INT_EQ(
-            groupStoreChat(gdb, groupId, UidAlice, "B", 2000, NULL), DB_SUCC);
-        ASSERT_INT_EQ(
-            groupStoreChat(gdb, groupId, UidAlice, "C", 3000, NULL), DB_SUCC);
-        ASSERT_INT_EQ(
-            groupStoreChat(gdb, groupId, UidAlice, "D", 4000, NULL), DB_SUCC);
-        ASSERT_INT_EQ(
-            groupStoreChat(gdb, groupId, UidAlice, "E", 5000, NULL), DB_SUCC);
+        ASSERT_INT_EQ(groupStoreChat(gdb, groupId, UidAlice, "A", 1000, NULL),
+                      DB_SUCC);
+        ASSERT_INT_EQ(groupStoreChat(gdb, groupId, UidAlice, "B", 2000, NULL),
+                      DB_SUCC);
+        ASSERT_INT_EQ(groupStoreChat(gdb, groupId, UidAlice, "C", 3000, NULL),
+                      DB_SUCC);
+        ASSERT_INT_EQ(groupStoreChat(gdb, groupId, UidAlice, "D", 4000, NULL),
+                      DB_SUCC);
+        ASSERT_INT_EQ(groupStoreChat(gdb, groupId, UidAlice, "E", 5000, NULL),
+                      DB_SUCC);
 
         {
             Packet pkt;
             memset(&pkt, 0, sizeof(pkt));
             ASSERT_INT_EQ(serverRecvEncryptedPacket(&csA, &pkt), SERVER_SUCC);
-            ASSERT_INT_EQ(
-                serverHandleGroupChatHistory(&s, &csA, &pkt), SERVER_SUCC);
+            ASSERT_INT_EQ(serverHandleGroupChatHistory(&s, &csA, &pkt),
+                          SERVER_SUCC);
             packetClear(&pkt);
         }
 
         dbClose(userDB);
         dbClose(gdb);
         socketClose(&pairA[0]);
+        onlineTrackerDestroy(s.onlineTrk);
         _exit(0);
     }
 
@@ -1843,10 +1881,9 @@ static void testGroupChatHistoryLimit(void) {
         req.groupId = groupId;
         req.beforeMsgId = UINT32_MAX;
         req.limit = 2;
-        ASSERT_INT_EQ(
-            sendEnc(pairA[1], &cliKeyA, &seqA, MsgGroupChatHistoryReq, &req,
-                    sizeof(req)),
-            PROTOCOL_SUCC);
+        ASSERT_INT_EQ(sendEnc(pairA[1], &cliKeyA, &seqA, MsgGroupChatHistoryReq,
+                              &req, sizeof(req)),
+                      PROTOCOL_SUCC);
         Packet rpkt;
         memset(&rpkt, 0, sizeof(rpkt));
         ASSERT_INT_EQ(recvDec(pairA[1], &cliKeyA, &rpkt), 0);
@@ -1897,10 +1934,12 @@ static void testGroupChatHistoryPagination(void) {
         s.clients = clients;
         s.clientCount = 1;
         s.clientCapacity = 4;
+        s.onlineTrk = onlineTrackerCreate();
 
         ASSERT_INT_EQ(serverDoKeyExchangeOnFd(pairA[0], &csA.aesKey),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverSetupLogin(&s, &csA), 0);
+        onlineTrackerAdd(s.onlineTrk, csA.currentUser.uid, &csA);
 
         {
             Packet pkt;
@@ -1916,36 +1955,36 @@ static void testGroupChatHistoryPagination(void) {
          * handler reverses to ASC. */
         uint32_t groupId = csA.currentGroupId;
         uint64_t msgIds[TestBatchMsgCount];
-        ASSERT_INT_EQ(groupStoreChat(gdb, groupId, UidAlice, "0", 1000,
-                                     &msgIds[0]),
-                      DB_SUCC);
-        ASSERT_INT_EQ(groupStoreChat(gdb, groupId, UidAlice, "1", 2000,
-                                     &msgIds[1]),
-                      DB_SUCC);
-        ASSERT_INT_EQ(groupStoreChat(gdb, groupId, UidAlice, "2", 3000,
-                                     &msgIds[2]),
-                      DB_SUCC);
-        ASSERT_INT_EQ(groupStoreChat(gdb, groupId, UidAlice, "3", 4000,
-                                     &msgIds[3]),
-                      DB_SUCC);
-        ASSERT_INT_EQ(groupStoreChat(gdb, groupId, UidAlice, "4", 5000,
-                                     &msgIds[4]),
-                      DB_SUCC);
-        ASSERT_INT_EQ(groupStoreChat(gdb, groupId, UidAlice, "5", 6000,
-                                     &msgIds[5]),
-                      DB_SUCC);
-        ASSERT_INT_EQ(groupStoreChat(gdb, groupId, UidAlice, "6", 7000,
-                                     &msgIds[6]),
-                      DB_SUCC);
-        ASSERT_INT_EQ(groupStoreChat(gdb, groupId, UidAlice, "7", 8000,
-                                     &msgIds[7]),
-                      DB_SUCC);
-        ASSERT_INT_EQ(groupStoreChat(gdb, groupId, UidAlice, "8", 9000,
-                                     &msgIds[8]),
-                      DB_SUCC);
-        ASSERT_INT_EQ(groupStoreChat(gdb, groupId, UidAlice, "9", 10000,
-                                     &msgIds[9]),
-                      DB_SUCC);
+        ASSERT_INT_EQ(
+            groupStoreChat(gdb, groupId, UidAlice, "0", 1000, &msgIds[0]),
+            DB_SUCC);
+        ASSERT_INT_EQ(
+            groupStoreChat(gdb, groupId, UidAlice, "1", 2000, &msgIds[1]),
+            DB_SUCC);
+        ASSERT_INT_EQ(
+            groupStoreChat(gdb, groupId, UidAlice, "2", 3000, &msgIds[2]),
+            DB_SUCC);
+        ASSERT_INT_EQ(
+            groupStoreChat(gdb, groupId, UidAlice, "3", 4000, &msgIds[3]),
+            DB_SUCC);
+        ASSERT_INT_EQ(
+            groupStoreChat(gdb, groupId, UidAlice, "4", 5000, &msgIds[4]),
+            DB_SUCC);
+        ASSERT_INT_EQ(
+            groupStoreChat(gdb, groupId, UidAlice, "5", 6000, &msgIds[5]),
+            DB_SUCC);
+        ASSERT_INT_EQ(
+            groupStoreChat(gdb, groupId, UidAlice, "6", 7000, &msgIds[6]),
+            DB_SUCC);
+        ASSERT_INT_EQ(
+            groupStoreChat(gdb, groupId, UidAlice, "7", 8000, &msgIds[7]),
+            DB_SUCC);
+        ASSERT_INT_EQ(
+            groupStoreChat(gdb, groupId, UidAlice, "8", 9000, &msgIds[8]),
+            DB_SUCC);
+        ASSERT_INT_EQ(
+            groupStoreChat(gdb, groupId, UidAlice, "9", 10000, &msgIds[9]),
+            DB_SUCC);
 
         (void)msgIds;
 
@@ -1953,14 +1992,24 @@ static void testGroupChatHistoryPagination(void) {
             Packet pkt;
             memset(&pkt, 0, sizeof(pkt));
             ASSERT_INT_EQ(serverRecvEncryptedPacket(&csA, &pkt), SERVER_SUCC);
-            ASSERT_INT_EQ(
-                serverHandleGroupChatHistory(&s, &csA, &pkt), SERVER_SUCC);
+            ASSERT_INT_EQ(serverHandleGroupChatHistory(&s, &csA, &pkt),
+                          SERVER_SUCC);
+            packetClear(&pkt);
+        }
+
+        {
+            Packet pkt;
+            memset(&pkt, 0, sizeof(pkt));
+            ASSERT_INT_EQ(serverRecvEncryptedPacket(&csA, &pkt), SERVER_SUCC);
+            ASSERT_INT_EQ(serverHandleGroupChatHistory(&s, &csA, &pkt),
+                          SERVER_SUCC);
             packetClear(&pkt);
         }
 
         dbClose(userDB);
         dbClose(gdb);
         socketClose(&pairA[0]);
+        onlineTrackerDestroy(s.onlineTrk);
         _exit(0);
     }
 
@@ -1995,10 +2044,9 @@ static void testGroupChatHistoryPagination(void) {
         req.groupId = groupId;
         req.beforeMsgId = UINT32_MAX;
         req.limit = HistoryDefaultLimit;
-        ASSERT_INT_EQ(
-            sendEnc(pairA[1], &cliKeyA, &seqA, MsgGroupChatHistoryReq, &req,
-                    sizeof(req)),
-            PROTOCOL_SUCC);
+        ASSERT_INT_EQ(sendEnc(pairA[1], &cliKeyA, &seqA, MsgGroupChatHistoryReq,
+                              &req, sizeof(req)),
+                      PROTOCOL_SUCC);
         Packet rpkt;
         memset(&rpkt, 0, sizeof(rpkt));
         ASSERT_INT_EQ(recvDec(pairA[1], &cliKeyA, &rpkt), 0);
@@ -2013,8 +2061,7 @@ static void testGroupChatHistoryPagination(void) {
         uint32_t midMsgId = 0;
         uint8_t *cursor = rpkt.payload + sizeof(uint32_t);
         for (uint32_t i = 0; i < count; i++) {
-            GroupChatBroadcastPayload *gc =
-                (GroupChatBroadcastPayload *)cursor;
+            GroupChatBroadcastPayload *gc = (GroupChatBroadcastPayload *)cursor;
             if (i == TestPageBeforeIdx) {
                 midMsgId = gc->msgId;
             }
@@ -2032,10 +2079,9 @@ static void testGroupChatHistoryPagination(void) {
         req2.groupId = groupId;
         req2.beforeMsgId = midMsgId;
         req2.limit = HistoryDefaultLimit;
-        ASSERT_INT_EQ(
-            sendEnc(pairA[1], &cliKeyA, &seqA, MsgGroupChatHistoryReq, &req2,
-                    sizeof(req2)),
-            PROTOCOL_SUCC);
+        ASSERT_INT_EQ(sendEnc(pairA[1], &cliKeyA, &seqA, MsgGroupChatHistoryReq,
+                              &req2, sizeof(req2)),
+                      PROTOCOL_SUCC);
         Packet rpkt2;
         memset(&rpkt2, 0, sizeof(rpkt2));
         ASSERT_INT_EQ(recvDec(pairA[1], &cliKeyA, &rpkt2), 0);

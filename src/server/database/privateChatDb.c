@@ -37,7 +37,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ──────────────────────── named bind-parameter indices ───────────────────── */
+/* ──────────────────────── named bind-parameter indices ─────────────────────
+ */
 
 enum {
     PrivateChatStoreParamCount = 5,
@@ -85,7 +86,8 @@ int initPrivateChatDBSchema(sqlite3 *dbHandle) {
     if (dbExec(dbHandle, SQL_IDX_PM_FROM_TO_TS, "CREATE idx_pm_from_to_ts") !=
         DB_SUCC)
         return DB_FAIL;
-    return dbExec(dbHandle, SQL_IDX_PM_TO_DELIVERED, "CREATE idx_pm_to_delivered");
+    return dbExec(dbHandle, SQL_IDX_PM_TO_DELIVERED,
+                  "CREATE idx_pm_to_delivered");
 }
 
 /* ──────────────────────── message ID generation ─────────────────────────── */
@@ -119,7 +121,8 @@ int privateChatStore(DB *database, uint32_t fromUid, uint32_t toUid,
                      uint32_t *outMsgId) {
     if (database == NULL || database->type != PrivateChatDB) {
         LOG_ERROR("privateChatStore: invalid database (db=%p, type=%d)",
-                  (void *)database, database != NULL ? (int)database->type : -1);
+                  (void *)database,
+                  database != NULL ? (int)database->type : -1);
         return DB_FAIL;
     }
     if (message == NULL || message[0] == '\0') {
@@ -175,7 +178,8 @@ int privateChatStore(DB *database, uint32_t fromUid, uint32_t toUid,
         return DB_FAIL;
     }
 
-    rc = sqlite3_bind_int64(stmt, PrivateChatStoreParamCount, (sqlite3_int64)timestamp);
+    rc = sqlite3_bind_int64(stmt, PrivateChatStoreParamCount,
+                            (sqlite3_int64)timestamp);
     if (rc != SQLITE_OK) {
         LOG_ERROR("privateChatStore: bind timestamp failed: %s (rc=%d)",
                   sqlite3_errmsg(database->handle), rc);
@@ -217,10 +221,9 @@ int privateChatDeliverPending(DB *database, uint32_t toUid, Chat **out,
     *out = NULL;
     *count = 0;
 
-    const char *sql =
-        "SELECT msgId, fromUid, toUid, message, timestamp "
-        "FROM private_messages "
-        "WHERE toUid=? AND delivered=0 ORDER BY msgId ASC;";
+    const char *sql = "SELECT msgId, fromUid, toUid, message, timestamp "
+                      "FROM private_messages "
+                      "WHERE toUid=? AND delivered=0 ORDER BY msgId ASC;";
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(database->handle, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
@@ -317,9 +320,8 @@ int privateChatDeliverPending(DB *database, uint32_t toUid, Chat **out,
     sqlite3_finalize(stmt);
 
     /* Mark fetched messages as delivered */
-    const char *upd =
-        "UPDATE private_messages SET delivered=1 "
-        "WHERE toUid=? AND delivered=0;";
+    const char *upd = "UPDATE private_messages SET delivered=1 "
+                      "WHERE toUid=? AND delivered=0;";
     rc = sqlite3_prepare_v2(database->handle, upd, -1, &stmt, NULL);
     if (rc == SQLITE_OK) {
         sqlite3_bind_int64(stmt, 1, (sqlite3_int64)toUid);
@@ -370,7 +372,7 @@ int privateChatHistory(DB *database, uint32_t uidA, uint32_t uidB,
         "SELECT msgId, fromUid, toUid, message, timestamp "
         "FROM private_messages "
         "WHERE ((fromUid=? AND toUid=?) OR (fromUid=? AND toUid=?)) "
-        "AND msgId < ? ORDER BY msgId ASC LIMIT ?;";
+        "AND msgId < ? ORDER BY msgId DESC LIMIT ?;";
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(database->handle, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
@@ -411,8 +413,8 @@ int privateChatHistory(DB *database, uint32_t uidA, uint32_t uidB,
         return DB_FAIL;
     }
 
-    sqlite3_int64 beforeId =
-        (beforeMsgId == 0) ? (sqlite3_int64)INT64_MAX : (sqlite3_int64)beforeMsgId;
+    sqlite3_int64 beforeId = (beforeMsgId == 0) ? (sqlite3_int64)INT64_MAX
+                                                : (sqlite3_int64)beforeMsgId;
     rc = sqlite3_bind_int64(stmt, PrivateChatStoreParamCount, beforeId);
     if (rc != SQLITE_OK) {
         LOG_ERROR("privateChatHistory: bind beforeMsgId failed: %s (rc=%d)",
@@ -421,7 +423,8 @@ int privateChatHistory(DB *database, uint32_t uidA, uint32_t uidB,
         return DB_FAIL;
     }
 
-    rc = sqlite3_bind_int64(stmt, PrivateChatHistoryParamCount, (sqlite3_int64)limit);
+    rc = sqlite3_bind_int64(stmt, PrivateChatHistoryParamCount,
+                            (sqlite3_int64)limit);
     if (rc != SQLITE_OK) {
         LOG_ERROR("privateChatHistory: bind limit failed: %s (rc=%d)",
                   sqlite3_errmsg(database->handle), rc);

@@ -85,7 +85,7 @@ static int makeSocketPair(SocketFD pair[2]) {
         pair[1] = NULL_SOCKETFD;
         return -1;
     }
-    enum { SocketTimeoutSec = 30 };
+    enum { SocketTimeoutSec = 2 };
     struct timeval tv = {.tv_sec = SocketTimeoutSec, .tv_usec = 0};
     setsockopt(fds[0], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(fds[1], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
@@ -174,9 +174,11 @@ static void testFriendRequestWithoutLogin(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.friendDB = friendDB;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession cs;
     setupSession(&cs, pair[0], 0);
+    onlineTrackerAdd(s.onlineTrk, 0, &cs);
 
     s.clients = calloc(1, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -201,6 +203,7 @@ static void testFriendRequestWithoutLogin(void) {
     socketClose(&pair[0]);
     socketClose(&pair[1]);
     OPENSSL_cleanse(&cs.aesKey, sizeof(cs.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(friendDB);
 }
@@ -289,9 +292,11 @@ static void testGroupCreateWithoutLogin(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.groupDB = gdb;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession cs;
     setupSession(&cs, pair[0], 0);
+    onlineTrackerAdd(s.onlineTrk, 0, &cs);
 
     s.clients = calloc(1, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -317,13 +322,13 @@ static void testGroupCreateWithoutLogin(void) {
     ASSERT_INT_EQ(serverHandleGroupCreate(&s, &cs, &req), SERVER_SUCC);
     packetClear(&req);
 
-    ASSERT_INT_EQ(
-        recvStatus(pair[1], cs.aesKey.key, MsgGroupCreateResp), 1);
+    ASSERT_INT_EQ(recvStatus(pair[1], cs.aesKey.key, MsgGroupCreateResp), 1);
 
     free(s.clients);
     socketClose(&pair[0]);
     socketClose(&pair[1]);
     OPENSSL_cleanse(&cs.aesKey, sizeof(cs.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(gdb);
 }
@@ -346,10 +351,13 @@ static void testGroupKickAsNonOwner(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.groupDB = gdb;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession csA, csB;
     setupSession(&csA, pairA[0], UidAlice);
     setupSession(&csB, pairB[0], UidBob);
+    onlineTrackerAdd(s.onlineTrk, UidAlice, &csA);
+    onlineTrackerAdd(s.onlineTrk, UidBob, &csB);
 
     s.clients = calloc(2, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -430,6 +438,7 @@ static void testGroupKickAsNonOwner(void) {
     socketClose(&pairB[1]);
     OPENSSL_cleanse(&csA.aesKey, sizeof(csA.aesKey));
     OPENSSL_cleanse(&csB.aesKey, sizeof(csB.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(gdb);
 }
@@ -452,10 +461,13 @@ static void testGroupDisbandAsNonOwner(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.groupDB = gdb;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession csA, csB;
     setupSession(&csA, pairA[0], UidAlice);
     setupSession(&csB, pairB[0], UidBob);
+    onlineTrackerAdd(s.onlineTrk, UidAlice, &csA);
+    onlineTrackerAdd(s.onlineTrk, UidBob, &csB);
 
     s.clients = calloc(2, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -495,16 +507,14 @@ static void testGroupDisbandAsNonOwner(void) {
                                  sizeof(op)),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverHandleGroupDisband(&s, &csB, &req), SERVER_SUCC);
-        ASSERT_INT_EQ(
-            recvStatus(pairB[1], csB.aesKey.key, MsgGroupDisbandResp),
-            1);
+        ASSERT_INT_EQ(recvStatus(pairB[1], csB.aesKey.key, MsgGroupDisbandResp),
+                      1);
         packetClear(&req);
     }
 
     /* Verify group still exists — Alice can still join herself
      * (she's already a member, so join should fail as duplicate) */
-    ASSERT_INT_EQ(
-        groupIsMember(s.groupDB, groupId, UidAlice), DB_SUCC);
+    ASSERT_INT_EQ(groupIsMember(s.groupDB, groupId, UidAlice), DB_SUCC);
 
     free(s.clients);
     socketClose(&pairA[0]);
@@ -513,6 +523,7 @@ static void testGroupDisbandAsNonOwner(void) {
     socketClose(&pairB[1]);
     OPENSSL_cleanse(&csA.aesKey, sizeof(csA.aesKey));
     OPENSSL_cleanse(&csB.aesKey, sizeof(csB.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(gdb);
 }
@@ -582,8 +593,7 @@ static void testSendMessageAsOtherUser(void) {
         ASSERT_INT_EQ(recvDec(pairB[1], csB.aesKey.key, &rpkt), 0);
         ASSERT_INT_EQ(rpkt.header.messageType, MsgPrivateChatBroadcast);
 
-        const PrivateChatPayload *bc =
-            (const PrivateChatPayload *)rpkt.payload;
+        const PrivateChatPayload *bc = (const PrivateChatPayload *)rpkt.payload;
         ASSERT_UINT_EQ(bc->fromUid, UidAlice);
         ASSERT_UINT_EQ(bc->toUid, UidBob);
         packetClear(&rpkt);
@@ -630,10 +640,13 @@ static void testGroupChatSpoofUid(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.groupDB = gdb;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession csA, csB;
     setupSession(&csA, pairA[0], UidAlice);
     setupSession(&csB, pairB[0], UidBob);
+    onlineTrackerAdd(s.onlineTrk, UidAlice, &csA);
+    onlineTrackerAdd(s.onlineTrk, UidBob, &csB);
 
     s.clients = calloc(2, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -725,6 +738,7 @@ static void testGroupChatSpoofUid(void) {
     socketClose(&pairB[1]);
     OPENSSL_cleanse(&csA.aesKey, sizeof(csA.aesKey));
     OPENSSL_cleanse(&csB.aesKey, sizeof(csB.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(gdb);
 }
@@ -748,9 +762,11 @@ static void testFriendRequestWithZeroUid(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.friendDB = friendDB;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession cs;
     setupSession(&cs, pair[0], UidAlice);
+    onlineTrackerAdd(s.onlineTrk, UidAlice, &cs);
 
     s.clients = calloc(1, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -775,6 +791,7 @@ static void testFriendRequestWithZeroUid(void) {
     socketClose(&pair[0]);
     socketClose(&pair[1]);
     OPENSSL_cleanse(&cs.aesKey, sizeof(cs.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(friendDB);
 }
@@ -796,9 +813,11 @@ static void testFriendRequestWithMaxUid(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.friendDB = friendDB;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession cs;
     setupSession(&cs, pair[0], UidAlice);
+    onlineTrackerAdd(s.onlineTrk, UidAlice, &cs);
 
     s.clients = calloc(1, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -824,6 +843,7 @@ static void testFriendRequestWithMaxUid(void) {
     socketClose(&pair[0]);
     socketClose(&pair[1]);
     OPENSSL_cleanse(&cs.aesKey, sizeof(cs.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(friendDB);
 }
@@ -845,9 +865,11 @@ static void testGroupCreateEmptyName(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.groupDB = gdb;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession cs;
     setupSession(&cs, pair[0], UidAlice);
+    onlineTrackerAdd(s.onlineTrk, UidAlice, &cs);
 
     s.clients = calloc(1, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -874,13 +896,13 @@ static void testGroupCreateEmptyName(void) {
     ASSERT_INT_EQ(serverHandleGroupCreate(&s, &cs, &req), SERVER_SUCC);
     packetClear(&req);
 
-    ASSERT_INT_EQ(
-        recvStatus(pair[1], cs.aesKey.key, MsgGroupCreateResp), 1);
+    ASSERT_INT_EQ(recvStatus(pair[1], cs.aesKey.key, MsgGroupCreateResp), 1);
 
     free(s.clients);
     socketClose(&pair[0]);
     socketClose(&pair[1]);
     OPENSSL_cleanse(&cs.aesKey, sizeof(cs.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(gdb);
 }
@@ -902,9 +924,11 @@ static void testGroupCreateOverlongName(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.groupDB = gdb;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession cs;
     setupSession(&cs, pair[0], UidAlice);
+    onlineTrackerAdd(s.onlineTrk, UidAlice, &cs);
 
     s.clients = calloc(1, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -920,10 +944,9 @@ static void testGroupCreateOverlongName(void) {
 
     Packet req;
     memset(&req, 0, sizeof(req));
-    ASSERT_INT_EQ(
-        packetInit(&req, MsgGroupCreate, 0, PlaintextPacket, overlong,
-                   OverLongLen),
-        PROTOCOL_SUCC);
+    ASSERT_INT_EQ(packetInit(&req, MsgGroupCreate, 0, PlaintextPacket, overlong,
+                             OverLongLen),
+                  PROTOCOL_SUCC);
     ASSERT_INT_EQ(serverHandleGroupCreate(&s, &cs, &req), SERVER_SUCC);
     packetClear(&req);
 
@@ -933,6 +956,7 @@ static void testGroupCreateOverlongName(void) {
     socketClose(&pair[0]);
     socketClose(&pair[1]);
     OPENSSL_cleanse(&cs.aesKey, sizeof(cs.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(gdb);
 }
@@ -985,8 +1009,8 @@ static void testPrivateChatOversizedMessage(void) {
 
     Packet req;
     memset(&req, 0, sizeof(req));
-    int initRet =
-        packetInit(&req, MsgPrivateChat, 0, PlaintextPacket, buf, MAX_PAYLOAD_LEN);
+    int initRet = packetInit(&req, MsgPrivateChat, 0, PlaintextPacket, buf,
+                             MAX_PAYLOAD_LEN);
     free(buf);
     ASSERT_INT_EQ(initRet, PROTOCOL_SUCC);
 
@@ -1020,9 +1044,11 @@ static void testGroupChatOversizedMessage(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.groupDB = gdb;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession cs;
     setupSession(&cs, pair[0], UidAlice);
+    onlineTrackerAdd(s.onlineTrk, UidAlice, &cs);
 
     s.clients = calloc(1, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -1049,9 +1075,7 @@ static void testGroupChatOversizedMessage(void) {
     }
 
     /* Build oversized group chat message */
-    enum {
-        GroupChatFixedLen = sizeof(uint32_t) + sizeof(int64_t)
-    };
+    enum { GroupChatFixedLen = sizeof(uint32_t) + sizeof(int64_t) };
     size_t msgLen = MAX_PAYLOAD_LEN - GroupChatFixedLen;
     uint8_t *buf = calloc(1, MAX_PAYLOAD_LEN);
     ASSERT_NOT_NULL(buf);
@@ -1063,8 +1087,8 @@ static void testGroupChatOversizedMessage(void) {
 
     Packet req;
     memset(&req, 0, sizeof(req));
-    int initRet =
-        packetInit(&req, MsgGroupChat, 0, PlaintextPacket, buf, MAX_PAYLOAD_LEN);
+    int initRet = packetInit(&req, MsgGroupChat, 0, PlaintextPacket, buf,
+                             MAX_PAYLOAD_LEN);
     free(buf);
     ASSERT_INT_EQ(initRet, PROTOCOL_SUCC);
 
@@ -1076,6 +1100,7 @@ static void testGroupChatOversizedMessage(void) {
     socketClose(&pair[0]);
     socketClose(&pair[1]);
     OPENSSL_cleanse(&cs.aesKey, sizeof(cs.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(gdb);
 }
@@ -1097,9 +1122,11 @@ static void testGroupNameWithNullBytes(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.groupDB = gdb;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession cs;
     setupSession(&cs, pair[0], UidAlice);
+    onlineTrackerAdd(s.onlineTrk, UidAlice, &cs);
 
     s.clients = calloc(1, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -1141,6 +1168,7 @@ static void testGroupNameWithNullBytes(void) {
     socketClose(&pair[0]);
     socketClose(&pair[1]);
     OPENSSL_cleanse(&cs.aesKey, sizeof(cs.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(gdb);
 }
@@ -1239,10 +1267,13 @@ static void testDoubleFriendAccept(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.friendDB = friendDB;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession csA, csB;
     setupSession(&csA, pairA[0], UidAlice);
     setupSession(&csB, pairB[0], UidBob);
+    onlineTrackerAdd(s.onlineTrk, UidAlice, &csA);
+    onlineTrackerAdd(s.onlineTrk, UidBob, &csB);
 
     s.clients = calloc(2, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -1281,8 +1312,8 @@ static void testDoubleFriendAccept(void) {
         ASSERT_INT_EQ(serverHandleFriendAccept(&s, &csB, &req), SERVER_SUCC);
         packetClear(&req);
 
-        ASSERT_INT_EQ(
-            recvStatus(pairB[1], csB.aesKey.key, MsgFriendAcceptResp), 0);
+        ASSERT_INT_EQ(recvStatus(pairB[1], csB.aesKey.key, MsgFriendAcceptResp),
+                      0);
     }
 
     /* Drain friend notifies */
@@ -1310,8 +1341,8 @@ static void testDoubleFriendAccept(void) {
         ASSERT_INT_EQ(serverHandleFriendAccept(&s, &csB, &req), SERVER_SUCC);
         packetClear(&req);
 
-        ASSERT_INT_EQ(
-            recvStatus(pairB[1], csB.aesKey.key, MsgFriendAcceptResp), 0);
+        ASSERT_INT_EQ(recvStatus(pairB[1], csB.aesKey.key, MsgFriendAcceptResp),
+                      0);
     }
 
     free(s.clients);
@@ -1321,6 +1352,7 @@ static void testDoubleFriendAccept(void) {
     socketClose(&pairB[1]);
     OPENSSL_cleanse(&csA.aesKey, sizeof(csA.aesKey));
     OPENSSL_cleanse(&csB.aesKey, sizeof(csB.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(friendDB);
 }
@@ -1343,10 +1375,13 @@ static void testFriendRequestToAlreadyFriend(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.friendDB = friendDB;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession csA, csB;
     setupSession(&csA, pairA[0], UidAlice);
     setupSession(&csB, pairB[0], UidBob);
+    onlineTrackerAdd(s.onlineTrk, UidAlice, &csA);
+    onlineTrackerAdd(s.onlineTrk, UidBob, &csB);
 
     s.clients = calloc(2, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -1415,6 +1450,7 @@ static void testFriendRequestToAlreadyFriend(void) {
     socketClose(&pairB[1]);
     OPENSSL_cleanse(&csA.aesKey, sizeof(csA.aesKey));
     OPENSSL_cleanse(&csB.aesKey, sizeof(csB.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(friendDB);
 }
@@ -1437,10 +1473,13 @@ static void testGroupJoinTwice(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.groupDB = gdb;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession csA, csB;
     setupSession(&csA, pairA[0], UidAlice);
     setupSession(&csB, pairB[0], UidBob);
+    onlineTrackerAdd(s.onlineTrk, UidAlice, &csA);
+    onlineTrackerAdd(s.onlineTrk, UidBob, &csB);
 
     s.clients = calloc(2, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -1513,6 +1552,7 @@ static void testGroupJoinTwice(void) {
     socketClose(&pairB[1]);
     OPENSSL_cleanse(&csA.aesKey, sizeof(csA.aesKey));
     OPENSSL_cleanse(&csB.aesKey, sizeof(csB.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(gdb);
 }
@@ -1534,9 +1574,11 @@ static void testGroupDisbandTwice(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.groupDB = gdb;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession cs;
     setupSession(&cs, pair[0], UidAlice);
+    onlineTrackerAdd(s.onlineTrk, UidAlice, &cs);
 
     s.clients = calloc(1, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -1573,15 +1615,19 @@ static void testGroupDisbandTwice(void) {
         packetClear(&req);
     }
 
-    /* Drain MsgGroupDisbandNotify */
+    /* Drain MsgGroupDisbandNotify + the first MsgGroupDisbandResp */
     {
         Packet drain;
         memset(&drain, 0, sizeof(drain));
         recvDec(pair[1], cs.aesKey.key, &drain);
         packetClear(&drain);
+        memset(&drain, 0, sizeof(drain));
+        recvDec(pair[1], cs.aesKey.key, &drain);
+        packetClear(&drain);
     }
 
-    /* Second disband — group doesn't exist, returns SERVER_SUCC with failure status */
+    /* Second disband — group doesn't exist, returns SERVER_SUCC with failure
+     * status */
     {
         GroupOpPayload op;
         memset(&op, 0, sizeof(op));
@@ -1592,9 +1638,8 @@ static void testGroupDisbandTwice(void) {
                                  sizeof(op)),
                       PROTOCOL_SUCC);
         ASSERT_INT_EQ(serverHandleGroupDisband(&s, &cs, &req), SERVER_SUCC);
-        ASSERT_INT_EQ(
-            recvStatus(pair[1], cs.aesKey.key, MsgGroupDisbandResp),
-            1);
+        ASSERT_INT_EQ(recvStatus(pair[1], cs.aesKey.key, MsgGroupDisbandResp),
+                      1);
         packetClear(&req);
     }
 
@@ -1602,6 +1647,7 @@ static void testGroupDisbandTwice(void) {
     socketClose(&pair[0]);
     socketClose(&pair[1]);
     OPENSSL_cleanse(&cs.aesKey, sizeof(cs.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(gdb);
 }
@@ -1623,9 +1669,11 @@ static void testKickNonexistentMember(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.groupDB = gdb;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession cs;
     setupSession(&cs, pair[0], UidAlice);
+    onlineTrackerAdd(s.onlineTrk, UidAlice, &cs);
 
     s.clients = calloc(1, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -1669,6 +1717,7 @@ static void testKickNonexistentMember(void) {
     socketClose(&pair[0]);
     socketClose(&pair[1]);
     OPENSSL_cleanse(&cs.aesKey, sizeof(cs.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(gdb);
 }
@@ -1692,9 +1741,11 @@ static void testFriendRequestRapidFire(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.friendDB = friendDB;
+    s.onlineTrk = onlineTrackerCreate();
 
     ClientSession cs;
     setupSession(&cs, pair[0], UidAlice);
+    onlineTrackerAdd(s.onlineTrk, UidAlice, &cs);
 
     s.clients = calloc(1, sizeof(ClientSession *));
     ASSERT_NOT_NULL(s.clients);
@@ -1719,8 +1770,7 @@ static void testFriendRequestRapidFire(void) {
         ASSERT_INT_EQ(serverHandleFriendRequest(&s, &cs, &req), SERVER_SUCC);
         packetClear(&req);
 
-        int status =
-            recvStatus(pair[1], cs.aesKey.key, MsgFriendRequestResp);
+        int status = recvStatus(pair[1], cs.aesKey.key, MsgFriendRequestResp);
         ASSERT_TRUE(status >= 0);
     }
 
@@ -1728,6 +1778,7 @@ static void testFriendRequestRapidFire(void) {
     socketClose(&pair[0]);
     socketClose(&pair[1]);
     OPENSSL_cleanse(&cs.aesKey, sizeof(cs.aesKey));
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(friendDB);
 }
@@ -1746,6 +1797,7 @@ static void testGroupJoinAtLimit(void) {
     memset(&s, 0, sizeof(s));
     s.userDB = userDB;
     s.groupDB = gdb;
+    s.onlineTrk = onlineTrackerCreate();
 
     enum { TestClientCount = MaxGroupMembers + 2 };
     ClientSession *sessions =
@@ -1766,6 +1818,8 @@ static void testGroupJoinAtLimit(void) {
     setupSession(&sessions[OwnerIdx], pairs[OwnerIdx * 2],
                  (uint32_t)(GroupFullMemberUidBase + OwnerIdx));
     clientPtrs[OwnerIdx] = &sessions[OwnerIdx];
+    onlineTrackerAdd(s.onlineTrk, (uint32_t)(GroupFullMemberUidBase + OwnerIdx),
+                     &sessions[OwnerIdx]);
     s.clientCount = 1;
 
     uint32_t groupId = 0;
@@ -1792,6 +1846,8 @@ static void testGroupJoinAtLimit(void) {
         setupSession(&sessions[i], pairs[i * 2],
                      (uint32_t)(GroupFullMemberUidBase + i));
         clientPtrs[i] = &sessions[i];
+        onlineTrackerAdd(s.onlineTrk, (uint32_t)(GroupFullMemberUidBase + i),
+                         &sessions[i]);
         s.clientCount = i + 1;
 
         GroupOpPayload op;
@@ -1806,9 +1862,8 @@ static void testGroupJoinAtLimit(void) {
                       SERVER_SUCC);
         packetClear(&req);
 
-        int status =
-            recvStatus(pairs[i * 2 + 1], sessions[i].aesKey.key,
-                       MsgGroupJoinResp);
+        int status = recvStatus(pairs[i * 2 + 1], sessions[i].aesKey.key,
+                                MsgGroupJoinResp);
         if (status == 0) {
             successCount++;
         }
@@ -1832,6 +1887,7 @@ static void testGroupJoinAtLimit(void) {
     }
     free(sessions);
     free(pairs);
+    onlineTrackerDestroy(s.onlineTrk);
     dbClose(userDB);
     dbClose(gdb);
 }

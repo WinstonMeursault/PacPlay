@@ -238,7 +238,8 @@ static GroupStmtEntry *groupCacheCreate(DB *database, uint32_t groupId) {
     }
 
     /* SELECT chat history: ?1=beforeMsgId, ?2=limit.
-     * Returns messages with msgId < beforeMsgId in chronological (ASC) order. */
+     * Returns messages with msgId < beforeMsgId in chronological (ASC) order.
+     */
     snprintf(sql, sizeof(sql),
              "SELECT msgId, uid, message, timestamp FROM %s "
              "WHERE msgId < ? ORDER BY msgId ASC LIMIT ?;",
@@ -889,8 +890,7 @@ int groupListAll(DB *database, GroupInfo **out, size_t *count) {
 
         results[n].ownerUid = (uint32_t)sqlite3_column_int64(stmt, 2);
         results[n].createdAt = (uint64_t)sqlite3_column_int64(stmt, 3);
-        results[n].memberCount =
-            (uint32_t)sqlite3_column_int64(stmt, 4);
+        results[n].memberCount = (uint32_t)sqlite3_column_int64(stmt, 4);
 
         n++;
     }
@@ -989,10 +989,9 @@ int groupGetInfo(DB *database, uint32_t groupId, GroupInfo *out) {
 
 int groupStoreChat(DB *database, uint32_t groupId, uint32_t uid,
                    const char *message, int64_t timestamp, uint64_t *outMsgId) {
-    if (database == NULL || message == NULL || outMsgId == NULL) {
-        LOG_ERROR("groupStoreChat: NULL argument (database=%p, message=%p, "
-                  "outMsgId=%p)",
-                  (void *)database, (const void *)message, (void *)outMsgId);
+    if (database == NULL || message == NULL) {
+        LOG_ERROR("groupStoreChat: NULL argument (database=%p, message=%p)",
+                  (void *)database, (const void *)message);
         return DB_FAIL;
     }
     if (database->type != GroupDB) {
@@ -1054,7 +1053,9 @@ int groupStoreChat(DB *database, uint32_t groupId, uint32_t uid,
         return DB_FAIL;
     }
 
-    *outMsgId = msgId;
+    if (outMsgId != NULL) {
+        *outMsgId = msgId;
+    }
     return DB_SUCC;
 }
 

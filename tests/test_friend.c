@@ -14,6 +14,7 @@
 #include "protocol.h"
 #include "server/database.h"
 #include "server/friend.h"
+#include "server/onlineTracker.h"
 #include "server/server.h"
 #include "test_utils.h"
 
@@ -63,7 +64,7 @@ static int makeSocketPair(SocketFD pair[2]) {
         pair[1] = NULL_SOCKETFD;
         return -1;
     }
-    enum { SocketTimeoutSec = 30 };
+    enum { SocketTimeoutSec = 2 };
     struct timeval tv = {.tv_sec = SocketTimeoutSec, .tv_usec = 0};
     setsockopt(fds[0], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(fds[1], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
@@ -184,6 +185,11 @@ static void testFriendRequestAndAccept(void) {
     s.clientCount = ClientCapacity;
     s.clientCapacity = ClientCapacity;
 
+    s.onlineTrk = onlineTrackerCreate();
+    ASSERT_NOT_NULL(s.onlineTrk);
+    onlineTrackerAdd(s.onlineTrk, uidA, &csA);
+    onlineTrackerAdd(s.onlineTrk, uidB, &csB);
+
     /* ── A sends friend request to B ── */
     {
         FriendOpPayload fop;
@@ -241,6 +247,7 @@ static void testFriendRequestAndAccept(void) {
     }
 
     /* cleanup */
+    onlineTrackerDestroy(s.onlineTrk);
     free(s.clients);
     socketClose(&pairA[0]);
     socketClose(&pairA[1]);
@@ -288,6 +295,11 @@ static void testFriendRequestAndReject(void) {
     s.clientCount = ClientCapacity;
     s.clientCapacity = ClientCapacity;
 
+    s.onlineTrk = onlineTrackerCreate();
+    ASSERT_NOT_NULL(s.onlineTrk);
+    onlineTrackerAdd(s.onlineTrk, uidA, &csA);
+    onlineTrackerAdd(s.onlineTrk, uidB, &csB);
+
     /* A sends request to B */
     {
         FriendOpPayload fop;
@@ -325,6 +337,7 @@ static void testFriendRequestAndReject(void) {
     ASSERT_INT_EQ(friendIsFriend(s.friendDB, uidA, uidB), DB_FAIL);
     ASSERT_INT_EQ(friendIsFriend(s.friendDB, uidB, uidA), DB_FAIL);
 
+    onlineTrackerDestroy(s.onlineTrk);
     free(s.clients);
     socketClose(&pairA[0]);
     socketClose(&pairA[1]);
@@ -371,6 +384,11 @@ static void testFriendListAfterAccept(void) {
     s.clients[1] = &csB;
     s.clientCount = ClientCapacity;
     s.clientCapacity = ClientCapacity;
+
+    s.onlineTrk = onlineTrackerCreate();
+    ASSERT_NOT_NULL(s.onlineTrk);
+    onlineTrackerAdd(s.onlineTrk, uidA, &csA);
+    onlineTrackerAdd(s.onlineTrk, uidB, &csB);
 
     /* Request A -> B */
     {
@@ -454,6 +472,7 @@ static void testFriendListAfterAccept(void) {
         packetClear(&pkt);
     }
 
+    onlineTrackerDestroy(s.onlineTrk);
     free(s.clients);
     socketClose(&pairA[0]);
     socketClose(&pairA[1]);
@@ -500,6 +519,11 @@ static void testFriendDelete(void) {
     s.clients[1] = &csB;
     s.clientCount = ClientCapacity;
     s.clientCapacity = ClientCapacity;
+
+    s.onlineTrk = onlineTrackerCreate();
+    ASSERT_NOT_NULL(s.onlineTrk);
+    onlineTrackerAdd(s.onlineTrk, uidA, &csA);
+    onlineTrackerAdd(s.onlineTrk, uidB, &csB);
 
     /* Request A -> B */
     {
@@ -574,6 +598,7 @@ static void testFriendDelete(void) {
         packetClear(&pkt);
     }
 
+    onlineTrackerDestroy(s.onlineTrk);
     free(s.clients);
     socketClose(&pairA[0]);
     socketClose(&pairA[1]);
@@ -616,6 +641,10 @@ static void testFriendSelfRequest(void) {
     s.clientCount = 1;
     s.clientCapacity = 1;
 
+    s.onlineTrk = onlineTrackerCreate();
+    ASSERT_NOT_NULL(s.onlineTrk);
+    onlineTrackerAdd(s.onlineTrk, uidA, &csA);
+
     /* A sends friend request to self */
     {
         FriendOpPayload fop;
@@ -633,6 +662,7 @@ static void testFriendSelfRequest(void) {
             recvStatus(pairA[1], csA.aesKey.key, MsgFriendRequestResp), 1);
     }
 
+    onlineTrackerDestroy(s.onlineTrk);
     free(s.clients);
     socketClose(&pairA[0]);
     socketClose(&pairA[1]);
@@ -674,6 +704,10 @@ static void testFriendDuplicateRequest(void) {
     s.clientCount = 1;
     s.clientCapacity = 1;
 
+    s.onlineTrk = onlineTrackerCreate();
+    ASSERT_NOT_NULL(s.onlineTrk);
+    onlineTrackerAdd(s.onlineTrk, uidA, &csA);
+
     /* First request: success */
     {
         FriendOpPayload fop;
@@ -708,6 +742,7 @@ static void testFriendDuplicateRequest(void) {
             recvStatus(pairA[1], csA.aesKey.key, MsgFriendRequestResp), 1);
     }
 
+    onlineTrackerDestroy(s.onlineTrk);
     free(s.clients);
     socketClose(&pairA[0]);
     socketClose(&pairA[1]);
@@ -747,6 +782,10 @@ static void testFriendRequestNonexistentUser(void) {
     s.clientCount = 1;
     s.clientCapacity = 1;
 
+    s.onlineTrk = onlineTrackerCreate();
+    ASSERT_NOT_NULL(s.onlineTrk);
+    onlineTrackerAdd(s.onlineTrk, uidA, &csA);
+
     /* A sends friend request to nonexistent uid */
     {
         FriendOpPayload fop;
@@ -769,6 +808,7 @@ static void testFriendRequestNonexistentUser(void) {
     /* Verify no friendship created by accident */
     ASSERT_INT_EQ(friendIsFriend(s.friendDB, uidA, UidNonexistent), DB_FAIL);
 
+    onlineTrackerDestroy(s.onlineTrk);
     free(s.clients);
     socketClose(&pairA[0]);
     socketClose(&pairA[1]);
