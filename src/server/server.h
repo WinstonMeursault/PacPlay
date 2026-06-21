@@ -125,7 +125,9 @@ typedef enum {
     SessionLogin,           /**< Awaiting MsgLoginReq. */
     SessionTOTPVerify,      /**< Awaiting MsgTOTPVerifyResp. */
     SessionRoom,            /**< Lobby — can list / create / join rooms. */
-    SessionChat             /**< Inside a room — can chat and heartbeat. */
+    SessionChat,            /**< Inside a room — can chat and heartbeat. */
+    SessionGameRoomLobby,   /**< In a game room lobby (pre-game). */
+    SessionGameRoomPlay     /**< In a game room with active game. */
 } SessionState;
 
 /** @brief One connected client, tracked across its entire session. */
@@ -134,8 +136,9 @@ typedef struct {
     SessionState state;
     AESGCMKey aesKey;
     User currentUser;       /**< Populated after successful login. */
-    uint32_t currentRoomId; /**< 0 if not in any room. */
-    uint32_t seqID;         /**< Per-client monotonic sequence counter. */
+    uint32_t currentRoomId;     /**< 0 if not in any room. */
+    uint32_t currentGameRoomId; /**< 0 if not in any game room. */
+    uint32_t seqID;             /**< Per-client monotonic sequence counter. */
 } ClientSession;
 
 /** @brief In-memory room with currently-connected members (used for
@@ -146,6 +149,20 @@ typedef struct {
     int memberCount;
 } ActiveRoom;
 
+/** @brief In-memory game room with game instance lifecycle. */
+typedef struct {
+    uint32_t gameRoomId;
+    uint32_t gameId;
+    uint32_t hostUid;
+    ClientSession *members[MAX_CLIENTS_PER_ROOM];
+    int memberCount;
+    enum { GameRoomLobby, GameRoomPlaying } state;
+    void *gameHandle;
+    struct PacPlaySDK *sdk;
+    pthread_t gameThread;
+    volatile bool gameRunning;
+} ActiveGameRoom;
+
 /** @brief Top-level server state. */
 typedef struct {
     SocketFD listenFd;
@@ -155,10 +172,14 @@ typedef struct {
     ActiveRoom **activeRooms; /**< Dynamic array of rooms with ≥1 member. */
     int activeRoomCount;
     int activeRoomCapacity;
+    ActiveGameRoom **activeGameRooms; /**< Dynamic array of active game rooms. */
+    int activeGameRoomCount;
+    int activeGameRoomCapacity;
     struct DB *userDB; /**< Opaque DB handle (full def in database.h). */
     struct DB *chatDB;
     struct DB *roomDB;
     struct DB *gameDB;
+    struct DB *gameRoomDB; /**< Game room persistence database. */
     struct DB *serverDB;               /**< Server key-value store. */
     struct DownloadPool *downloadPool; /**< Game download thread pool (NULL if
                                          not started). */
@@ -174,7 +195,8 @@ typedef struct {
                                               startup. */
     uint8_t chatDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted ChatHistoryDBKey. */
     uint8_t roomDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted RoomDBKey. */
-    uint8_t gameDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted GameDBKey. */
+    uint8_t gameDbEncKey[DB_ENC_KEY_LEN];     /**< Decrypted GameDBKey. */
+    uint8_t gameRoomDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted GameRoomDBKey. */
     struct PacPlaySDK *sdk; /**< Server SDK handle for game payload bridge
                                 (NULL if no game server is attached). */
     pthread_t gameThread;        /**< Game runner background thread handle. */

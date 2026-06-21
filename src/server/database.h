@@ -54,6 +54,9 @@
 /** @brief File path for the server key-value database. */
 #define SERVER_DB_PATH "./db/server.db"
 
+/** @brief File path for the game room database. */
+#define GAME_ROOM_DB_PATH "./db/gameRoom.db"
+
 /** @brief Directory containing all database files. */
 #define DB_DIRECTORY "./db"
 
@@ -65,7 +68,7 @@
 /* ───────────────────────────────── types ────────────────────────────────── */
 
 /** @brief Identifies which database to open. */
-typedef enum { UserDB = 1, ChatHistoryDB, RoomDB, ServerDB, GameDB } DBType;
+typedef enum { UserDB = 1, ChatHistoryDB, RoomDB, ServerDB, GameDB, GameRoomDB } DBType;
 
 /* ────────────────────────── room statement cache ────────────────────────── */
 
@@ -143,6 +146,11 @@ typedef struct DB {
     sqlite3_stmt *stmtPlatformInsert;
     sqlite3_stmt *stmtPlatformSelect;
     sqlite3_stmt *stmtPlatformList;
+    /* GameRoomDB cached statements */
+    sqlite3_stmt *stmtGameRoomInsert;
+    sqlite3_stmt *stmtGameRoomDelete;
+    sqlite3_stmt *stmtGameRoomSelect;
+    sqlite3_stmt *stmtGameRoomExists;
     /* Key material held in memory for the lifetime of the handle */
     uint8_t dekKey[AES_GCM_KEY_LEN];  /**< DEK for TOTP secret envelope
                                          encryption. */
@@ -510,5 +518,13 @@ void gameInfoFree(GameInfo *info);
 void gameInfoArrayFree(GameInfo *arr, size_t count);
 void gamePlatformInfoFree(GamePlatformInfo *info);
 void gamePlatformInfoArrayFree(GamePlatformInfo *arr, size_t count);
+
+/* ────────────────────── game room persistence operations ────────────────── */
+
+int createGameRoom(DB *database, uint32_t gameRoomId, uint32_t gameId,
+                   uint32_t hostUid);
+int deleteGameRoom(DB *database, uint32_t gameRoomId);
+int listGameRooms(DB *database, uint32_t **outIds, size_t *count);
+int gameRoomExists(DB *database, uint32_t gameRoomId);
 
 #endif /* SERVER_DATABASE_H */

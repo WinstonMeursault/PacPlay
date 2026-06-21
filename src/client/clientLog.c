@@ -1,6 +1,6 @@
 /**
- * @file serverLog.c
- * @brief Server log wrapper — delegates to the shared autoLog engine.
+ * @file clientLog.c
+ * @brief Client log wrapper — delegates to the shared autoLog engine.
  *
  * @date 2026-06-20
  * @copyright GPLv3 License
@@ -22,24 +22,14 @@
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
-#include "server/serverLog.h"
+#include "clientLog.h"
 #include "common/autoLog.h"
 
-int serverLogInit(void) {
+int clientLogInit(void) {
     AutoLogConfig cfg = {0};
-    cfg.fileNamePrefix = "server";
-    cfg.enableTuiBuffer = true;
+    cfg.fileNamePrefix = "client";
+    cfg.enableTuiBuffer = false;
     return autoLogInit(&cfg);
 }
 
-void serverLogCheckAndRestart(void) { autoLogCheckAndRestart(); }
-
-void serverLogClose(void) { autoLogClose(); }
-
-int serverLogFetch(LogLevel minLevel, char ***outLines, int *outCount) {
-    return autoLogFetch(minLevel, outLines, outCount);
-}
-
-void serverLogFetchFree(char **lines, int count) {
-    autoLogFetchFree(lines, count);
-}
+void clientLogClose(void) { autoLogClose(); }

@@ -71,8 +71,12 @@ static void connectStatusDraw(ControlLabel *self) {
 }
 
 static bool checkInput() {
-    char portStr[INPUTBOX_BUF_MAX_LEN];
-    strncpy(portStr, connectPortBox.buf, connectPortBox.curLen);
+    char portStr[INPUTBOX_BUF_MAX_LEN] = {0};
+    size_t copyLen = connectPortBox.curLen < sizeof(portStr) - 1
+                         ? connectPortBox.curLen
+                         : sizeof(portStr) - 1;
+    memcpy(portStr, connectPortBox.buf, copyLen);
+    portStr[copyLen] = '\0';
     long port = strtol(portStr, NULL, 10);
     if (!(0 <= port && port <= 65535)) {
         return false;

@@ -38,6 +38,7 @@ int clientRunGame(VTerm **vterm, VTermScreen **vscreen, const char *path,
     if (height <= 0 || width <= 0) {
         LOG_ERROR("clientRunGame: width(%d) and height(%d) cannot below 1",
                   width, height);
+        return CLIENT_FAIL;
     }
     int slaveFD;
     if (openpty(ptyFD, &slaveFD, NULL, NULL, NULL) < 0) {
@@ -59,15 +60,22 @@ int clientRunGame(VTerm **vterm, VTermScreen **vscreen, const char *path,
     *vscreen = vterm_obtain_screen(*vterm);
 
     *pid = fork();
+    if (*pid < 0) {
+        LOG_ERROR("clientRunGame: fork failed");
+        close(slaveFD);
+        close(*ptyFD);
+        vterm_free(*vterm);
+        *vterm = NULL;
+        *vscreen = NULL;
+        return CLIENT_FAIL;
+    }
     if (*pid == 0) {
         close(*ptyFD);
         dup2(slaveFD, STDIN_FILENO);
         dup2(slaveFD, STDOUT_FILENO);
         close(slaveFD);
         execl("./loader", "loader", path, NULL);
-        // execl("/home/kiraterin/playgroun d/ncursesplg/bin/main", path, NULL);
 
-        // code below will be executed when execl failed
         LOG_ERROR("clientRunGame: cannot execute loader");
         _exit(SUBPROCESS_EXIT_NUM);
     }

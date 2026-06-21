@@ -244,7 +244,7 @@ int listRooms(DB *database, uint32_t **outRoomIds, size_t *count) {
             capacity = newCapacity;
         }
 
-        results[n] = (uint32_t)sqlite3_column_int(stmt, 0);
+        results[n] = (uint32_t)sqlite3_column_int64(stmt, 0);
         n++;
     }
 

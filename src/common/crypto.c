@@ -59,6 +59,15 @@ int aesGCMBufferInit(AESGCMBuffer *buf, size_t capacity) {
     if (buf == NULL) {
         return CRYPTO_FAIL;
     }
+    if (capacity == 0) {
+        buf->data = malloc(1);
+        if (buf->data == NULL) {
+            return CRYPTO_FAIL;
+        }
+        buf->len = 0;
+        buf->capacity = 1;
+        return CRYPTO_SUCC;
+    }
     buf->data = malloc(capacity);
     buf->capacity = capacity;
     buf->len = 0;
@@ -552,6 +561,7 @@ char *hashPassword(const char *password) {
     if (computePasswordHash(password, passLen, salt, HASH_SALT_LEN, digest) !=
         CRYPTO_SUCC) {
         OPENSSL_cleanse(salt, sizeof(salt));
+        OPENSSL_cleanse(digest, sizeof(digest));
         return NULL;
     }
 
@@ -846,8 +856,17 @@ int verifyTOTPCode(const char *secret, int *code) {
         DtShift8 = 8
     };
 
+    if (keyLen > INT_MAX) {
+        LOG_ERROR("verifyTOTPCode: decoded key too long");
+        OPENSSL_cleanse(key, keyLen);
+        free(key);
+        return CRYPTO_FAIL;
+    }
+
     int64_t baseStep = (int64_t)(getCurrentTimestamp() / TOTP_STEP_SECONDS);
     int result = CRYPTO_FAIL;
+    uint8_t hmac[TOTP_HMAC_SHA1_LEN];
+    unsigned int hmacLen = 0;
 
     for (int64_t step = baseStep - TOTP_WINDOW; step <= baseStep + TOTP_WINDOW;
          step++) {
@@ -858,8 +877,7 @@ int verifyTOTPCode(const char *secret, int *code) {
             c >>= CounterShiftBits;
         }
 
-        uint8_t hmac[TOTP_HMAC_SHA1_LEN];
-        unsigned int hmacLen = sizeof(hmac);
+        hmacLen = sizeof(hmac);
         if (HMAC(EVP_sha1(), key, (int)keyLen, counter, sizeof(counter), hmac,
                  &hmacLen) == NULL) {
             LOG_ERROR_SSL("verifyTOTPCode: HMAC-SHA1 failed");
@@ -877,6 +895,7 @@ int verifyTOTPCode(const char *secret, int *code) {
         }
     }
 
+    OPENSSL_cleanse(hmac, sizeof(hmac));
     OPENSSL_cleanse(key, keyLen);
     free(key);
     return result;
@@ -944,11 +963,12 @@ static char *urlEncode(const char *str) {
 
 int generateOTPAuthURI(const char *secret, const char *username,
                        char **outURI, size_t *outURILen) {
-    if (secret == NULL || username == NULL || outURI == NULL) {
+    if (secret == NULL || username == NULL || outURI == NULL ||
+        outURILen == NULL) {
         LOG_ERROR("generateOTPAuthURI: NULL argument "
-                  "(secret=%p, username=%p, outURI=%p)",
+                  "(secret=%p, username=%p, outURI=%p, outURILen=%p)",
                   (const void *)secret, (const void *)username,
-                  (const void *)outURI);
+                  (const void *)outURI, (const void *)outURILen);
         return CRYPTO_FAIL;
     }
     *outURI = NULL;

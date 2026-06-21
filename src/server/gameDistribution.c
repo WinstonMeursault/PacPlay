@@ -37,6 +37,7 @@ int serverHandleGameList(Server *s, ClientSession *cs, const Packet *pkt) {
     }
 
     if (count == 0) {
+        free(entries);
         if (packetSendEncrypted(cs->fd, MsgGameListResp, &cs->seqID,
                                     cs->aesKey.key, NULL, 0) != PROTOCOL_SUCC) {
             return SERVER_FAIL;
@@ -113,7 +114,13 @@ int serverHandleGameDownload(Server *s, ClientSession *cs, const Packet *pkt) {
         (uint32_t)((platInfo.fileSize + GAME_CHUNK_SIZE - 1) / GAME_CHUNK_SIZE);
 
     uint8_t token[DATA_AUTH_TOKEN_LEN];
-    cryptoRandomBytes(token, DATA_AUTH_TOKEN_LEN);
+    if (cryptoRandomBytes(token, DATA_AUTH_TOKEN_LEN) != CRYPTO_SUCC) {
+        LOG_ERROR("serverHandleGameDownload: cryptoRandomBytes failed");
+        sendDownloadFailure(cs);
+        gameInfoFree(&gameInfo);
+        gamePlatformInfoFree(&platInfo);
+        return SERVER_SUCC;
+    }
 
     PendingToken pt;
     memset(&pt, 0, sizeof(pt));
@@ -122,6 +129,7 @@ int serverHandleGameDownload(Server *s, ClientSession *cs, const Packet *pkt) {
     pt.gameId = gameId;
     pt.resumeChunkIndex = resumeChunkIndex;
     strncpy(pt.filePath, filePath, FILE_PATH_MAX_LEN);
+    pt.filePath[FILE_PATH_MAX_LEN - 1] = '\0';
     pt.fileSize = platInfo.fileSize;
     pt.totalChunks = totalChunks;
     pt.metadata.gameId = gameId;
@@ -181,7 +189,7 @@ int serverHandleGameStart(Server *s, ClientSession *cs, const Packet *pkt) {
 
     const GameStartReqPayload *req =
         (const GameStartReqPayload *)pkt->payload;
-    uint32_t gameId = ntohl(req->gameId);
+    uint32_t gameId = req->gameId;
     char platform[PLATFORM_NAME_LEN];
     memcpy(platform, req->platform, PLATFORM_NAME_LEN);
     platform[PLATFORM_NAME_LEN - 1] = '\0';

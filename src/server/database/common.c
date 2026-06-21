@@ -99,6 +99,9 @@ DB *dbInit(DBType dbType, const uint8_t *encKey) {
     case GameDB:
         dbPath = GAME_DB_PATH;
         break;
+    case GameRoomDB:
+        dbPath = GAME_ROOM_DB_PATH;
+        break;
     case ServerDB:
         dbPath = SERVER_DB_PATH;
         break;
@@ -129,6 +132,9 @@ DB *dbInit(DBType dbType, const uint8_t *encKey) {
         free(database);
         return NULL;
     }
+
+    enum { BusyTimeoutMs = 5000 };
+    sqlite3_busy_timeout(database->handle, BusyTimeoutMs);
 
     /* Apply encryption key for non-ServerDB databases — must be set before
      * any PRAGMA or schema operation so that newly created databases are
@@ -172,6 +178,9 @@ DB *dbInit(DBType dbType, const uint8_t *encKey) {
     case GameDB:
         schemaResult = initGameDBSchema(database->handle);
         break;
+    case GameRoomDB:
+        schemaResult = initGameRoomDBSchema(database->handle);
+        break;
     case ServerDB:
         schemaResult = initServerDBSchema(database->handle);
         break;
@@ -209,6 +218,9 @@ DB *dbInit(DBType dbType, const uint8_t *encKey) {
     case GameDB:
         stmtResult = prepareGameDBStmts(database);
         break;
+    case GameRoomDB:
+        stmtResult = prepareGameRoomDBStmts(database);
+        break;
     case ServerDB:
         stmtResult = prepareServerDBStmts(database);
         break;
@@ -243,6 +255,10 @@ DB *dbInit(DBType dbType, const uint8_t *encKey) {
         dbFinalize(&database->stmtPlatformInsert);
         dbFinalize(&database->stmtPlatformSelect);
         dbFinalize(&database->stmtPlatformList);
+        dbFinalize(&database->stmtGameRoomInsert);
+        dbFinalize(&database->stmtGameRoomDelete);
+        dbFinalize(&database->stmtGameRoomSelect);
+        dbFinalize(&database->stmtGameRoomExists);
         roomCacheDestroy(database->roomCache);
         sqlite3_close(database->handle);
         free(database);
@@ -287,6 +303,12 @@ void dbClose(DB *database) {
     dbFinalize(&database->stmtPlatformInsert);
     dbFinalize(&database->stmtPlatformSelect);
     dbFinalize(&database->stmtPlatformList);
+
+    /* Finalize GameRoomDB cached statements */
+    dbFinalize(&database->stmtGameRoomInsert);
+    dbFinalize(&database->stmtGameRoomDelete);
+    dbFinalize(&database->stmtGameRoomSelect);
+    dbFinalize(&database->stmtGameRoomExists);
 
     /* Finalize ChatHistoryDB cached statements */
     dbFinalize(&database->stmtSeq);

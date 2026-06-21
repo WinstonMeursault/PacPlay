@@ -188,6 +188,9 @@ int clientInitDB(Client *client) {
         return CLIENT_DB_FAIL;
     }
 
+    enum { BusyTimeoutMs = 5000 };
+    sqlite3_busy_timeout(db->handle, BusyTimeoutMs);
+
     rc = sqlite3_key(db->handle, db->dbEncKey, (int)CLIENT_DB_KEY_LEN);
     if (rc != SQLITE_OK) {
         LOG_ERROR("clientInitDB: sqlite3_key failed: %s (rc=%d)",
@@ -219,7 +222,7 @@ int clientInitDB(Client *client) {
 
     if (prepareGameListStmts(db) != CLIENT_DB_SUCC) {
         LOG_ERROR("clientInitDB: statement preparation failed");
-        sqlite3_close(db->handle);
+        sqlite3_close_v2(db->handle);
         OPENSSL_cleanse(db->dbEncKey, sizeof(db->dbEncKey));
         free(db);
         return CLIENT_DB_FAIL;

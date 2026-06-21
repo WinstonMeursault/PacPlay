@@ -59,7 +59,6 @@ struct PacPlaySDK {
     QueueSDKMessage recvQueue;
     pthread_mutex_t sendMutex;
     pthread_mutex_t recvMutex;
-    pthread_cond_t recvCond;
     PacPlayOnReceive callback;
     void *userData;
     volatile bool running;
@@ -95,15 +94,6 @@ PacPlaySDK *sdk_create(void)
     }
 
     if (pthread_mutex_init(&sdkObj->recvMutex, NULL) != 0) {
-        pthread_mutex_destroy(&sdkObj->sendMutex);
-        queueSDKMessageDeinit(&sdkObj->recvQueue);
-        queueSDKMessageDeinit(&sdkObj->sendQueue);
-        free(sdkObj);
-        return NULL;
-    }
-
-    if (pthread_cond_init(&sdkObj->recvCond, NULL) != 0) {
-        pthread_mutex_destroy(&sdkObj->recvMutex);
         pthread_mutex_destroy(&sdkObj->sendMutex);
         queueSDKMessageDeinit(&sdkObj->recvQueue);
         queueSDKMessageDeinit(&sdkObj->sendQueue);
@@ -150,7 +140,6 @@ void sdk_destroy(PacPlaySDK *sdk)
 
     pthread_mutex_destroy(&sdk->sendMutex);
     pthread_mutex_destroy(&sdk->recvMutex);
-    pthread_cond_destroy(&sdk->recvCond);
 
     free(sdk);
 }
@@ -170,6 +159,16 @@ int sdk_send(PacPlaySDK *sdk, const void *data, size_t len)
     SDKMessage msg = {.data = copyBuf, .len = len, .capacity = len};
 
     pthread_mutex_lock(&sdk->sendMutex);
+    if (!sdk->running) {
+        pthread_mutex_unlock(&sdk->sendMutex);
+        free(copyBuf);
+        return -1;
+    }
+    if (queueSDKMessageSize(&sdk->sendQueue) >= SDK_QUEUE_CAPACITY) {
+        pthread_mutex_unlock(&sdk->sendMutex);
+        free(copyBuf);
+        return -1;
+    }
     ContainerRes pushRes = queueSDKMessagePush(&sdk->sendQueue, msg);
     pthread_mutex_unlock(&sdk->sendMutex);
 
@@ -220,8 +219,16 @@ void sdk_push_received(PacPlaySDK *sdk, const uint8_t *payload, size_t len)
     SDKMessage msg = {.data = copyBuf, .len = len, .capacity = len};
 
     pthread_mutex_lock(&sdk->recvMutex);
-    queueSDKMessagePush(&sdk->recvQueue, msg);
-    pthread_cond_signal(&sdk->recvCond);
+    if (!sdk->running) {
+        pthread_mutex_unlock(&sdk->recvMutex);
+        free(copyBuf);
+        return;
+    }
+    if (queueSDKMessagePush(&sdk->recvQueue, msg) != ContainerSucc) {
+        pthread_mutex_unlock(&sdk->recvMutex);
+        free(copyBuf);
+        return;
+    }
     pthread_mutex_unlock(&sdk->recvMutex);
 }
 

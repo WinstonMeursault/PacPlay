@@ -612,7 +612,8 @@ int verifyUser(DB *database, User *user) {
         user->totpSecret = NULL;
     }
 
-    memcpy(user->nickname, storedNickname, NICKNAME_MAX_LEN);
+    strncpy(user->nickname, storedNickname, NICKNAME_MAX_LEN - 1);
+    user->nickname[NICKNAME_MAX_LEN - 1] = '\0';
     return DB_SUCC;
 }
 

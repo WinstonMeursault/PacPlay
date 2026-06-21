@@ -149,8 +149,18 @@ static void loginBtnOnClick(ControlButton *self) {
     char response[RESPONSE_BUF_LEN] = {0};
     bool totpEnabled;
     bool totpRequest;
-    strncpy(username, loginUsernameBox.buf, loginUsernameBox.curLen);
-    strncpy(password, loginPasswordBox.buf, loginPasswordBox.curLen);
+    if (loginUsernameBox.curLen >= LOGIN_USERNAME_LEN) {
+        strcpy(loginStatusLabel.text, "Username too long");
+        return;
+    }
+    if (loginPasswordBox.curLen >= PASSWORD_MAX_LEN) {
+        strcpy(loginStatusLabel.text, "Password too long");
+        return;
+    }
+    memcpy(username, loginUsernameBox.buf, loginUsernameBox.curLen);
+    username[loginUsernameBox.curLen] = '\0';
+    memcpy(password, loginPasswordBox.buf, loginPasswordBox.curLen);
+    password[loginPasswordBox.curLen] = '\0';
     int result = clientLogin(client, username, password, response, &totpEnabled,
                              &totpRequest, nickname);
     OPENSSL_cleanse(password, sizeof(password));

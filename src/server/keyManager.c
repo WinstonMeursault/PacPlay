@@ -45,17 +45,20 @@ static int encryptAndStoreKey(const uint8_t *mkKey, const uint8_t *keyData,
     if (cryptoRandomBytes(encKey.nonce, AES_GCM_NONCE_LEN) != CRYPTO_SUCC) {
         LOG_ERROR("encryptAndStoreKey: nonce generation failed for %s",
                   keyName);
+        OPENSSL_cleanse(&encKey, sizeof(encKey));
         return SERVER_FAIL;
     }
     AESGCMBuffer pt = {(uint8_t *)keyData, AES_GCM_KEY_LEN, AES_GCM_KEY_LEN};
     AESGCMCipher ct;
     if (aesGCMBufferInit(&ct.buffer, AES_GCM_KEY_LEN) != CRYPTO_SUCC) {
         LOG_ERROR("encryptAndStoreKey: buffer init failed for %s", keyName);
+        OPENSSL_cleanse(&encKey, sizeof(encKey));
         return SERVER_FAIL;
     }
     if (encryptAESGCM(&pt, NULL, &encKey, &ct) != CRYPTO_SUCC) {
         LOG_ERROR("encryptAndStoreKey: encryption failed for %s", keyName);
         aesGCMBufferDeinit(&ct.buffer);
+        OPENSSL_cleanse(&encKey, sizeof(encKey));
         return SERVER_FAIL;
     }
     uint8_t envelope[EncEnvelopeLen];
@@ -64,6 +67,7 @@ static int encryptAndStoreKey(const uint8_t *mkKey, const uint8_t *keyData,
     memcpy(envelope + AES_GCM_NONCE_LEN + AES_GCM_KEY_LEN, ct.tag,
            AES_GCM_TAG_LEN);
     aesGCMBufferDeinit(&ct.buffer);
+    OPENSSL_cleanse(&encKey, sizeof(encKey));
     if (setServerKey(serverDB, keyName, envelope, sizeof(envelope)) !=
         DB_SUCC) {
         LOG_ERROR("encryptAndStoreKey: setServerKey failed for %s", keyName);
@@ -91,21 +95,25 @@ static int decryptAndLoadKey(const uint8_t *mkKey, const uint8_t *blob,
     AESGCMBuffer pt;
     if (aesGCMBufferInit(&pt, AES_GCM_KEY_LEN) != CRYPTO_SUCC) {
         LOG_ERROR("decryptAndLoadKey: buffer init failed for %s", keyName);
+        OPENSSL_cleanse(&decKey, sizeof(decKey));
         return SERVER_FAIL;
     }
     int dr = decryptAESGCM(&ct, NULL, &decKey, &pt);
     if (dr == CRYPTO_AUTH_FAIL) {
         LOG_ERROR("decryptAndLoadKey: Master Key is incorrect (%s)", keyName);
         aesGCMBufferDeinit(&pt);
+        OPENSSL_cleanse(&decKey, sizeof(decKey));
         return SERVER_FAIL;
     }
     if (dr != CRYPTO_SUCC) {
         LOG_ERROR("decryptAndLoadKey: decryption failed for %s", keyName);
         aesGCMBufferDeinit(&pt);
+        OPENSSL_cleanse(&decKey, sizeof(decKey));
         return SERVER_FAIL;
     }
     memcpy(outKey, pt.data, AES_GCM_KEY_LEN);
     aesGCMBufferDeinit(&pt);
+    OPENSSL_cleanse(&decKey, sizeof(decKey));
     return SERVER_SUCC;
 }
 
@@ -139,8 +147,8 @@ bool serverIsFirstRun(Server *s) {
 
 bool serverKeysAreComplete(Server *s) {
     const char *keyNames[] = {"DEK", "UserDBKey", "ChatHistoryDBKey",
-                              "RoomDBKey", "GameDBKey"};
-    enum { KeyCount = 5 };
+                              "RoomDBKey", "GameDBKey", "GameRoomDBKey"};
+    enum { KeyCount = 6 };
     for (int i = 0; i < KeyCount; i++) {
         uint8_t *val = NULL;
         size_t valLen = 0;
@@ -162,13 +170,15 @@ char *serverGenerateFreshKeys(Server *s) {
     LOG_INFO("serverGenerateFreshKeys: generating fresh server keys");
     uint8_t mkKey[AES256KeyLen], dekKey[AES256KeyLen],
         userDbKey[DB_ENC_KEY_LEN], chatDbKey[DB_ENC_KEY_LEN],
-        roomDbKey[DB_ENC_KEY_LEN], gameDbKey[DB_ENC_KEY_LEN];
+        roomDbKey[DB_ENC_KEY_LEN], gameDbKey[DB_ENC_KEY_LEN],
+        gameRoomDbKey[DB_ENC_KEY_LEN];
     if (cryptoRandomBytes(mkKey, AES256KeyLen) != CRYPTO_SUCC ||
         cryptoRandomBytes(dekKey, AES256KeyLen) != CRYPTO_SUCC ||
         cryptoRandomBytes(userDbKey, DB_ENC_KEY_LEN) != CRYPTO_SUCC ||
         cryptoRandomBytes(chatDbKey, DB_ENC_KEY_LEN) != CRYPTO_SUCC ||
         cryptoRandomBytes(roomDbKey, DB_ENC_KEY_LEN) != CRYPTO_SUCC ||
-        cryptoRandomBytes(gameDbKey, DB_ENC_KEY_LEN) != CRYPTO_SUCC) {
+        cryptoRandomBytes(gameDbKey, DB_ENC_KEY_LEN) != CRYPTO_SUCC ||
+        cryptoRandomBytes(gameRoomDbKey, DB_ENC_KEY_LEN) != CRYPTO_SUCC) {
         LOG_ERROR("serverGenerateFreshKeys: cryptoRandomBytes failed");
         return NULL;
     }
@@ -180,13 +190,16 @@ char *serverGenerateFreshKeys(Server *s) {
         encryptAndStoreKey(mkKey, roomDbKey, "RoomDBKey", s->serverDB) !=
             SERVER_SUCC ||
         encryptAndStoreKey(mkKey, gameDbKey, "GameDBKey", s->serverDB) !=
-            SERVER_SUCC) {
+            SERVER_SUCC ||
+        encryptAndStoreKey(mkKey, gameRoomDbKey, "GameRoomDBKey",
+                           s->serverDB) != SERVER_SUCC) {
         OPENSSL_cleanse(mkKey, sizeof(mkKey));
         OPENSSL_cleanse(dekKey, sizeof(dekKey));
         OPENSSL_cleanse(userDbKey, sizeof(userDbKey));
         OPENSSL_cleanse(chatDbKey, sizeof(chatDbKey));
         OPENSSL_cleanse(roomDbKey, sizeof(roomDbKey));
         OPENSSL_cleanse(gameDbKey, sizeof(gameDbKey));
+        OPENSSL_cleanse(gameRoomDbKey, sizeof(gameRoomDbKey));
         return NULL;
     }
     OPENSSL_cleanse(dekKey, sizeof(dekKey));
@@ -194,6 +207,7 @@ char *serverGenerateFreshKeys(Server *s) {
     OPENSSL_cleanse(chatDbKey, sizeof(chatDbKey));
     OPENSSL_cleanse(roomDbKey, sizeof(roomDbKey));
     OPENSSL_cleanse(gameDbKey, sizeof(gameDbKey));
+    OPENSSL_cleanse(gameRoomDbKey, sizeof(gameRoomDbKey));
 
     char *hex = malloc((size_t)MkHexLen + 1);
     if (hex == NULL) {
@@ -219,24 +233,29 @@ int serverUnlockWithMK(Server *s, const char *masterKeyHex) {
     }
 
     uint8_t *dekEnc = NULL, *userDbEnc = NULL, *chatDbEnc = NULL,
-            *roomDbEnc = NULL, *gameDbEnc = NULL;
-    size_t dekLen = 0, uLen = 0, cLen = 0, rLen = 0, gLen = 0;
+            *roomDbEnc = NULL, *gameDbEnc = NULL, *gameRoomDbEnc = NULL;
+    size_t dekLen = 0, uLen = 0, cLen = 0, rLen = 0, gLen = 0, grLen = 0;
     if (getServerKey(s->serverDB, "DEK", &dekEnc, &dekLen) != DB_SUCC ||
         getServerKey(s->serverDB, "UserDBKey", &userDbEnc, &uLen) != DB_SUCC ||
         getServerKey(s->serverDB, "ChatHistoryDBKey", &chatDbEnc, &cLen) !=
             DB_SUCC ||
         getServerKey(s->serverDB, "RoomDBKey", &roomDbEnc, &rLen) !=
             DB_SUCC ||
-        getServerKey(s->serverDB, "GameDBKey", &gameDbEnc, &gLen) != DB_SUCC) {
+        getServerKey(s->serverDB, "GameDBKey", &gameDbEnc, &gLen) !=
+            DB_SUCC ||
+        getServerKey(s->serverDB, "GameRoomDBKey", &gameRoomDbEnc, &grLen) !=
+            DB_SUCC) {
         OPENSSL_cleanse(mkKey, sizeof(mkKey));
         free(dekEnc);
         free(userDbEnc);
         free(chatDbEnc);
         free(roomDbEnc);
         free(gameDbEnc);
+        free(gameRoomDbEnc);
         return SERVER_FAIL;
     }
-    if (!dekEnc || !userDbEnc || !chatDbEnc || !roomDbEnc || !gameDbEnc) {
+    if (!dekEnc || !userDbEnc || !chatDbEnc || !roomDbEnc || !gameDbEnc ||
+        !gameRoomDbEnc) {
         LOG_ERROR("serverUnlockWithMK: missing one or more key envelopes");
         OPENSSL_cleanse(mkKey, sizeof(mkKey));
         free(dekEnc);
@@ -244,6 +263,7 @@ int serverUnlockWithMK(Server *s, const char *masterKeyHex) {
         free(chatDbEnc);
         free(roomDbEnc);
         free(gameDbEnc);
+        free(gameRoomDbEnc);
         return SERVER_FAIL;
     }
 
@@ -257,7 +277,9 @@ int serverUnlockWithMK(Server *s, const char *masterKeyHex) {
         decryptAndLoadKey(mkKey, roomDbEnc, rLen, "RoomDBKey",
                           s->roomDbEncKey) != SERVER_SUCC ||
         decryptAndLoadKey(mkKey, gameDbEnc, gLen, "GameDBKey",
-                          s->gameDbEncKey) != SERVER_SUCC) {
+                          s->gameDbEncKey) != SERVER_SUCC ||
+        decryptAndLoadKey(mkKey, gameRoomDbEnc, grLen, "GameRoomDBKey",
+                          s->gameRoomDbEncKey) != SERVER_SUCC) {
         ret = SERVER_FAIL;
     }
 
@@ -267,6 +289,7 @@ int serverUnlockWithMK(Server *s, const char *masterKeyHex) {
     free(chatDbEnc);
     free(roomDbEnc);
     free(gameDbEnc);
+    free(gameRoomDbEnc);
 
     if (ret == SERVER_SUCC) {
         LOG_INFO("serverUnlockWithMK: server unlocked successfully");

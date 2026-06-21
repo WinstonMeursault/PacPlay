@@ -28,6 +28,7 @@
 #include "log.h"
 #include "pacplay_sdk.h"
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
 #include <unistd.h>
@@ -77,6 +78,9 @@ void clientDisconnect(Client *client) {
         OPENSSL_cleanse(client->cdbkey, sizeof(client->cdbkey));
         socketClose(&client->fd);
     }
+    free(client->roomMembers);
+    client->roomMembers = NULL;
+    client->roomMemberCount = 0;
     LOG_INFO("Client disconnected");
 }
 
@@ -92,8 +96,7 @@ int clientLaunch(Client *client, PacPlaySDK *sdk) {
     client->sdk = sdk;
     client->running = true;
 
-    if (pthread_create(&client->ioThread, NULL, clientEventLoop, client) !=
-        0) {
+    if (pthread_create(&client->ioThread, NULL, clientEventLoop, client) != 0) {
         LOG_ERROR("clientLaunch: pthread_create failed (errno=%d)", errno);
         client->running = false;
         client->sdk = NULL;
@@ -110,6 +113,9 @@ void clientShutdown(Client *client) {
     }
     client->running = false;
     pthread_join(client->ioThread, NULL);
+    if (client->sdk != NULL) {
+        pacplay_cli_destroy(client->sdk);
+    }
     client->sdk = NULL;
     LOG_INFO("Client IO thread stopped");
 }
@@ -146,14 +152,15 @@ static void *clientEventLoop(void *arg) {
                 if (gameLen == SdkCtlStartServerLen &&
                     gamePayload[0] == SdkCtlMagic) {
                     GameStartReqPayload req;
-                    memcpy(&req.gameId,
-                           gamePayload + SdkCtlGameIdOffset,
+                    memcpy(&req.gameId, gamePayload + SdkCtlGameIdOffset,
                            sizeof(req.gameId));
-                    memcpy(req.platform,
-                           gamePayload + SdkCtlPlatformOffset,
+                    memcpy(req.platform, gamePayload + SdkCtlPlatformOffset,
                            PLATFORM_NAME_LEN);
                     clientSendEncryptedPacket(c, MsgGameStartReq, &req,
                                               sizeof(req));
+                } else if (c->currentGameRoomId != 0) {
+                    clientSendEncryptedPacket(c, MsgGameRoomPlayData,
+                                              gamePayload, gameLen);
                 } else {
                     clientSendEncryptedPacket(c, MsgGamePayload, gamePayload,
                                               gameLen);
@@ -168,7 +175,8 @@ static void *clientEventLoop(void *arg) {
             memset(&pkt, 0, sizeof(pkt));
 
             if (clientRecvEncryptedPacket(c, &pkt) == PROTOCOL_SUCC) {
-                if (pkt.header.messageType == MsgGamePayload &&
+                MessageType mt = (MessageType)pkt.header.messageType;
+                if ((mt == MsgGamePayload || mt == MsgGameRoomPlayData) &&
                     c->sdk != NULL && pkt.header.payloadLength > 0) {
                     pacplay_cli_push_received(c->sdk, pkt.payload,
                                               pkt.header.payloadLength);

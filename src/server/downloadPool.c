@@ -95,6 +95,7 @@ static void *acceptThreadFunc(void *arg) {
         tv.tv_sec = ACCEPT_RECV_TIMEOUT_SECS;
         tv.tv_usec = 0;
         setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(clientFd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
         Packet authPkt;
         memset(&authPkt, 0, sizeof(authPkt));

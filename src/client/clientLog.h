@@ -1,6 +1,11 @@
 /**
- * @file serverLog.c
- * @brief Server log wrapper — delegates to the shared autoLog engine.
+ * @file clientLog.h
+ * @brief Client file-logging subsystem — thin wrapper around autoLog.
+ *
+ * The shared autoLog engine handles the log thread, ring buffer,
+ * UTC-day file rotation, zlib-ng compression, and automatic restart.
+ * This module pins the client-specific configuration (prefix = "client",
+ * TUI buffer disabled — client only writes to disk).
  *
  * @date 2026-06-20
  * @copyright GPLv3 License
@@ -22,24 +27,10 @@
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
-#include "server/serverLog.h"
-#include "common/autoLog.h"
+#ifndef CLIENT_LOG_H
+#define CLIENT_LOG_H
 
-int serverLogInit(void) {
-    AutoLogConfig cfg = {0};
-    cfg.fileNamePrefix = "server";
-    cfg.enableTuiBuffer = true;
-    return autoLogInit(&cfg);
-}
+int  clientLogInit(void);
+void clientLogClose(void);
 
-void serverLogCheckAndRestart(void) { autoLogCheckAndRestart(); }
-
-void serverLogClose(void) { autoLogClose(); }
-
-int serverLogFetch(LogLevel minLevel, char ***outLines, int *outCount) {
-    return autoLogFetch(minLevel, outLines, outCount);
-}
-
-void serverLogFetchFree(char **lines, int count) {
-    autoLogFetchFree(lines, count);
-}
+#endif /* CLIENT_LOG_H */

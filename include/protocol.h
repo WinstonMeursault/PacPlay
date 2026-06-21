@@ -138,7 +138,25 @@ typedef enum {
 
     /* Game start request / response — client requests server-side game launch. */
     MsgGameStartReq,
-    MsgGameStartResp
+    MsgGameStartResp,
+
+    /* Game room management. */
+    MsgGameRoomListReq = 41,
+    MsgGameRoomListResp,
+    MsgGameRoomCreate,
+    MsgGameRoomCreateResp,
+    MsgGameRoomJoin,
+    MsgGameRoomJoinResp,
+    MsgGameRoomQuit,
+    MsgGameRoomQuitResp,
+    MsgGameRoomStart,
+    MsgGameRoomStartResp,
+    MsgGameRoomPlayData,
+
+    /* Game room member notifications. */
+    MsgGameRoomMemberList,
+    MsgGameRoomMemberJoin,
+    MsgGameRoomMemberQuit
 } MessageType;
 
 #pragma pack(push, 1)
@@ -387,6 +405,60 @@ typedef struct {
     int64_t createdAt;
     int64_t updatedAt;
 } GameInfoEntry;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t gameId;
+} GameRoomCreatePayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t status;
+    uint32_t gameRoomId;
+} GameRoomCreateRespPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t gameRoomId;
+    uint32_t gameId;
+    uint32_t hostUid;
+    char hostNickname[LOGIN_NICKNAME_LEN];
+    char hostUsername[LOGIN_USERNAME_LEN];
+    uint32_t memberCount;
+    uint8_t state;
+} GameRoomListEntry;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t gameRoomId;
+} GameRoomJoinPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t gameRoomId;
+} GameRoomStartPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t roomId;
+    uint32_t uid;
+    char nickname[LOGIN_NICKNAME_LEN];
+    char username[LOGIN_USERNAME_LEN];
+} GameRoomMemberInfo;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t roomId;
+    uint32_t uid;
+    uint8_t dissolved;
+} GameRoomMemberQuitPayload;
 #pragma pack(pop)
 
 /**

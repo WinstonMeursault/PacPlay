@@ -63,9 +63,14 @@ int clientLogin(Client *client, char *username, char *password, char *response,
         return CLIENT_FAIL;
     }
 
+    if (strlen(username) >= LOGIN_USERNAME_LEN) {
+        LOG_ERROR("clientLogin: username too long");
+        free(loginPayload);
+        return CLIENT_FAIL;
+    }
     memcpy(loginPayload->username, username, strlen(username) + 1);
     memcpy(loginPayload->password, password, pwLen + 1);
-    OPENSSL_cleanse(password, sizeof(password));
+    OPENSSL_cleanse(password, pwLen + 1);
 
     if (clientSendEncryptedPacket(client, MsgLoginReq, loginPayload,
                                   payloadLen) != CLIENT_SUCC) {
@@ -119,9 +124,11 @@ int clientLogin(Client *client, char *username, char *password, char *response,
 
     client->uid = resp->uid;
     *totpEnabled = resp->totpEnabled;
-    strcpy(client->nickname, resp->nickname);
+    memcpy(client->nickname, resp->nickname, sizeof(client->nickname) - 1);
+    client->nickname[sizeof(client->nickname) - 1] = '\0';
 
-    strcpy(outNickname, resp->nickname);
+    memcpy(outNickname, resp->nickname, sizeof(resp->nickname) - 1);
+    outNickname[sizeof(resp->nickname) - 1] = '\0';
 
     packetClear(&respPkt);
     return clientLoadDB(client, response);
@@ -183,6 +190,16 @@ int clientRegister(Client *client, char *username, char *nickname,
         return CLIENT_FAIL;
     }
 
+    if (strlen(username) >= LOGIN_USERNAME_LEN) {
+        LOG_ERROR("clientRegister: username too long");
+        free(reg);
+        return CLIENT_FAIL;
+    }
+    if (strlen(nickname) >= LOGIN_NICKNAME_LEN) {
+        LOG_ERROR("clientRegister: nickname too long");
+        free(reg);
+        return CLIENT_FAIL;
+    }
     memcpy(reg->username, username, strlen(username) + 1);
     memcpy(reg->nickname, nickname, strlen(nickname) + 1);
     memcpy(reg->password, password, pwLen + 1);
@@ -294,7 +311,16 @@ int clientTOTPVerify(Client *client, char *code, char *response, char *outNickna
         return CLIENT_FAIL;
     }
 
-    // validate login response
+    if (respPkt.header.messageType != MsgLoginResp ||
+        respPkt.header.payloadLength < sizeof(LoginResponsePayload)) {
+        LOG_ERROR("clientTOTPVerify: invalid response (type=%d, len=%u)",
+                  (int)respPkt.header.messageType,
+                  respPkt.header.payloadLength);
+        strcpy(response, "Invalid response");
+        packetClear(&respPkt);
+        return CLIENT_FAIL;
+    }
+
     LoginResponsePayload *resp = (LoginResponsePayload *)respPkt.payload;
     if (resp->uid == 0) {
         packetClear(&respPkt);
@@ -303,8 +329,10 @@ int clientTOTPVerify(Client *client, char *code, char *response, char *outNickna
         return CLIENT_FAIL;
     }
 
-    strcpy(outNickname, resp->nickname);
-    strcpy(client->nickname, resp->nickname);
+    memcpy(outNickname, resp->nickname, sizeof(resp->nickname) - 1);
+    outNickname[sizeof(resp->nickname) - 1] = '\0';
+    memcpy(client->nickname, resp->nickname, sizeof(client->nickname) - 1);
+    client->nickname[sizeof(client->nickname) - 1] = '\0';
 
     packetClear(&respPkt);
     if (client->db != NULL) {

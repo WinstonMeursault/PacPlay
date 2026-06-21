@@ -23,11 +23,14 @@
  */
 
 #include "client.h"
+#include "clientLog.h"
 #include "tui/clientTUI.h"
 
 int main(void) {
+    clientLogInit();
     Client clientInstance;
     memset(&clientInstance, 0, sizeof(clientInstance));
     tuiClientEntry(&clientInstance);
+    clientLogClose();
     return 0;
 }

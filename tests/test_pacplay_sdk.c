@@ -46,10 +46,8 @@ enum {
     MaxPayloadMinus1 = 65535,
     QueueCap = 64,
     QueueCapPlus1 = 65,
-    QueueCapTimes2 = 128,
     IterCount10 = 10,
     IterCount100 = 100,
-    IterCount200 = 200,
     IterCount1000 = 1000,
     ThreadCount2 = 2,
     ThreadCount4 = 4,
@@ -714,10 +712,13 @@ static void testQueueAutoExpandSend(void) {
     uint8_t buf[SendLen10];
     fillPayload(buf, SendLen10, TestByteA);
 
-    for (int i = 0; i < QueueCapPlus1; i++) {
+    for (int i = 0; i < QueueCap; i++) {
         int ret = pacplay_cli_send(sdk, buf, SendLen10);
         ASSERT_INT_EQ(ret, 0);
     }
+
+    int retOver = pacplay_cli_send(sdk, buf, SendLen10);
+    ASSERT_INT_EQ(retOver, -1);
 
     int drainCount = 0;
     uint8_t *p = NULL;
@@ -727,7 +728,7 @@ static void testQueueAutoExpandSend(void) {
         pacplay_cli_free_payload(sdk, p);
         drainCount++;
     }
-    ASSERT_INT_EQ(drainCount, QueueCapPlus1);
+    ASSERT_INT_EQ(drainCount, QueueCap);
     pacplay_cli_destroy(sdk);
 }
 
@@ -752,7 +753,7 @@ static void testSendManyThenDrainAll(void) {
     uint8_t buf[SendLen10];
     fillPayload(buf, SendLen10, TestByteA);
 
-    for (int i = 0; i < QueueCapTimes2; i++) {
+    for (int i = 0; i < QueueCap; i++) {
         pacplay_cli_send(sdk, buf, SendLen10);
     }
 
@@ -763,7 +764,7 @@ static void testSendManyThenDrainAll(void) {
         pacplay_cli_free_payload(sdk, p);
         count++;
     }
-    ASSERT_INT_EQ(count, QueueCapTimes2);
+    ASSERT_INT_EQ(count, QueueCap);
     pacplay_cli_destroy(sdk);
 }
 
@@ -803,12 +804,13 @@ static void *threadPusher(void *arg) {
 
 static void testConcurrentSendTwoThreads(void) {
     PacPlaySDK *sdk = pacplay_cli_create();
+    const int perThread = QueueCap / ThreadCount2;
     ThreadArg args[ThreadCount2];
     pthread_t threads[ThreadCount2];
 
     for (int i = 0; i < ThreadCount2; i++) {
         args[i].sdk = sdk;
-        args[i].sendCount = IterCount100;
+        args[i].sendCount = perThread;
         args[i].sendSize = SendLen10;
         args[i].seed = (uint8_t)(TestByteA + i);
         args[i].done = 0;
@@ -816,7 +818,7 @@ static void testConcurrentSendTwoThreads(void) {
     }
 
     int totalDrained = 0;
-    int totalExpected = ThreadCount2 * IterCount100;
+    int totalExpected = ThreadCount2 * perThread;
     while (totalDrained < totalExpected) {
         uint8_t *p = NULL;
         size_t n = 0;
@@ -865,7 +867,7 @@ static void testProducerConsumer(void) {
     PacPlaySDK *sdk = pacplay_cli_create();
     ThreadArg arg;
     arg.sdk = sdk;
-    arg.sendCount = IterCount200;
+    arg.sendCount = QueueCap;
     arg.sendSize = SendLen10;
     arg.seed = TestByteAB;
     arg.done = 0;
@@ -875,7 +877,7 @@ static void testProducerConsumer(void) {
 
     usleep(SleepMs1);
     int drained = 0;
-    while (drained < IterCount200) {
+    while (drained < QueueCap) {
         uint8_t *p = NULL;
         size_t n = 0;
         if (pacplay_cli_poll_send(sdk, &p, &n)) {
@@ -885,7 +887,7 @@ static void testProducerConsumer(void) {
     }
 
     pthread_join(sender, NULL);
-    ASSERT_INT_EQ(drained, IterCount200);
+    ASSERT_INT_EQ(drained, QueueCap);
     pacplay_cli_destroy(sdk);
 }
 
@@ -957,7 +959,7 @@ static void testRapidSendDrain(void) {
 static void testMultipleSenders(void) {
     PacPlaySDK *sdk = pacplay_cli_create();
     const int threadCount = ThreadCount4;
-    const int perThread = IterCount100;
+    const int perThread = QueueCap / ThreadCount4;
     ThreadArg args[ThreadCount4];
     pthread_t threads[ThreadCount4];
 

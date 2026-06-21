@@ -235,7 +235,7 @@ void tuiAppInit() {
     pViewArea = &tuiApp.viewArea;
     tuiAppUpdateViewArea();
     tuiApp.viewArea.windowHandler =
-        newwin(pViewArea->height, pViewArea->width, pViewArea->x, pViewArea->y);
+        newwin(pViewArea->height, pViewArea->width, pViewArea->y, pViewArea->x);
 
     tuiApp.fastRefresh = false;
 }

@@ -100,8 +100,10 @@ void serverRemoveClientFromRoom(Server *s, ClientSession *cs) {
         }
     }
     cs->currentRoomId = 0;
-    if (room->memberCount == 0)
+    if (room->memberCount == 0) {
+        deleteRoom(s->roomDB, room->roomId);
         serverRemoveActiveRoom(s, room->roomId);
+    }
 }
 
 /* ───────────────────────────── room handlers ────────────────────────────── */
@@ -160,5 +162,5 @@ int serverHandleRoomJoin(Server *s, ClientSession *cs, const Packet *pkt) {
 void serverHandleRoomQuit(Server *s, ClientSession *cs) {
     serverRemoveClientFromRoom(s, cs);
     cs->currentRoomId = 0;
-    cs->state = SessionLogin;
+    cs->state = SessionRoom;
 }

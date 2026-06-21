@@ -1,8 +1,10 @@
 #include "archive.h"
+#include "log.h"
 #include "microtar.h"
 #include "platform.h"
 
 #include <dirent.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,6 +58,13 @@ int extractTarGz(const char *tarGzPath, const char *destDir) {
 
     mtar_header_t header;
     while (mtar_read_header(&tar, &header) == MTAR_ESUCCESS) {
+        if (strstr(header.name, "..") != NULL) {
+            LOG_ERROR("extractTarGz: path traversal detected: %s",
+                      header.name);
+            mtar_close(&tar);
+            remove(tarPath);
+            return ARCHIVE_FAIL;
+        }
         if (header.type == MTAR_TDIR) {
             char dirPath[PathBufSize];
             (void)snprintf(dirPath, sizeof(dirPath), "%s/%s", destDir,
@@ -65,6 +74,18 @@ int extractTarGz(const char *tarGzPath, const char *destDir) {
             char filePath[PathBufSize];
             (void)snprintf(filePath, sizeof(filePath), "%s/%s", destDir,
                            header.name);
+
+            if (header.size == 0) {
+                FILE *emptyFile = fopen(filePath, "wb");
+                if (emptyFile == NULL) {
+                    mtar_close(&tar);
+                    remove(tarPath);
+                    return ARCHIVE_FAIL;
+                }
+                fclose(emptyFile);
+                mtar_next(&tar);
+                continue;
+            }
 
             void *data = malloc(header.size);
             if (data == NULL) {
@@ -87,7 +108,17 @@ int extractTarGz(const char *tarGzPath, const char *destDir) {
                 remove(tarPath);
                 return ARCHIVE_FAIL;
             }
-            fwrite(data, 1, header.size, outFile);
+            size_t written =
+                fwrite(data, 1, header.size, outFile);
+            if (written != header.size) {
+                LOG_ERROR("extractTarGz: write failed for %s", filePath);
+                free(data);
+                fclose(outFile);
+                mtar_close(&tar);
+                remove(tarPath);
+                return ARCHIVE_FAIL;
+            }
+
             fclose(outFile);
             free(data);
         }
@@ -135,6 +166,10 @@ static int addEntryToTar(mtar_t *tar, const char *baseDir,
         }
         closedir(dir);
     } else if (S_ISREG(st.st_mode)) {
+        if (st.st_size > (off_t)UINT_MAX) {
+            LOG_ERROR("createTarGz: file too large: %s", relPath);
+            return ARCHIVE_FAIL;
+        }
         if (mtar_write_file_header(tar, relPath,
                                    (unsigned)st.st_size) != MTAR_ESUCCESS) {
             return ARCHIVE_FAIL;

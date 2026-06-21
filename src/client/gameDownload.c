@@ -536,7 +536,22 @@ static void *downloadThread(void *arg) {
             goto fail_cleanse;
         }
 
+        if (pkt.header.payloadLength < sizeof(GameChunkPayload)) {
+            LOG_ERROR("Download thread: payload too short for chunk header");
+            packetClear(&pkt);
+            close(fileFd);
+            fileFd = -1;
+            goto fail_cleanse;
+        }
         const GameChunkPayload *chunk = (const GameChunkPayload *)pkt.payload;
+        if (pkt.header.payloadLength <
+            sizeof(GameChunkPayload) + chunk->chunkSize) {
+            LOG_ERROR("Download thread: invalid chunk size");
+            packetClear(&pkt);
+            close(fileFd);
+            fileFd = -1;
+            goto fail_cleanse;
+        }
         uint64_t offset = (uint64_t)chunk->chunkIndex * GAME_CHUNK_SIZE;
         pwrite(fileFd, pkt.payload + sizeof(GameChunkPayload), chunk->chunkSize,
                (off_t)offset);
@@ -673,6 +688,15 @@ static void *downloadThread(void *arg) {
                 if (relPath[0] == '.' && relPath[1] == '/') {
                     relPath += 2;
                 }
+                if (strstr(relPath, "..") != NULL) {
+                    LOG_ERROR("Download thread: path traversal "
+                              "detected in libraryPath");
+                    cJSON_Delete(root);
+                    remove(dlPath);
+                    remove(metaPath);
+                    ctx->progress.status = DlFailed;
+                    goto cleanup;
+                }
 
                 char gameSoPath[PathBufLen];
                 snprintf(gameSoPath, sizeof(gameSoPath), "%s/%s",
@@ -681,6 +705,12 @@ static void *downloadThread(void *arg) {
                 addGame(ctx->client, ctx->gameId, gameName, gameSoPath,
                         gameVersion, ctx->progress.platform, ctx->hash);
                 cJSON_Delete(root);
+            } else {
+                LOG_ERROR("Download thread: failed to parse metadata.json");
+                remove(dlPath);
+                remove(metaPath);
+                ctx->progress.status = DlFailed;
+                goto cleanup;
             }
         }
     }

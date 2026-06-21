@@ -83,7 +83,7 @@ void clipboardCopy(const char *text) {
         return;
     }
 
-    outLen = B64CharsPerGroup * ((len + B64BytesPerGroup) / B64BytesPerGroup);
+    outLen = B64CharsPerGroup * ((len + B64PadTwo) / B64BytesPerGroup);
     b64 = malloc(outLen + 1);
     if (b64 == NULL) {
         return;

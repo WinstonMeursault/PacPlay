@@ -118,6 +118,20 @@ int prepareGameDBStmts(DB *database);
  */
 int prepareServerDBStmts(DB *database);
 
+/**
+ * @brief Initialize the schema for the game room database.
+ * @param dbHandle  Raw sqlite3 handle.
+ * @return @c DB_SUCC on success, @c DB_FAIL on failure.
+ */
+int initGameRoomDBSchema(sqlite3 *dbHandle);
+
+/**
+ * @brief Prepare cached statements for a GameRoomDB handle.
+ * @param database  The DB handle to populate.
+ * @return @c DB_SUCC on success, @c DB_FAIL on failure.
+ */
+int prepareGameRoomDBStmts(DB *database);
+
 /* ─────────────────────── room cache lifecycle ──────────────────────────────
  */
 

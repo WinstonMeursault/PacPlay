@@ -27,12 +27,13 @@
 #include "client/database.h"
 #include "client/gameDownload.h"
 #include "client/gameLoad.h"
-#include "clientTUI.h"
-#include <stdlib.h>
-#include <string.h>
+#include "client/gameRoom.h"
 #include "client/room.h"
 #include "clientTUI.h"
 #include "controlGameView.h"
+#include "pacplay_sdk.h"
+#include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #define TUI_HOME_STATUSGRID_HEIGHT 9
@@ -61,13 +62,18 @@ static GameInfoEntry *serverGameEntries = NULL;
 static size_t serverGameCount = 0;
 static bool downloadWasActive = false;
 
-enum {
-    DescMaxLines = 3,
-    EntryFormatBufLen = 2048
-};
+static uint32_t gameRoomLobbyGameId = 0;
+static char gameRoomLobbyGameName[GAME_NAME_LEN] = {0};
+static char gameRoomLobbyGamePath[512] = {0};
+static GameRoomListEntry *gameRoomEntries = NULL;
+static size_t gameRoomEntryCount = 0;
+static bool gameRoomIsHost = false;
+static uint32_t gameRoomJoinedId = 0;
+
+enum { DescMaxLines = 3, EntryFormatBufLen = 2048 };
 
 static void formatServerGameEntry(const GameInfoEntry *entry, int availWidth,
-                                   char *out, size_t outSize) {
+                                  char *out, size_t outSize) {
     const char *desc = entry->description;
     size_t descLen = strlen(desc);
     int descMaxChars = availWidth * DescMaxLines;
@@ -118,6 +124,18 @@ ControlButton chatRefreshRoomBtn;
 ControlButton chatCreateRoomBtn;
 ControlScrollTextBox chatHistoryBox;
 ControlInputBox chatInputBox;
+
+// Game room lobby page
+ControlPage gameRoomLobbyPage;
+ControlGrid gameRoomLobbyGrid;
+ControlListBox gameRoomLobbyRoomList;
+ControlButton gameRoomLobbyRefreshBtn;
+ControlButton gameRoomLobbyJoinBtn;
+ControlButton gameRoomLobbyCreateBtn;
+ControlLabel gameRoomLobbyStatus;
+ControlButton gameRoomLobbyStartBtn;
+ControlButton gameRoomLobbyBackBtn;
+ControlScrollTextBox gameRoomLobbyMemberBox;
 
 typedef enum { GameTag = 1, ChatTag = 2 } TagEnum;
 static void switchTag(TagEnum tag) {
@@ -298,7 +316,8 @@ static void homeOperGridUpdate(ControlGrid *self) {
                 DownloadProgress *dl = &progress[0];
                 switch (dl->status) {
                 case DlPending:
-                    sprintf(homeOperDownloadStatus.text, "Download: pending...");
+                    sprintf(homeOperDownloadStatus.text,
+                            "Download: pending...");
                     break;
                 case DlDownloading:
                     sprintf(homeOperDownloadStatus.text,
@@ -347,9 +366,41 @@ static void homeOperPlayOnClick(ControlButton *self) {
     if (cur == NULL) {
         return;
     }
-    switchTag(GameTag);
-    tuiAppChangePage(&gamePage);
-    controlGameViewRun(&gameView, cur->gamePath);
+    gameRoomLobbyGameId = (uint32_t)selected.id;
+    strncpy(gameRoomLobbyGameName, cur->gameName,
+            sizeof(gameRoomLobbyGameName) - 1);
+    strncpy(gameRoomLobbyGamePath, cur->gamePath,
+            sizeof(gameRoomLobbyGamePath) - 1);
+    gameRoomIsHost = false;
+    gameRoomJoinedId = 0;
+    if (gameRoomEntries != NULL) {
+        free(gameRoomEntries);
+        gameRoomEntries = NULL;
+    }
+    gameRoomEntryCount = 0;
+    strcpy(gameRoomLobbyStatus.text, "Loading rooms...");
+    tuiAppChangePage(&gameRoomLobbyPage);
+    clientGameRoomList(client, gameRoomLobbyGameId, &gameRoomEntries,
+                       &gameRoomEntryCount);
+    controlListBoxClear(&gameRoomLobbyRoomList);
+    for (size_t i = 0; i < gameRoomEntryCount; i++) {
+        char entryBuf[512];
+        const char *stateStr =
+            gameRoomEntries[i].state == 0 ? "Lobby" : "Playing";
+        snprintf(entryBuf, sizeof(entryBuf), "#%u | Host: %s(%s) | %u/10 | %s",
+                 gameRoomEntries[i].gameRoomId, gameRoomEntries[i].hostNickname,
+                 gameRoomEntries[i].hostUsername,
+                 gameRoomEntries[i].memberCount, stateStr);
+        controlListBoxAppend(&gameRoomLobbyRoomList, entryBuf,
+                             gameRoomEntries[i].gameRoomId);
+    }
+    if (gameRoomEntryCount == 0) {
+        strcpy(gameRoomLobbyStatus.text,
+               "No rooms found. Create one or refresh.");
+    } else {
+        sprintf(gameRoomLobbyStatus.text, "%zu room(s) found",
+                gameRoomEntryCount);
+    }
 }
 
 static void gameGridDraw(ControlGrid *self) {
@@ -479,6 +530,228 @@ static void homeOperRemoveOnClick(ControlButton *self) {
     strcpy(homeOperDownloadStatus.text, "Game removed");
 }
 
+static void gameRoomLobbyGridDraw(ControlGrid *self) {
+    werase(self->base.windowHandler);
+    DOUBLE_BOX(self->base.windowHandler);
+    int x = 3;
+    int y = 1;
+    wattron(self->base.windowHandler, A_BOLD);
+    mvwprintw(self->base.windowHandler, y, x, "Game Room Lobby — %s",
+              gameRoomLobbyGameName);
+    wattroff(self->base.windowHandler, A_BOLD);
+    wnoutrefresh(self->base.windowHandler);
+}
+
+static void gameRoomLobbyGridResize(ControlGrid *self) {
+    self->base.height = pViewArea->height;
+    self->base.width = pViewArea->width;
+    gameRoomLobbyBackBtn.base.x =
+        self->base.width - gameRoomLobbyBackBtn.base.width - 1;
+}
+
+static void gameRoomLobbyRefreshOnClick(ControlButton *self) {
+    (void)self;
+    if (gameRoomEntries != NULL) {
+        free(gameRoomEntries);
+        gameRoomEntries = NULL;
+    }
+    gameRoomEntryCount = 0;
+    strcpy(gameRoomLobbyStatus.text, "Refreshing...");
+    clientGameRoomList(client, gameRoomLobbyGameId, &gameRoomEntries,
+                       &gameRoomEntryCount);
+    controlListBoxClear(&gameRoomLobbyRoomList);
+    for (size_t i = 0; i < gameRoomEntryCount; i++) {
+        char entryBuf[512];
+        const char *stateStr =
+            gameRoomEntries[i].state == 0 ? "Lobby" : "Playing";
+        snprintf(entryBuf, sizeof(entryBuf), "#%u | Host: %s(%s) | %u/10 | %s",
+                 gameRoomEntries[i].gameRoomId, gameRoomEntries[i].hostNickname,
+                 gameRoomEntries[i].hostUsername,
+                 gameRoomEntries[i].memberCount, stateStr);
+        controlListBoxAppend(&gameRoomLobbyRoomList, entryBuf,
+                             gameRoomEntries[i].gameRoomId);
+    }
+    if (gameRoomEntryCount == 0) {
+        strcpy(gameRoomLobbyStatus.text,
+               "No rooms found. Create one or refresh.");
+    } else {
+        sprintf(gameRoomLobbyStatus.text, "%zu room(s) found",
+                gameRoomEntryCount);
+    }
+}
+
+static void gameRoomLobbyJoinOnClick(ControlButton *self) {
+    (void)self;
+    ControlListBoxEntry selected;
+    if (arrayControlListBoxEntryGet(&gameRoomLobbyRoomList.list,
+                                    gameRoomLobbyRoomList.curLine,
+                                    &selected) != ContainerSucc) {
+        strcpy(gameRoomLobbyStatus.text, "No room selected");
+        return;
+    }
+    if ((uint32_t)selected.id == gameRoomJoinedId) {
+        strcpy(gameRoomLobbyStatus.text, "You are already in this room");
+        return;
+    }
+    if (clientGameRoomJoin(client, (uint32_t)selected.id) != CLIENT_SUCC) {
+        if ((uint32_t)selected.id == gameRoomJoinedId) {
+            gameRoomJoinedId = 0;
+            gameRoomIsHost = false;
+            gameRoomLobbyStartBtn.base.visible = false;
+        }
+        sprintf(gameRoomLobbyStatus.text, "Failed to join room %zu",
+                selected.id);
+        gameRoomLobbyRefreshOnClick(NULL);
+        return;
+    }
+    gameRoomJoinedId = (uint32_t)selected.id;
+    gameRoomIsHost = false;
+    sprintf(gameRoomLobbyStatus.text, "Joined room #%u. Waiting for host...",
+            gameRoomJoinedId);
+    gameRoomLobbyStartBtn.base.visible = false;
+}
+
+static void gameRoomLobbyCreateOnClick(ControlButton *self) {
+    (void)self;
+    uint32_t roomId = 0;
+    if (clientGameRoomCreate(client, gameRoomLobbyGameId, &roomId) !=
+        CLIENT_SUCC) {
+        strcpy(gameRoomLobbyStatus.text, "Failed to create room");
+        gameRoomLobbyRefreshOnClick(NULL);
+        return;
+    }
+    gameRoomJoinedId = roomId;
+    gameRoomIsHost = true;
+    sprintf(gameRoomLobbyStatus.text,
+            "Created room #%u. You are the host. Invite others!",
+            gameRoomJoinedId);
+    gameRoomLobbyStartBtn.base.visible = true;
+    gameRoomLobbyRefreshOnClick(NULL);
+}
+
+static void gameRoomLobbyStartOnClick(ControlButton *self) {
+    (void)self;
+    if (!gameRoomIsHost || gameRoomJoinedId == 0) {
+        strcpy(gameRoomLobbyStatus.text, "Only the host can start the game");
+        return;
+    }
+    if (clientGameRoomStart(client, gameRoomJoinedId) != CLIENT_SUCC) {
+        strcpy(gameRoomLobbyStatus.text, "Failed to start game");
+        return;
+    }
+    strcpy(gameRoomLobbyStatus.text, "Starting game...");
+    PacPlaySDK *sdk = pacplay_cli_create();
+    if (sdk != NULL) {
+        clientLaunch(client, sdk);
+    }
+    switchTag(GameTag);
+    tuiAppChangePage(&gamePage);
+    controlGameViewRun(&gameView, gameRoomLobbyGamePath);
+}
+
+static void gameRoomLobbyBackOnClick(ControlButton *self) {
+    (void)self;
+    if (gameRoomJoinedId != 0) {
+        clientGameRoomQuit(client);
+        gameRoomJoinedId = 0;
+        gameRoomIsHost = false;
+    }
+    if (gameRoomEntries != NULL) {
+        free(gameRoomEntries);
+        gameRoomEntries = NULL;
+    }
+    gameRoomEntryCount = 0;
+    tuiAppChangePage(&homePage);
+}
+
+static void gameRoomLobbyGridUpdate(ControlGrid *self) {
+    (void)self;
+    static int lastMemberCount = -1;
+
+    clientPollNotifications(client);
+
+    if (client->gameStarted) {
+        client->gameStarted = false;
+        PacPlaySDK *sdk = pacplay_cli_create();
+        if (sdk != NULL) {
+            clientLaunch(client, sdk);
+        }
+        switchTag(GameTag);
+        tuiAppChangePage(&gamePage);
+        controlGameViewRun(&gameView, gameRoomLobbyGamePath);
+        return;
+    }
+
+    if (client->roomMemberCount == lastMemberCount) {
+        return;
+    }
+    lastMemberCount = client->roomMemberCount;
+
+    gameRoomLobbyMemberBox.base.text[0] = '\0';
+    gameRoomLobbyMemberBox.base.textLen = 0;
+
+    if (client->roomMembers != NULL && client->roomMemberCount > 0) {
+        char memberBuf[128];
+        for (int i = 0; i < client->roomMemberCount; i++) {
+            const char *hostPrefix = (i == 0) ? "(*)" : "";
+            snprintf(memberBuf, sizeof(memberBuf), "%s%s(%s)", hostPrefix,
+                     client->roomMembers[i].nickname,
+                     client->roomMembers[i].username);
+            controlScrollTextBoxAppend(&gameRoomLobbyMemberBox, memberBuf);
+        }
+    }
+}
+
+void tuiClientGameRoomLobbyInit(void) {
+    controlPageConstruct(&gameRoomLobbyPage);
+    controlGridConstruct(&gameRoomLobbyGrid, 0, 0, 0, 0, LayoutNone, 0, 0,
+                         gameRoomLobbyGridDraw, gameRoomLobbyGridResize, NULL,
+                         gameRoomLobbyGridUpdate, NULL);
+    controlListBoxConstruct(&gameRoomLobbyRoomList, 15, 70, 3, 3, NULL, NULL,
+                            NULL, NULL);
+    controlButtonConstruct(&gameRoomLobbyRefreshBtn, TUI_BTN_HEIGHT,
+                           TUI_BTN_WIDTH, 19, 3, "Refresh", NULL,
+                           gameRoomLobbyRefreshOnClick, NULL, NULL, NULL);
+    controlButtonConstruct(&gameRoomLobbyJoinBtn, TUI_BTN_HEIGHT, TUI_BTN_WIDTH,
+                           19, 18, "Join", NULL, gameRoomLobbyJoinOnClick, NULL,
+                           NULL, NULL);
+    controlButtonConstruct(&gameRoomLobbyCreateBtn, TUI_BTN_HEIGHT,
+                           TUI_BTN_WIDTH, 19, 33, "Create", NULL,
+                           gameRoomLobbyCreateOnClick, NULL, NULL, NULL);
+    controlLabelConstruct(&gameRoomLobbyStatus, "", 70, 22, 3, NULL, NULL, NULL,
+                          NULL);
+    controlButtonConstruct(&gameRoomLobbyStartBtn, TUI_BTN_HEIGHT,
+                           TUI_BTN_WIDTH, 25, 3, "Start Game", NULL,
+                           gameRoomLobbyStartOnClick, NULL, NULL, NULL);
+    controlButtonConstruct(&gameRoomLobbyBackBtn, TUI_BTN_HEIGHT, TUI_BTN_WIDTH,
+                           1, 70, "Back", NULL, gameRoomLobbyBackOnClick, NULL,
+                           NULL, NULL);
+    controlScrollTextBoxConstruct(&gameRoomLobbyMemberBox, 15, 30, 3, 74, 100,
+                                  NULL, NULL, NULL, NULL);
+
+    gameRoomLobbyStartBtn.base.visible = false;
+
+    tuiAppControlRegister((Control *)&gameRoomLobbyPage, NULL);
+    tuiAppControlRegister((Control *)&gameRoomLobbyGrid,
+                          (Control *)&gameRoomLobbyPage);
+    tuiAppControlRegister((Control *)&gameRoomLobbyRoomList,
+                          (Control *)&gameRoomLobbyGrid);
+    tuiAppControlRegister((Control *)&gameRoomLobbyRefreshBtn,
+                          (Control *)&gameRoomLobbyGrid);
+    tuiAppControlRegister((Control *)&gameRoomLobbyJoinBtn,
+                          (Control *)&gameRoomLobbyGrid);
+    tuiAppControlRegister((Control *)&gameRoomLobbyCreateBtn,
+                          (Control *)&gameRoomLobbyGrid);
+    tuiAppControlRegister((Control *)&gameRoomLobbyStatus,
+                          (Control *)&gameRoomLobbyGrid);
+    tuiAppControlRegister((Control *)&gameRoomLobbyStartBtn,
+                          (Control *)&gameRoomLobbyGrid);
+    tuiAppControlRegister((Control *)&gameRoomLobbyBackBtn,
+                          (Control *)&gameRoomLobbyGrid);
+    tuiAppControlRegister((Control *)&gameRoomLobbyMemberBox,
+                          (Control *)&gameRoomLobbyGrid);
+}
+
 void tuiClientMainPageInit() {
     controlPageConstruct(&homePage);
     controlGridConstruct(&homePageGrid, 0, 0, 0, 0, LayoutNone, 0, 0,
@@ -579,7 +852,7 @@ void tuiClientMainPageInit() {
                            NULL, NULL, NULL);
     controlGameViewConstruct(&gameView, 3, 3, TUI_BTN_HEIGHT + 1, 1);
     controlGridConstruct(&chatGrid, 0, 0, TUI_BTN_HEIGHT + 1, 1, LayoutNone, 0,
-                          0, NULL, NULL, NULL, NULL, NULL);
+                         0, NULL, NULL, NULL, NULL, NULL);
     controlListBoxConstruct(&chatRoomList, 20, 20, 0, 0, NULL, NULL, NULL,
                             NULL);
     controlButtonConstruct(&chatEnterRoomBtn, TUI_BTN_HEIGHT, TUI_BTN_WIDTH, 0,

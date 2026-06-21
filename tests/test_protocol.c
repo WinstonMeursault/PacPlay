@@ -352,6 +352,102 @@ static void testTOTPSetupRespPayloadOffset(void) {
     ASSERT_UINT_EQ(offsetof(TOTPSetupRespPayload, secret), 0);
 }
 
+/* ────────────────────── GameRoomCreatePayload layout ─────────────────────── */
+
+/** @brief sizeof(GameRoomCreatePayload) == sizeof(uint32_t) (only gameId). */
+static void testGameRoomCreatePayloadSize(void) {
+    ASSERT_UINT_EQ(sizeof(GameRoomCreatePayload), sizeof(uint32_t));
+}
+
+/** @brief GameRoomCreatePayload.gameId is at offset zero. */
+static void testGameRoomCreatePayloadOffset(void) {
+    ASSERT_UINT_EQ(offsetof(GameRoomCreatePayload, gameId), 0);
+}
+
+/* ─────────────────────── GameRoomListEntry layout ────────────────────────── */
+
+/** @brief sizeof(GameRoomListEntry) matches the packed layout. */
+static void testGameRoomListEntrySize(void) {
+    enum { ExpectedSize = 4 + 4 + 4 + 32 + 32 + 4 + 1 };
+    ASSERT_UINT_EQ(sizeof(GameRoomListEntry), (size_t)ExpectedSize);
+}
+
+/** @brief GameRoomListEntry fields are at deterministic offsets. */
+static void testGameRoomListEntryOffsets(void) {
+    ASSERT_UINT_EQ(offsetof(GameRoomListEntry, gameRoomId), 0);
+    ASSERT_UINT_EQ(offsetof(GameRoomListEntry, gameId), sizeof(uint32_t));
+    ASSERT_UINT_EQ(offsetof(GameRoomListEntry, hostUid),
+                   (size_t)(2 * sizeof(uint32_t)));
+    ASSERT_UINT_EQ(offsetof(GameRoomListEntry, hostNickname),
+                   (size_t)(3 * sizeof(uint32_t)));
+    ASSERT_UINT_EQ(offsetof(GameRoomListEntry, hostUsername),
+                   (size_t)(3 * sizeof(uint32_t) + LOGIN_NICKNAME_LEN));
+    ASSERT_UINT_EQ(offsetof(GameRoomListEntry, memberCount),
+                   (size_t)(3 * sizeof(uint32_t) + LOGIN_NICKNAME_LEN +
+                            LOGIN_USERNAME_LEN));
+    ASSERT_UINT_EQ(offsetof(GameRoomListEntry, state),
+                   (size_t)(4 * sizeof(uint32_t) + LOGIN_NICKNAME_LEN +
+                            LOGIN_USERNAME_LEN));
+}
+
+/* ─────────────────────── GameRoomJoinPayload layout ──────────────────────── */
+
+/** @brief sizeof(GameRoomJoinPayload) == sizeof(uint32_t). */
+static void testGameRoomJoinPayloadSize(void) {
+    ASSERT_UINT_EQ(sizeof(GameRoomJoinPayload), sizeof(uint32_t));
+}
+
+/** @brief GameRoomJoinPayload.gameRoomId is at offset zero. */
+static void testGameRoomJoinPayloadOffset(void) {
+    ASSERT_UINT_EQ(offsetof(GameRoomJoinPayload, gameRoomId), 0);
+}
+
+/* ─────────────────────── GameRoomStartPayload layout ─────────────────────── */
+
+/** @brief sizeof(GameRoomStartPayload) == sizeof(uint32_t). */
+static void testGameRoomStartPayloadSize(void) {
+    ASSERT_UINT_EQ(sizeof(GameRoomStartPayload), sizeof(uint32_t));
+}
+
+/** @brief GameRoomStartPayload.gameRoomId is at offset zero. */
+static void testGameRoomStartPayloadOffset(void) {
+    ASSERT_UINT_EQ(offsetof(GameRoomStartPayload, gameRoomId), 0);
+}
+
+/* ─────────────────────── GameRoomMemberInfo layout ────────────────────────── */
+
+/** @brief sizeof(GameRoomMemberInfo) matches the packed layout. */
+static void testGameRoomMemberInfoSize(void) {
+    enum { ExpectedSize = 4 + 4 + 32 + 32 };
+    ASSERT_UINT_EQ(sizeof(GameRoomMemberInfo), (size_t)ExpectedSize);
+}
+
+/** @brief GameRoomMemberInfo fields are at deterministic offsets. */
+static void testGameRoomMemberInfoOffsets(void) {
+    ASSERT_UINT_EQ(offsetof(GameRoomMemberInfo, roomId), 0);
+    ASSERT_UINT_EQ(offsetof(GameRoomMemberInfo, uid), sizeof(uint32_t));
+    ASSERT_UINT_EQ(offsetof(GameRoomMemberInfo, nickname),
+                   (size_t)(2 * sizeof(uint32_t)));
+    ASSERT_UINT_EQ(offsetof(GameRoomMemberInfo, username),
+                   (size_t)(2 * sizeof(uint32_t) + LOGIN_NICKNAME_LEN));
+}
+
+/* ──────────────────── GameRoomMemberQuitPayload layout ────────────────────── */
+
+/** @brief sizeof(GameRoomMemberQuitPayload) matches packed layout. */
+static void testGameRoomMemberQuitPayloadSize(void) {
+    enum { ExpectedSize = 4 + 4 + 1 };
+    ASSERT_UINT_EQ(sizeof(GameRoomMemberQuitPayload), (size_t)ExpectedSize);
+}
+
+/** @brief GameRoomMemberQuitPayload fields are at deterministic offsets. */
+static void testGameRoomMemberQuitPayloadOffsets(void) {
+    ASSERT_UINT_EQ(offsetof(GameRoomMemberQuitPayload, roomId), 0);
+    ASSERT_UINT_EQ(offsetof(GameRoomMemberQuitPayload, uid), sizeof(uint32_t));
+    ASSERT_UINT_EQ(offsetof(GameRoomMemberQuitPayload, dissolved),
+                   (size_t)(2 * sizeof(uint32_t)));
+}
+
 /* ═════════════════════════════ 3. packetClear ═════════════════════════════ */
 
 /** @brief packetClear frees payload and sets it to NULL. */
@@ -2111,6 +2207,18 @@ int main(void) {
     RUN_TEST(testChatBroadcastPayloadSize);
     RUN_TEST(testTOTPSetupRespPayloadSize);
     RUN_TEST(testTOTPSetupRespPayloadOffset);
+    RUN_TEST(testGameRoomCreatePayloadSize);
+    RUN_TEST(testGameRoomCreatePayloadOffset);
+    RUN_TEST(testGameRoomListEntrySize);
+    RUN_TEST(testGameRoomListEntryOffsets);
+    RUN_TEST(testGameRoomJoinPayloadSize);
+    RUN_TEST(testGameRoomJoinPayloadOffset);
+    RUN_TEST(testGameRoomStartPayloadSize);
+    RUN_TEST(testGameRoomStartPayloadOffset);
+    RUN_TEST(testGameRoomMemberInfoSize);
+    RUN_TEST(testGameRoomMemberInfoOffsets);
+    RUN_TEST(testGameRoomMemberQuitPayloadSize);
+    RUN_TEST(testGameRoomMemberQuitPayloadOffsets);
 
     /* 3. packetClear */
     RUN_TEST(testPacketClearFreesPayload);

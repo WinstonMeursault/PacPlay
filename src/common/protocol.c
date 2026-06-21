@@ -146,6 +146,9 @@ SocketFD serverSetup(uint16_t port) {
         goto cleanup;
     }
 
+    int optVal = 1;
+    setsockopt(socketFD, SOL_SOCKET, SO_REUSEADDR, &optVal, sizeof(optVal));
+
     memset(&sockAddr, 0, sizeof(sockAddr));
     sockAddr.sin_family = AF_INET;
     sockAddr.sin_port = htons(port);
@@ -177,6 +180,7 @@ SocketFD clientSetup(const char *serverAddress, uint16_t serverPort) {
     }
 
     struct sockaddr_in serverSockAddr;
+    memset(&serverSockAddr, 0, sizeof(serverSockAddr));
 
     SocketFD socketFD = socketOpen();
     if (socketFD == NULL_SOCKETFD) {
@@ -455,7 +459,9 @@ int packetAESEncrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
     memcpy(cursor, cipher.tag, AES_GCM_TAG_LEN);
 
     /* 7. Replace old payload with encrypted payload. */
-    OPENSSL_cleanse(packet->payload, plaintextLen);
+    if (packet->payload != NULL) {
+        OPENSSL_cleanse(packet->payload, plaintextLen);
+    }
     free(packet->payload);
     packet->payload = newPayload;
     packet->header.payloadLength = newPayloadLen;
@@ -559,7 +565,8 @@ int packetAESDecrypt(Packet *packet, uint8_t key[AES_GCM_KEY_LEN]) {
 /* ──────────────────────── public API: send / recv ───────────────────────── */
 
 int packetSend(Packet *packet, SocketFD socketFD) {
-    if (packet == NULL || packet->payload == NULL) {
+    if (packet == NULL ||
+        (packet->header.payloadLength > 0 && packet->payload == NULL)) {
         return PROTOCOL_FAIL;
     }
 
@@ -609,6 +616,11 @@ int packetRecv(Packet *dest, SocketFD socketFD) {
         LOG_ERROR("Payload length exceeds limit (%zu > %zu)",
                   dest->header.payloadLength, maxLen);
         return PROTOCOL_FAIL;
+    }
+
+    if (dest->header.payloadLength == 0) {
+        dest->payload = NULL;
+        return PROTOCOL_SUCC;
     }
 
     /* Allocate and receive payload. */

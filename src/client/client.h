@@ -30,7 +30,7 @@
 
 #include <pthread.h>
 
-struct ClientDB;  /* forward — full definition in client/database.h */
+struct ClientDB;   /* forward — full definition in client/database.h */
 struct PacPlaySDK; /* forward — full definition in pacplay_sdk.h */
 
 #include <stdint.h>
@@ -53,6 +53,7 @@ typedef struct Client {
     uint32_t uid;
     char nickname[LOGIN_NICKNAME_LEN];
     uint32_t currentRoomId;
+    uint32_t currentGameRoomId; /**< 0 if not in any game room. */
     uint32_t seqID;
     char serverAddr[SERVER_ADDR_LEN]; /**< Server address for data channel
                                          connections. */
@@ -61,9 +62,12 @@ typedef struct Client {
         cdbkey[CLIENT_DB_KEY_LEN]; /**< Per-user CDBKey received from server. */
     struct ClientDB *db;           /**< Opaque encrypted client database. */
     /** IO thread fields — available after clientLaunch(). */
-    pthread_t ioThread;          /**< Background IO thread handle. */
-    volatile bool running;       /**< IO thread continues while true. */
-    struct PacPlaySDK *sdk;      /**< Client SDK handle (NULL if unused). */
+    pthread_t ioThread;              /**< Background IO thread handle. */
+    volatile bool running;           /**< IO thread continues while true. */
+    struct PacPlaySDK *sdk;          /**< Client SDK handle (NULL if unused). */
+    GameRoomMemberInfo *roomMembers; /**< Current room member list. */
+    int roomMemberCount;             /**< Count of roomMembers entries. */
+    volatile bool gameStarted; /**< Set by poll when start resp received. */
 } Client;
 
 /* ─────────────────────── IO thread lifecycle ────────────────────────────── */

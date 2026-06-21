@@ -276,7 +276,7 @@ int prepareGameDBStmts(DB *database) {
 /* ──────────────────── internal: populate GameInfo from row ──────────────── */
 
 static int populateGameInfo(sqlite3_stmt *stmt, GameInfo *out) {
-    out->gameId = (uint32_t)sqlite3_column_int(stmt, ColGameId);
+    out->gameId = (uint32_t)sqlite3_column_int64(stmt, ColGameId);
     const char *n = (const char *)sqlite3_column_text(stmt, ColName);
     const char *v = (const char *)sqlite3_column_text(stmt, ColVersion);
     const char *d = (const char *)sqlite3_column_text(stmt, ColDescription);
@@ -1027,7 +1027,7 @@ int listGameBrief(DB *database, uint32_t rangeStart, uint32_t rangeEnd,
         }
 
         memset(&results[n], 0, sizeof(GameInfoEntry));
-        results[n].gameId = (uint32_t)sqlite3_column_int(stmt, ColGameId);
+        results[n].gameId = (uint32_t)sqlite3_column_int64(stmt, ColGameId);
 
         const char *nameStr = (const char *)sqlite3_column_text(stmt, ColName);
         const char *verStr =

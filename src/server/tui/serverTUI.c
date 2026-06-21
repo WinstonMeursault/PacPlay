@@ -121,7 +121,13 @@ static void startGridResize(ControlGrid *self) {
 static void tryUnlock(void) {
     startStatus.base.visible = false;
     char key[INPUTBOX_BUF_MAX_LEN] = {0};
-    strncpy(key, startMasterKeyInput.buf, startMasterKeyInput.curLen);
+    {
+        size_t copyLen = startMasterKeyInput.curLen < sizeof(key) - 1
+                             ? startMasterKeyInput.curLen
+                             : sizeof(key) - 1;
+        memcpy(key, startMasterKeyInput.buf, copyLen);
+        key[copyLen] = '\0';
+    }
     OPENSSL_cleanse(startMasterKeyInput.buf, INPUTBOX_BUF_MAX_LEN);
     if (serverUnlockWithMK(server, key) == SERVER_SUCC) {
         OPENSSL_cleanse(key, INPUTBOX_BUF_MAX_LEN);

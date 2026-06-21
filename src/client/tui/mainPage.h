@@ -26,6 +26,7 @@
 #define MAINPAGE_H
 
 void tuiClientMainPageInit();
+void tuiClientGameRoomLobbyInit();
 void homePageInitUpdate(char *nickname, char *username);
 
 #endif // MAINPAGE_H

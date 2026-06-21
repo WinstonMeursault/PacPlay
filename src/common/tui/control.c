@@ -1533,6 +1533,9 @@ static void controlListBoxMsgHandler(ControlListBox *self, TuiMsg msg) {
         case KEY_BTAB:
         case KEY_LEFT:
         case KEY_UP:
+            if (self->entryCnt == 0) {
+                break;
+            }
             if (self->curLine > 0) {
                 --self->curLine;
             } else {
@@ -1542,6 +1545,9 @@ static void controlListBoxMsgHandler(ControlListBox *self, TuiMsg msg) {
         case '\t':
         case KEY_RIGHT:
         case KEY_DOWN:
+            if (self->entryCnt == 0) {
+                break;
+            }
             if (self->curLine < self->entryCnt - 1) {
                 ++self->curLine;
             } else {

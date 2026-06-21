@@ -138,7 +138,6 @@ int serverHandleRegister(Server *s, ClientSession *cs, const Packet *pkt) {
 
 int serverHandleTOTPSetup(Server *s, ClientSession *cs) {
     enum { RawSecretLen = 20, Base32EncodedLen = 32 };
-    (void)s;
     char *existing = getTOTPSecret(s->userDB, &cs->currentUser);
     if (existing) {
         free(existing);

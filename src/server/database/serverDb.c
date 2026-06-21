@@ -153,9 +153,6 @@ int setServerKey(DB *database, const char *keyName, const uint8_t *value,
 
 int getServerKey(DB *database, const char *keyName, uint8_t **outValue,
                  size_t *outLen) {
-    *outValue = NULL;
-    *outLen = 0;
-
     if (database == NULL || keyName == NULL || outValue == NULL ||
         outLen == NULL) {
         LOG_ERROR("getServerKey: NULL argument "
@@ -173,6 +170,9 @@ int getServerKey(DB *database, const char *keyName, uint8_t **outValue,
                   (int)database->type);
         return DB_FAIL;
     }
+
+    *outValue = NULL;
+    *outLen = 0;
 
     sqlite3_stmt *stmt = database->stmtGetKey;
     sqlite3_reset(stmt);

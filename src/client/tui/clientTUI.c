@@ -50,5 +50,6 @@ void tuiClientEntry(Client *clientInstance) {
     tuiClientConnectPageInit();
     tuiClientLoginRegInit();
     tuiClientMainPageInit();
+    tuiClientGameRoomLobbyInit();
     tuiAppStart(&connectPage);
 }

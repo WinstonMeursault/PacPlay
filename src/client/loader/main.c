@@ -53,6 +53,8 @@ int main(int argc, const char *argv[]) {
 
     if (gameFunctions.pacplayMain == NULL) {
         LOG_ERROR("loader: cannot find symbol 'pacplayMain' in %s", argv[1]);
+        dlclose(handle);
+        return EXIT_FAILURE;
     }
 
     gameFunctions.pacplayMain();

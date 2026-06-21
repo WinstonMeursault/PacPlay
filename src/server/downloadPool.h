@@ -4,6 +4,7 @@
 #include "server.h"
 
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -52,7 +53,7 @@ typedef struct DownloadPool {
     int listenFd;
     uint16_t dataPort;
     pthread_t acceptThread;
-    bool shutdown;
+    _Atomic bool shutdown;
 } DownloadPool;
 
 int downloadPoolInit(DownloadPool *pool, uint16_t dataPort, size_t workerCount);

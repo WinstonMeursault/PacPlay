@@ -457,7 +457,7 @@ int queryChatByMsgId(DB *database, uint32_t roomId, uint64_t msgId, Chat *out) {
 
     /* Columns: 0=msgId, 1=uid, 2=message, 3=timestamp */
     out->msgId = (uint64_t)sqlite3_column_int64(stmt, 0);
-    out->uid = (uint32_t)sqlite3_column_int(stmt, 1);
+    out->uid = (uint32_t)sqlite3_column_int64(stmt, 1);
 
     const char *msgText = (const char *)sqlite3_column_text(stmt, 2);
     if (msgText == NULL) {
@@ -584,7 +584,7 @@ int queryChatByTimeRange(DB *database, uint32_t roomId, uint32_t uid,
 
         /* Columns: 0=msgId, 1=uid, 2=message, 3=timestamp */
         results[n].msgId = (uint64_t)sqlite3_column_int64(stmt, 0);
-        results[n].uid = (uint32_t)sqlite3_column_int(stmt, 1);
+        results[n].uid = (uint32_t)sqlite3_column_int64(stmt, 1);
 
         const char *msgText = (const char *)sqlite3_column_text(stmt, 2);
         if (msgText == NULL) {
@@ -718,7 +718,7 @@ static int collectRoomResults(DB *database, RoomStmtEntry *entry, uint32_t uid,
 
         /* Columns: 0=msgId, 1=uid, 2=message, 3=timestamp */
         (*results)[*n].msgId = (uint64_t)sqlite3_column_int64(stmt, 0);
-        (*results)[*n].uid = (uint32_t)sqlite3_column_int(stmt, 1);
+        (*results)[*n].uid = (uint32_t)sqlite3_column_int64(stmt, 1);
 
         const char *msgText = (const char *)sqlite3_column_text(stmt, 2);
         if (msgText == NULL) {

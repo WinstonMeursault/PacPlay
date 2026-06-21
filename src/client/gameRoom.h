@@ -1,6 +1,6 @@
 /**
- * @file serverLog.c
- * @brief Server log wrapper — delegates to the shared autoLog engine.
+ * @file gameRoom.h
+ * @brief Client-side game room module header.
  *
  * @date 2026-06-20
  * @copyright GPLv3 License
@@ -22,24 +22,23 @@
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
-#include "server/serverLog.h"
-#include "common/autoLog.h"
+#ifndef CLIENT_GAMEROOM_H
+#define CLIENT_GAMEROOM_H
 
-int serverLogInit(void) {
-    AutoLogConfig cfg = {0};
-    cfg.fileNamePrefix = "server";
-    cfg.enableTuiBuffer = true;
-    return autoLogInit(&cfg);
-}
+#include "client.h"
 
-void serverLogCheckAndRestart(void) { autoLogCheckAndRestart(); }
+int clientGameRoomList(Client *client, uint32_t gameId,
+                       GameRoomListEntry **outEntries, size_t *outCount);
 
-void serverLogClose(void) { autoLogClose(); }
+int clientGameRoomCreate(Client *client, uint32_t gameId,
+                         uint32_t *outRoomId);
 
-int serverLogFetch(LogLevel minLevel, char ***outLines, int *outCount) {
-    return autoLogFetch(minLevel, outLines, outCount);
-}
+int clientGameRoomJoin(Client *client, uint32_t gameRoomId);
 
-void serverLogFetchFree(char **lines, int count) {
-    autoLogFetchFree(lines, count);
-}
+void clientGameRoomQuit(Client *client);
+
+int clientGameRoomStart(Client *client, uint32_t gameRoomId);
+
+void clientPollNotifications(Client *client);
+
+#endif /* CLIENT_GAMEROOM_H */

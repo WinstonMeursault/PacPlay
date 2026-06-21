@@ -3058,11 +3058,13 @@ static void testServerInitKeysFirstRun(void) {
     uint8_t *outChat = NULL;
     uint8_t *outRoom = NULL;
     uint8_t *outGame = NULL;
+    uint8_t *outGameRoom = NULL;
     size_t lenDek = 0;
     size_t lenUser = 0;
     size_t lenChat = 0;
     size_t lenRoom = 0;
     size_t lenGame = 0;
+    size_t lenGameRoom = 0;
     ASSERT_INT_EQ(getServerKey(serverDB, "DEK", &outDek, &lenDek), DB_SUCC);
     ASSERT_INT_EQ(getServerKey(serverDB, "UserDBKey", &outUser, &lenUser),
                   DB_SUCC);
@@ -3073,6 +3075,9 @@ static void testServerInitKeysFirstRun(void) {
                   DB_SUCC);
     ASSERT_INT_EQ(getServerKey(serverDB, "GameDBKey", &outGame, &lenGame),
                   DB_SUCC);
+    ASSERT_INT_EQ(
+        getServerKey(serverDB, "GameRoomDBKey", &outGameRoom, &lenGameRoom),
+        DB_SUCC);
 
     enum { EnvelopeLen = 12 + 32 + 16 }; /* nonce + key + tag */
     ASSERT_TRUE(outDek != NULL);
@@ -3085,18 +3090,22 @@ static void testServerInitKeysFirstRun(void) {
     ASSERT_UINT_EQ(lenRoom, (size_t)EnvelopeLen);
     ASSERT_TRUE(outGame != NULL);
     ASSERT_UINT_EQ(lenGame, (size_t)EnvelopeLen);
+    ASSERT_TRUE(outGameRoom != NULL);
+    ASSERT_UINT_EQ(lenGameRoom, (size_t)EnvelopeLen);
 
     free(outDek);
     free(outUser);
     free(outChat);
     free(outRoom);
     free(outGame);
+    free(outGameRoom);
 
     OPENSSL_cleanse(srv.dekKey, sizeof(srv.dekKey));
     OPENSSL_cleanse(srv.userDbEncKey, sizeof(srv.userDbEncKey));
     OPENSSL_cleanse(srv.chatDbEncKey, sizeof(srv.chatDbEncKey));
     OPENSSL_cleanse(srv.roomDbEncKey, sizeof(srv.roomDbEncKey));
     OPENSSL_cleanse(srv.gameDbEncKey, sizeof(srv.gameDbEncKey));
+    OPENSSL_cleanse(srv.gameRoomDbEncKey, sizeof(srv.gameRoomDbEncKey));
     dbClose(serverDB);
     removeDBFiles();
 }
@@ -3348,6 +3357,10 @@ static void testServerInitKeysSubsequentRun(void) {
         0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x11, 0x21, 0x31,
         0x41, 0x51, 0x61, 0x71, 0x81, 0x12, 0x22, 0x32, 0x42, 0x52, 0x62,
         0x72, 0x82, 0x13, 0x23, 0x33, 0x43, 0x53, 0x63, 0x73, 0x83};
+    static const uint8_t knownGameRoomDbKey[KeyLen] = {
+        0x14, 0x24, 0x34, 0x44, 0x54, 0x64, 0x74, 0x84, 0x15, 0x25, 0x35,
+        0x45, 0x55, 0x65, 0x75, 0x85, 0x16, 0x26, 0x36, 0x46, 0x56, 0x66,
+        0x76, 0x86, 0x17, 0x27, 0x37, 0x47, 0x57, 0x67, 0x77, 0x87};
 
     removeDBFiles();
 
@@ -3369,8 +3382,9 @@ static void testServerInitKeysSubsequentRun(void) {
             {knownChatDbKey, "ChatHistoryDBKey"},
             {knownRoomDbKey, "RoomDBKey"},
             {knownGameDbKey, "GameDBKey"},
+            {knownGameRoomDbKey, "GameRoomDBKey"},
         };
-        enum { KeyCount = 5 };
+        enum { KeyCount = 6 };
 
         for (int i = 0; i < KeyCount; i++) {
             ASSERT_INT_EQ(cryptoRandomBytes(encKey.nonce, NonceLen),
@@ -3426,12 +3440,14 @@ static void testServerInitKeysSubsequentRun(void) {
         ASSERT_MEM_EQ(srv.chatDbEncKey, knownChatDbKey, KeyLen);
         ASSERT_MEM_EQ(srv.roomDbEncKey, knownRoomDbKey, KeyLen);
         ASSERT_MEM_EQ(srv.gameDbEncKey, knownGameDbKey, KeyLen);
+        ASSERT_MEM_EQ(srv.gameRoomDbEncKey, knownGameRoomDbKey, KeyLen);
 
         OPENSSL_cleanse(srv.dekKey, sizeof(srv.dekKey));
         OPENSSL_cleanse(srv.userDbEncKey, sizeof(srv.userDbEncKey));
         OPENSSL_cleanse(srv.chatDbEncKey, sizeof(srv.chatDbEncKey));
         OPENSSL_cleanse(srv.roomDbEncKey, sizeof(srv.roomDbEncKey));
         OPENSSL_cleanse(srv.gameDbEncKey, sizeof(srv.gameDbEncKey));
+        OPENSSL_cleanse(srv.gameRoomDbEncKey, sizeof(srv.gameRoomDbEncKey));
         dbClose(serverDB);
     }
     removeDBFiles();
