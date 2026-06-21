@@ -25,6 +25,7 @@
 #include "log.h"
 #include "server/communication.h"
 #include "server/database.h"
+#include "server/onlineTracker.h"
 #include <openssl/crypto.h>
 #include <stdio.h>
 #include <string.h>
@@ -88,7 +89,9 @@ int serverHandleLogin(Server *s, ClientSession *cs, const Packet *pkt) {
         serverSendEncryptedPacket(cs, MsgTOTPVerifyReq, NULL, 0);
         return SERVER_SUCC;
     }
-    cs->state = SessionRoom;
+    cs->state = SessionLobby;
+    onlineTrackerAdd(s->onlineTrk, cs->currentUser.uid, cs);
+
     LoginResponsePayload sr;
     memset(&sr, 0, sizeof(sr));
     sr.uid = user.uid;
@@ -198,7 +201,8 @@ int serverHandleTOTPVerify(Server *s, ClientSession *cs, const Packet *pkt) {
         cs->state = SessionLogin;
         return SERVER_SUCC;
     }
-    cs->state = SessionRoom;
+    cs->state = SessionLobby;
+    onlineTrackerAdd(s->onlineTrk, cs->currentUser.uid, cs);
     LoginResponsePayload sr;
     memset(&sr, 0, sizeof(sr));
     sr.uid = cs->currentUser.uid;

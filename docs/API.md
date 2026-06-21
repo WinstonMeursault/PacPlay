@@ -36,6 +36,7 @@ PacPlay 的 API 按编译边界分为三层：
 * **想理解网络协议**：先读 [1.2 Protocol](#12-protocol-通信协议)，再读 [4.3-4.6](#第四部分端到端协议与典型业务流程) 端到端流程
 * **想理解认证**：先读 [1.1 Crypto](#11-crypto-密码学模块) 的密码/TOTP，再读 [2.2 Server Auth](#22-server-auth-认证模块) 和 [3.1 Client](#31-client-客户端主模块)
 * **想理解数据库**：先读 [2.7 Server Database](#27-server-database-服务端数据库模块)，再读 [3.6 Client Database](#36-client-database-客户端数据库模块)
+* **想理解社交系统**：先读 [2.11-2.15 Server Social](#211-server-friend-好友模块) 和 [3.8-3.10 Client Social](#38-client-social-社交逻辑模块)，再读 [4.7 社交流程](#47-社交系统端到端流程)
 * **想理解终端 UI**：先读 [1.7 TUI](#17-tui-终端-ui-框架) 的消息系统、控件类型和事件循环，再读 [2.10 Server TUI](#210-server-tui-服务端管理面板) 和 [3.7 Client TUI](#37-client-tui-客户端界面系统) 的页面导航
 * **想理解游戏管理**：先读 [2.9 Server GameDB](#29-server-gamedb-游戏元数据模块)，再读 [3.6 Client Database](#36-client-database-客户端数据库模块)
 * **想理解剪贴板与 QR 码**：读 [1.8 Clipboard](#18-clipboard-剪贴板模块) 和 [1.9 QR Code](#19-qr-code-二维码生成模块)
@@ -1253,8 +1254,8 @@ graph TD
     keyManager.c --> database/serverDb.c
     keyManager.c --> crypto.c
     auth.c --> database/userDb.c
-    room.c --> database/roomDb.c
-    chat.c --> database/chatDb.c
+    room.c --> database/roomDb.c (DEPRECATED)
+    chat.c --> database/chatDb.c (DEPRECATED)
     database/common.c --> database/gameDb.c
     communication.c --> protocol.c
     chat.c --> communication.c
@@ -1280,7 +1281,7 @@ graph TD
 
 **实现**： `src/server/server.c`
 
-实现 `select()` 驱动的单线程事件循环，管理客户端连接生命周期与顶层请求分派。业务处理委托给各领域模块（auth、room、chat）。
+实现 `select()` 驱动的单线程事件循环，管理客户端连接生命周期与顶层请求分派。业务处理委托给各领域模块（auth、friend、privateChat、group、gameRoom、gameDistribution）。
 
 #### 2.1.1 常量
 
@@ -1332,8 +1333,7 @@ typedef enum {
     SessionKeyExchange = 0,
     SessionLogin,
     SessionTOTPVerify,
-    SessionRoom,
-    SessionChat,
+    SessionLobby,
     SessionGameRoomLobby,
     SessionGameRoomPlay
 } SessionState;
@@ -1347,21 +1347,15 @@ typedef struct {
     SessionState state;
     AESGCMKey aesKey;
     User currentUser;
-    uint32_t currentRoomId;      // 0 表示不在任何房间
+    uint32_t currentGroupId;      // 0 表示不在任何群组
     uint32_t currentGameRoomId;  // 0 表示不在任何游戏房间
     uint32_t seqID;
 } ClientSession;
 ```
 
-**ActiveRoom**
+**ActiveRoom** (DEPRECATED)
 
-```c
-typedef struct {
-    uint32_t roomId;
-    ClientSession *members[MAX_CLIENTS_PER_ROOM];
-    int memberCount;
-} ActiveRoom;
-```
+> **已废弃**：`ActiveRoom` 结构体已从源码中删除，社交功能由 [2.11 Server Friend](#211-server-friend-好友模块)、[2.12 Server PrivateChat](#212-server-privatechat-私聊模块) 和 [2.13 Server Group](#213-server-group-群组模块) 替代。
 
 **ActiveGameRoom**
 
@@ -1388,18 +1382,17 @@ typedef struct {
     ClientSession **clients;
     int clientCount;
     int clientCapacity;
-    ActiveRoom **activeRooms;
-    int activeRoomCount;
-    int activeRoomCapacity;
     ActiveGameRoom **activeGameRooms;
     int activeGameRoomCount;
     int activeGameRoomCapacity;
     struct DB *userDB;
-    struct DB *chatDB;
-    struct DB *roomDB;
     struct DB *gameDB;
     struct DB *gameRoomDB;
     struct DB *serverDB;
+    struct DB *friendDB;
+    struct DB *privateChatDB;
+    struct DB *groupDB;
+    struct OnlineTracker *onlineTrk;
     struct DownloadPool *downloadPool;
     uint16_t port;
     bool freshKeysGenerated;
@@ -1408,10 +1401,11 @@ typedef struct {
     time_t startTime;
     uint8_t dekKey[AES_GCM_KEY_LEN];
     uint8_t userDbEncKey[DB_ENC_KEY_LEN];
-    uint8_t chatDbEncKey[DB_ENC_KEY_LEN];
-    uint8_t roomDbEncKey[DB_ENC_KEY_LEN];
     uint8_t gameDbEncKey[DB_ENC_KEY_LEN];
     uint8_t gameRoomDbEncKey[DB_ENC_KEY_LEN];
+    uint8_t friendDbEncKey[DB_ENC_KEY_LEN];
+    uint8_t privateChatDbEncKey[DB_ENC_KEY_LEN];
+    uint8_t groupDbEncKey[DB_ENC_KEY_LEN];
 } Server;
 ```
 
@@ -1423,19 +1417,16 @@ stateDiagram-v2
     SessionKeyExchange --> SessionLogin : MsgKeyExchangeReq 成功
     SessionKeyExchange --> [*] : 验证失败 / 断开
     SessionLogin --> SessionTOTPVerify : MsgLoginReq 凭据有效 + TOTP 已登记
-    SessionLogin --> SessionRoom : MsgLoginReq 凭据有效 + 无 TOTP
+    SessionLogin --> SessionLobby : MsgLoginReq 凭据有效 + 无 TOTP
     SessionLogin --> [*] : MsgLogout / 断开
     SessionLogin --> SessionLogin : MsgRegisterReq (注册完成仍停留)
-    SessionTOTPVerify --> SessionRoom : MsgTOTPVerifyResp 验证码正确
+    SessionTOTPVerify --> SessionLobby : MsgTOTPVerifyResp 验证码正确
     SessionTOTPVerify --> [*] : 验证码错误 / MsgLogout / 断开
-    SessionRoom --> SessionChat : MsgJoinRoom 成功
-    SessionRoom --> [*] : MsgLogout / 断开
-    SessionChat --> [*] : MsgLogout / 断开
-    SessionChat --> SessionRoom : 退出房间（currentRoomId=0）
-    SessionRoom --> SessionGameRoomLobby : MsgGameRoomJoin 成功
-    SessionGameRoomLobby --> SessionRoom : MsgGameRoomQuit / 解散
+    SessionLobby --> SessionGameRoomLobby : MsgGameRoomJoin 成功
+    SessionLobby --> [*] : MsgLogout / 断开
+    SessionGameRoomLobby --> SessionLobby : MsgGameRoomQuit / 解散
     SessionGameRoomLobby --> SessionGameRoomPlay : MsgGameRoomStart 成功
-    SessionGameRoomPlay --> SessionRoom : 游戏结束 / 退出
+    SessionGameRoomPlay --> SessionLobby : 游戏结束 / 退出
 ```
 
 #### 2.1.4 公开 API
@@ -1443,7 +1434,7 @@ stateDiagram-v2
 | 函数                                         | 说明                                                                               | 失败原因                   |
 | -------------------------------------------- | ---------------------------------------------------------------------------------- | -------------------------- |
 | `int serverInit(Server *s, uint16_t port)` | 创建监听套接字，**初始化日志子系统**（`serverLogInit()`），打开 ServerDB，经 TUI 完成 MK 解锁阶段（阻塞） | 端口占用、MK 错误、DB 损坏 |
-| `int serverLaunch(Server *s)` | 打开加密数据库（UserDB/ChatDB/RoomDB/GameDB），分配 session/room 数组，安装信号处理器，**在后台线程中启动 `select()` 事件循环** | DB 打开失败、线程创建失败  |
+| `int serverLaunch(Server *s)` | 打开加密数据库（UserDB/FriendDB/PrivateChatDB/GroupDB/GameDB/GameRoomDB），分配 session/room 数组，创建 OnlineTracker，安装信号处理器，**在后台线程中启动 `select()` 事件循环** | DB 打开失败、线程创建失败  |
 | `void serverShutdown(Server *s)` | 将 `running` 标志设为 `false` ，等待后台事件循环线程退出（ `pthread_join` ） | —                         |
 | `void serverRun(Server *s)` | 调用 `serverLaunch()` 在后台启动事件循环，然后进入 TUI 主页面（阻塞）。用户 `exit` 时内部调用 `serverShutdown()` | —                         |
 | `void serverCleanup(Server *s)` | 断开所有客户端、释放 session/room、关闭数据库、安全擦除所有密钥、**调用 `serverLogClose()` 停止日志子系统** | —                         |
@@ -1473,23 +1464,31 @@ flowchart TD
 | `SessionLogin` | `MsgLogout` | `handleLogout()` → `server.c` |
 | `SessionTOTPVerify` | `MsgTOTPVerifyResp` | `serverHandleTOTPVerify()` → `auth.c` |
 | `SessionTOTPVerify` | `MsgLogout` | `handleLogout()` → `server.c` |
-| `SessionRoom` | `MsgRoomListReq` | `serverHandleRoomList()` → `room.c` |
-| `SessionRoom` | `MsgCreateRoom` | `serverHandleRoomCreate()` → `room.c` |
-| `SessionRoom` | `MsgJoinRoom` | `serverHandleRoomJoin()` → `room.c` |
-| `SessionRoom` | `MsgTOTPSetupReq` | `serverHandleTOTPSetup()` → `auth.c` |
-| `SessionRoom` | `MsgDBKeyReq` | `serverHandleDBKeyReq()` → `auth.c` |
-| `SessionRoom` | `MsgLogout` | `handleLogout()` → `server.c` |
-| `SessionChat` | `MsgChat` | `serverHandleChatMessage()` → `chat.c` |
-| `SessionChat` | `MsgHeartbeat` | `handleHeartbeat()` → `server.c` |
-| `SessionChat` | `MsgTOTPSetupReq` | `serverHandleTOTPSetup()` → `auth.c` |
-| `SessionChat` | `MsgDBKeyReq` | `serverHandleDBKeyReq()` → `auth.c` |
-| `SessionChat` | `MsgLogout` | `handleLogout()` → `server.c` |
-| `SessionRoom` | `MsgGameRoomListReq` | `serverHandleGameRoomList()` → `gameRoom.c` |
-| `SessionRoom` | `MsgGameRoomCreate` | `serverHandleGameRoomCreate()` → `gameRoom.c` |
-| `SessionRoom` | `MsgGameRoomJoin` | `serverHandleGameRoomJoin()` → `gameRoom.c` |
-| `SessionRoom` | `MsgGameListReq` | `serverHandleGameList()` → `gameDistribution.c` |
-| `SessionRoom` | `MsgGameDownloadReq` | `serverHandleGameDownload()` → `gameDistribution.c` |
-| `SessionRoom` | `MsgGameDownloadCancel` | `serverHandleGameDownloadCancel()` → `gameDistribution.c` |
+| `SessionLobby` | `MsgFriendRequest` | `serverHandleFriendRequest()` → `friend.c` |
+| `SessionLobby` | `MsgFriendAccept` | `serverHandleFriendAccept()` → `friend.c` |
+| `SessionLobby` | `MsgFriendReject` | `serverHandleFriendReject()` → `friend.c` |
+| `SessionLobby` | `MsgFriendDelete` | `serverHandleFriendDelete()` → `friend.c` |
+| `SessionLobby` | `MsgFriendListReq` | `serverHandleFriendList()` → `friend.c` |
+| `SessionLobby` | `MsgPrivateChat` | `serverHandlePrivateChatSend()` → `privateChat.c` |
+| `SessionLobby` | `MsgPrivateChatHistoryReq` | `serverHandlePrivateChatHistory()` → `privateChat.c` |
+| `SessionLobby` | `MsgGroupCreate` | `serverHandleGroupCreate()` → `group.c` |
+| `SessionLobby` | `MsgGroupJoin` | `serverHandleGroupJoin()` → `group.c` |
+| `SessionLobby` | `MsgGroupQuit` | `serverHandleGroupQuit()` → `group.c` |
+| `SessionLobby` | `MsgGroupListReq` | `serverHandleGroupList()` → `group.c` |
+| `SessionLobby` | `MsgGroupChat` | `serverHandleGroupChat()` → `group.c` |
+| `SessionLobby` | `MsgGroupKick` | `serverHandleGroupKick()` → `group.c` |
+| `SessionLobby` | `MsgGroupDisband` | `serverHandleGroupDisband()` → `group.c` |
+| `SessionLobby` | `MsgGroupChatHistoryReq` | `serverHandleGroupChatHistory()` → `group.c` |
+| `SessionLobby` | `MsgGameListReq` | `serverHandleGameList()` → `gameDistribution.c` |
+| `SessionLobby` | `MsgGameDownloadReq` | `serverHandleGameDownload()` → `gameDistribution.c` |
+| `SessionLobby` | `MsgGameDownloadCancel` | `serverHandleGameDownloadCancel()` → `gameDistribution.c` |
+| `SessionLobby` | `MsgGameRoomListReq` | `serverHandleGameRoomList()` → `gameRoom.c` |
+| `SessionLobby` | `MsgGameRoomCreate` | `serverHandleGameRoomCreate()` → `gameRoom.c` |
+| `SessionLobby` | `MsgGameRoomJoin` | `serverHandleGameRoomJoin()` → `gameRoom.c` |
+| `SessionLobby` | `MsgTOTPSetupReq` | `serverHandleTOTPSetup()` → `auth.c` |
+| `SessionLobby` | `MsgDBKeyReq` | `serverHandleDBKeyReq()` → `auth.c` |
+| `SessionLobby` | `MsgHeartbeat` | `handleHeartbeat()` → `server.c` |
+| `SessionLobby` | `MsgLogout` | `handleLogout()` → `server.c` |
 | `SessionGameRoomLobby` | `MsgGameRoomQuit` | `serverHandleGameRoomQuit()` → `gameRoom.c` |
 | `SessionGameRoomLobby` | `MsgGameRoomStart` | `serverHandleGameRoomStart()` → `gameRoom.c` |
 | `SessionGameRoomLobby` | `MsgLogout` | `handleLogout()` → `server.c` |
@@ -1545,71 +1544,188 @@ sequenceDiagram
 
 ---
 
-### 2.3 Server Room 房间模块
+### 2.3 Server Room 房间模块 (DEPRECATED)
 
-**接口**： `src/server/room.h`
-
-**实现**： `src/server/room.c`
-
-管理服务端活动房间生命周期与房间相关协议处理。
-
-#### 2.3.1 房间辅助函数
-
-| 函数                                                                | 说明                                  | 备注                                                         |
-| ------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------ |
-| `ActiveRoom *serverFindActiveRoom(const Server *s, uint32_t id)` | 按 roomId 线性搜索                    | 返回 NULL 表示未激活（房间可能存在于 DB 但无成员）           |
-| `ActiveRoom *serverGetOrCreateActiveRoom(Server *s, uint32_t id)` | 查找或分配新 ActiveRoom，支持动态扩容 | 返回 NULL 表示分配失败                                       |
-| `void serverRemoveActiveRoom(Server *s, uint32_t id)` | 释放房间并压缩数组                    | 空房间由 `serverRemoveClientFromRoom` 自动调用（同时从数据库删除） |
-| `void serverRemoveClientFromRoom(Server *s, ClientSession *cs)` | 从房间移除成员，空房间自动从内存与数据库中删除        | `currentRoomId == 0` 时 no-op                              |
-
-#### 2.3.2 房间 Handler
-
-| 函数                                                                            | 说明                                                | 前置条件                   | 失败原因                             |
-| ------------------------------------------------------------------------------- | --------------------------------------------------- | -------------------------- | ------------------------------------ |
-| `int serverHandleRoomList(Server *s, ClientSession *cs)` | 从 RoomDB 读取房间列表并返回                        | RoomDB 已打开              | DB 错误                              |
-| `int serverHandleRoomCreate(Server *s, ClientSession *cs, const Packet *pkt)` | 写入 RoomDB 创建房间                                | payload 为 uint32_t roomId | roomId 已存在、DB 错误               |
-| `int serverHandleRoomJoin(Server *s, ClientSession *cs, const Packet *pkt)` | 校验房间存在 → 加入 ActiveRoom → 切换 SessionChat | payload 为 uint32_t roomId | 房间不存在、房间满员(10 人)、DB 错误 |
-
-**满房间处理**：当 `ActiveRoom.memberCount >= MAX_CLIENTS_PER_ROOM` 时， `serverHandleRoomJoin` 拒绝加入并返回失败状态码。
+> **已废弃**：由 [2.13 Server Group](#213-server-group-群组模块) 替代。`MsgRoom*` 消息类型已移除，`ActiveRoom` 结构体已删除。
 
 ---
 
-### 2.4 Server Chat 聊天模块
+### 2.4 Server Chat 聊天模块 (DEPRECATED)
 
-**接口**： `src/server/chat.h`
+> **已废弃**：由 [2.12 Server PrivateChat](#212-server-privatechat-私聊模块) 和 [2.13 Server Group](#213-server-group-群组模块) 替代。`MsgChat` 消息类型已移除，`ChatHistoryDB` 和 `RoomDB` 已删除。
 
-**实现**： `src/server/chat.c`
+---
 
-封装聊天消息的验证、持久化存储与房间内广播。
+### 2.11 Server Friend 好友模块
 
-#### 2.4.1 公开 API
+**接口**： `src/server/friend.h`
 
-**`int serverHandleChatMessage(Server *s, ClientSession *cs, const Packet *pkt)`**
+**实现**： `src/server/friend.c`
 
-完整的聊天消息处理流水线：
+处理好友请求、接受、拒绝、删除和列表查询。好友关系为双向确认模型：A 发送请求 → B 接受 → 双向好友关系建立。
 
-1. 校验 payload 长度（至少含 8 字节 timestamp）
-2. 确保消息内容 NUL 终止于载荷边界内
-3. 构造 `Chat` 结构体并调用 `storeChat()` 存入 ChatHistoryDB（msgId 由数据库生成并回填）
-4. 构造 `ChatBroadcastPayload` 并向房间内除发送者外所有成员广播
+#### 2.11.1 公开 API
 
-聊天模块不直接调用 `packetInit` 、 `packetAESEncrypt` 或 `packetSend` 。广播通过 `serverSendEncryptedPacket()` （communication 模块）完成。
+| 函数 | 说明 | 发送响应 |
+|------|------|---------|
+| `int serverHandleFriendRequest(Server *s, ClientSession *cs, const Packet *pkt)` | 处理好友请求。校验 payload 为 `FriendOpPayload`，拒绝自身、已有好友、重复请求。调用 `friendRequestCreate()` 写入 FriendDB。 | `MsgFriendRequestResp` (uint8_t status) |
+| `int serverHandleFriendAccept(Server *s, ClientSession *cs, const Packet *pkt)` | 接受好友请求。调用 `friendRequestAccept()` 创建双向好友关系。成功后向双方在线会话发送 `MsgFriendNotify`。 | `MsgFriendAcceptResp` (uint8_t status) |
+| `int serverHandleFriendReject(Server *s, ClientSession *cs, const Packet *pkt)` | 拒绝好友请求。调用 `friendRequestReject()` 将请求状态设为已拒绝。 | `MsgFriendRejectResp`（由客户端自行处理） |
+| `int serverHandleFriendDelete(Server *s, ClientSession *cs, const Packet *pkt)` | 删除好友。调用 `friendDelete()` 移除双向好友关系。 | `MsgFriendDeleteResp` (uint8_t status) |
+| `int serverHandleFriendList(Server *s, ClientSession *cs)` | 返回好友列表。调用 `friendListGet()` 获取好友 UID 列表，从 UserDB 查询用户名/昵称，从 OnlineTracker 查询在线状态。 | `MsgFriendListResp` (uint32_t count + FriendInfo[count]) |
 
-#### 2.4.2 聊天流程图
+#### 2.11.2 好友请求流程图
 
 ```mermaid
 sequenceDiagram
-    participant C1 as Client1 (sender)
-    participant S as Server Chat
-    participant DB as ChatHistoryDB
-    participant C2 as Client2 (room member)
+    participant A as User A (sender)
+    participant S as Server
+    participant DB as FriendDB
+    participant B as User B (receiver)
 
-    C1->>S: MsgChat [ChatPacketPayload: timestamp + message]
-    S->>S: 校验 payload / NUL 终止
-    S->>DB: storeChat(roomId, chat)
-    DB-->>S: msgId 已分配
-    S->>C2: MsgChat [ChatBroadcastPayload: uid + msgId + timestamp + message]
+    A->>S: MsgFriendRequest {targetUid: B}
+    S->>S: 校验 (非自身, 非已有好友, 无重复请求)
+    S->>DB: friendRequestCreate(A, B)
+    S->>A: MsgFriendRequestResp (status=0)
+
+    Note over A,B: --- B 登录后 ---
+
+    B->>S: MsgFriendAccept {targetUid: A}
+    S->>DB: friendRequestAccept(A, B) → 双向好友关系
+    S->>A: MsgFriendNotify {uid: B, online: 1}
+    S->>B: MsgFriendNotify {uid: A, online: 1}
 ```
+
+---
+
+### 2.12 Server PrivateChat 私聊模块
+
+**接口**： `src/server/privateChat.h`
+
+**实现**： `src/server/privateChat.c`
+
+处理一对一的私聊消息发送、历史查询和离线消息投递。消息持久化存储在 PrivateChatDB 中。接收者在线时立即转发；离线时暂存，下次登录批量投递。
+
+#### 2.12.1 公开 API
+
+| 函数 | 说明 |
+|------|------|
+| `int serverHandlePrivateChatSend(Server *s, ClientSession *cs, const Packet *pkt)` | 处理私聊发送。解析 `PrivateChatPayload`，调用 `privateChatStore()` 持久化。若接收者在线则通过 `onlineTrackerFind()` 获取会话并立即转发 `MsgPrivateChatBroadcast`；否则保留 `delivered=0` 待离线投递。 |
+| `int serverHandlePrivateChatHistory(Server *s, ClientSession *cs, const Packet *pkt)` | 处理历史消息查询。解析 `PrivateChatHistoryReqPayload`，调用 `privateChatHistory()` 获取两用户间的消息列表（ASC 时间顺序），构造响应。 |
+| `void serverDeliverOfflineMessages(Server *s, ClientSession *cs)` | 用户登录时调用。查询 PrivateChatDB 中 `toUid = cs->uid AND delivered = 0` 的待投递消息，逐条发送 `MsgPrivateChatBroadcast` 并标记 `delivered = 1`。 |
+
+#### 2.12.2 离线消息投递流程图
+
+```mermaid
+sequenceDiagram
+    participant A as User A (sender)
+    participant S as Server
+    participant DB as PrivateChatDB
+    participant B as User B (offline→online)
+
+    A->>S: MsgPrivateChat {toUid: B, message}
+    S->>DB: privateChatStore(from: A, to: B, delivered: 0)
+    S-->>S: B 不在线，不立即转发
+
+    Note over B: --- B 稍后登录 ---
+
+    S->>DB: privateChatDeliverPending(toUid: B) → 获取待投递消息
+    S->>B: MsgPrivateChatBroadcast (多条)
+    S->>DB: UPDATE delivered=1
+```
+
+---
+
+### 2.13 Server Group 群组模块
+
+**接口**： `src/server/group.h`
+
+**实现**： `src/server/group.c`
+
+管理群组的创建、加入、退出、踢人、解散和群聊消息。群主拥有一票否决权（踢人、解散）。最多 50 名成员。
+
+#### 2.13.1 公开 API
+
+| 函数 | 说明 | 权限 |
+|------|------|------|
+| `int serverHandleGroupCreate(Server *s, ClientSession *cs, const Packet *pkt)` | 创建群组。解析 `GroupCreatePayload`，生成唯一 groupId，创建者自动成为群主兼首位成员。 | 任意已登录用户 |
+| `int serverHandleGroupJoin(Server *s, ClientSession *cs, const Packet *pkt)` | 加入群组。校验群组存在、未达上限、非重复加入。若当前在其他群组则自动退出。通知现有在线成员 `MsgGroupMemberJoin`。 | 任意已登录用户 |
+| `int serverHandleGroupQuit(Server *s, ClientSession *cs, const Packet *pkt)` | 退出群组。若群组变空则删除。通知剩余成员 `MsgGroupMemberQuit`。 | 任意群成员 |
+| `int serverHandleGroupList(Server *s, ClientSession *cs)` | 返回所有群组列表。调用 `groupListAll()` 单 SQL 查询（JOIN 优化）。 | 任意已登录用户 |
+| `int serverHandleGroupChat(Server *s, ClientSession *cs, const Packet *pkt)` | 群聊消息发送。解析 `GroupChatPayload`，调用 `groupStoreChat()` 持久化，向所有其他在线成员广播 `MsgGroupChatBroadcast`。 | 任意群成员 |
+| `int serverHandleGroupKick(Server *s, ClientSession *cs, const Packet *pkt)` | 群主踢人。解析 `GroupKickPayload`，校验操作者为群主且目标非群主，移除成员并通知被踢者和剩余成员。 | 群主 |
+| `int serverHandleGroupDisband(Server *s, ClientSession *cs, const Packet *pkt)` | 解散群组。校验操作者为群主，通知所有在线成员 `MsgGroupDisbandNotify`，清除成员状态，删除群组。 | 群主 |
+| `int serverHandleGroupChatHistory(Server *s, ClientSession *cs, const Packet *pkt)` | 群聊历史查询。解析 `GroupChatHistoryReqPayload`，调用 `groupChatHistory()` 返回 ASC 时间顺序消息列表。 | 任意群成员 |
+
+---
+
+### 2.14 Server OnlineTracker 在线追踪模块
+
+**接口**： `src/server/onlineTracker.h`
+
+**实现**： `src/server/onlineTracker.c`
+
+维护 uid → ClientSession* 的哈希表映射，支持 O(1) 在线状态查询。512 个哈希桶，拉链法解决冲突。
+
+#### 2.14.1 公开 API
+
+| 函数 | 说明 |
+|------|------|
+| `OnlineTracker *onlineTrackerCreate(void)` | 分配并返回 OnlineTracker 实例。返回 NULL 表示内存不足。 |
+| `void onlineTrackerDestroy(OnlineTracker *trk)` | 释放所有内存。传 NULL 为 no-op。 |
+| `void onlineTrackerAdd(OnlineTracker *trk, uint32_t uid, ClientSession *cs)` | 添加/更新 uid→session 映射。幂等：若 uid 已存在则覆盖。 |
+| `void onlineTrackerRemove(OnlineTracker *trk, uint32_t uid)` | 移除 uid 的映射。uid 不存在时为 no-op。 |
+| `ClientSession *onlineTrackerFind(OnlineTracker *trk, uint32_t uid)` | O(1) 哈希查找。返回 ClientSession* 或 NULL。 |
+| `bool onlineTrackerIsOnline(OnlineTracker *trk, uint32_t uid)` | 等同于 `onlineTrackerFind(trk, uid) != NULL`。 |
+
+---
+
+### 2.15 Server Social Database 社交数据库模块
+
+社交系统使用三个独立的加密 SQLCipher 数据库：
+
+| 数据库 | 路径 | 表 |
+|--------|------|-----|
+| **FriendDB** | `db/friend.db` | `friendships` (双向好友关系), `friend_requests` (待处理请求) |
+| **PrivateChatDB** | `db/privateChat.db` | `msg_sequence` (全局消息 ID), `private_messages` (含 delivered 标记) |
+| **GroupDB** | `db/group.db` | `groups`, `group_members`, `msg_sequence`, 每群动态表 `group_<groupId>` |
+
+#### 2.15.1 FriendDB 函数
+
+| 函数 | 说明 |
+|------|------|
+| `int friendRequestCreate(DB *db, uint32_t from, uint32_t to)` | 创建待处理请求 (status=0)。UNIQUE 约束阻止重复请求。 |
+| `int friendRequestAccept(DB *db, uint32_t from, uint32_t to)` | 接受请求 (status=1)，写入双向 friendships 行。 |
+| `int friendRequestReject(DB *db, uint32_t from, uint32_t to)` | 拒绝请求 (status=2)。 |
+| `int friendDelete(DB *db, uint32_t uid, uint32_t friendUid)` | 删除双向好友关系。 |
+| `int friendListGet(DB *db, uint32_t uid, FriendInfo **out, size_t *count)` | 获取好友列表 (仅 uid，调用者负责查询用户名/在线状态)。 |
+| `int friendRequestPendingList(DB *db, uint32_t uid, FriendInfo **out, size_t *count)` | 获取待处理请求列表。 |
+| `int friendIsFriend(DB *db, uint32_t uid, uint32_t other)` | 检查是否为好友关系。 |
+
+#### 2.15.2 PrivateChatDB 函数
+
+| 函数 | 说明 |
+|------|------|
+| `int privateChatStore(DB *db, uint32_t from, uint32_t to, const uint8_t *msg, uint64_t ts, uint32_t *outMsgId)` | 存储私聊消息 (delivered=0)。 |
+| `int privateChatDeliverPending(DB *db, uint32_t toUid, Chat **out, size_t *count)` | 获取待投递消息并标记 delivered=1。 |
+| `int privateChatHistory(DB *db, uint32_t uidA, uint32_t uidB, uint32_t beforeMsgId, uint32_t limit, Chat **out, size_t *count)` | ASC 时间顺序查询两用户间的消息历史。 |
+| `int privateChatLastMsgTimestamp(DB *db, uint32_t a, uint32_t b, uint64_t *ts)` | 获取两用户间最后一条消息的时间戳。 |
+
+#### 2.15.3 GroupDB 函数
+
+| 函数 | 说明 |
+|------|------|
+| `int groupCreate(DB *db, uint32_t groupId, const char *name, uint32_t owner)` | 创建群组。 |
+| `int groupDelete(DB *db, uint32_t groupId)` | 删除群组。 |
+| `int groupAddMember(DB *db, uint32_t groupId, uint32_t uid)` | 添加成员。 |
+| `int groupRemoveMember(DB *db, uint32_t groupId, uint32_t uid)` | 移除成员。 |
+| `int groupIsMember(DB *db, uint32_t groupId, uint32_t uid)` | 检查成员资格。 |
+| `int groupMemberList(DB *db, uint32_t groupId, uint32_t **outUids, size_t *count)` | 获取成员 uid 列表。 |
+| `int groupListAll(DB *db, GroupInfo **out, size_t *count)` | 获取所有群组（JOIN 优化，单 SQL）。 |
+| `int groupGetInfo(DB *db, uint32_t groupId, GroupInfo *out)` | 获取单个群组信息。 |
+| `int groupStoreChat(DB *db, uint32_t groupId, uint32_t uid, const char *msg, int64_t ts, uint64_t *outMsgId)` | 存储群聊消息到 `group_<groupId>` 表。 |
+| `int groupChatHistory(DB *db, uint32_t groupId, uint32_t beforeMsgId, uint32_t limit, Chat **out, size_t *count)` | ASC 时间顺序查询群聊历史。 |
+| `int groupLastMsgTimestamp(DB *db, uint32_t groupId, uint64_t *ts)` | 获取群组最后一条消息时间戳。 |
 
 ---
 
@@ -1628,15 +1744,19 @@ flowchart TD
     MK[Master Key: 管理员记忆, 不落盘] -->|AES-256-GCM wrap| ServerDB[(ServerDB: server.db)]
     ServerDB --> DEK[DEK: TOTP/CDBKey envelope key]
     ServerDB --> UserKey[UserDB SQLCipher key]
-    ServerDB --> ChatKey[ChatHistoryDB SQLCipher key]
-    ServerDB --> RoomKey[RoomDB SQLCipher key]
+    ServerDB --> FriendKey[FriendDB SQLCipher key]
+    ServerDB --> PrivateChatKey[PrivateChatDB SQLCipher key]
+    ServerDB --> GroupKey[GroupDB SQLCipher key]
     ServerDB --> GameKey[GameDB SQLCipher key]
+    ServerDB --> GameRoomKey[GameRoomDB SQLCipher key]
     DEK -->|envelope wrap| TotpSecret[totp_secret BLOB]
     DEK -->|envelope wrap| CDBKey[cdbkey BLOB]
     UserKey --> UserDB[(UserDB: user.db)]
-    ChatKey --> ChatDB[(ChatHistoryDB: chatHistory.db)]
-    RoomKey --> RoomDB[(RoomDB: room.db)]
+    FriendKey --> FriendDB[(FriendDB: friend.db)]
+    PrivateChatKey --> PrivateChatDB[(PrivateChatDB: privateChat.db)]
+    GroupKey --> GroupDB[(GroupDB: group.db)]
     GameKey --> GameDB[(GameDB: game.db)]
+    GameRoomKey --> GameRoomDB[(GameRoomDB: gameRoom.db)]
 ```
 
 #### 2.5.2 公开 API
@@ -1645,14 +1765,14 @@ flowchart TD
 
 首次运行路径：
 
-1. `cryptoRandomBytes()` 生成 MK、DEK、UserDBKey、ChatHistoryDBKey、RoomDBKey、GameDBKey（各 32 字节）
-2. 用 MK 经 AES-256-GCM 分别信封加密后五个密钥，存入 ServerDB
+1. `cryptoRandomBytes()` 生成 MK、DEK、UserDBKey、FriendDBKey、PrivateChatDBKey、GroupDBKey、GameDBKey、GameRoomDBKey（各 32 字节）
+2. 用 MK 经 AES-256-GCM 分别信封加密后七个密钥，存入 ServerDB
 3. 载入明文密钥至 `Server` 结构体
 4. 一次性十六进制显示 MK 给管理员（通过 TUI Init Page），随后 `OPENSSL_cleanse` 擦除
 
 已有运行路径：
 
-1. 从 ServerDB 读取全部五个 envelope，逐一校验完整性
+1. 从 ServerDB 读取全部七个 envelope，逐一校验完整性
 2. 管理员在 TUI Start Page 输入 MK（64 字符十六进制），经 `hexCharToNibble()` 转为二进制
 3. 逐一解密 envelope，校验长度（60 字节 = nonce(12) + key(32) + tag(16)）及 AES-GCM 认证标签
 4. 载入明文密钥至 `Server` 结构体
@@ -1695,7 +1815,7 @@ flowchart TD
 
 **接口**： `src/server/database.h`
 
-**实现**： `src/server/database/{common,userDb,chatDb,roomDb,serverDb}.c`
+**实现**： `src/server/database/{common,userDb,friendDb,privateChatDb,groupDb,gameRoomDb,serverDb,gameDb}.c`
 
 提供基于 SQLCipher 的持久化数据层。公共接口头文件位于 `src/server/database.h` ，实现在 `src/server/database/` 子目录：
 
@@ -1705,8 +1825,11 @@ src/server/
 └── database/
     ├── common.c     → dbInit / dbClose 生命周期管理
     ├── userDb.c     → 用户表 CRUD (createUser, deleteUser, verifyUser 等)
-    ├── chatDb.c     → 聊天记录 CRUD (storeChat, queryChatByTimeRange 等)
-    ├── roomDb.c     → 游戏房间 CRUD (createRoom, listRooms 等)
+    ├── friendDb.c   → 好友关系 CRUD (friendRequestCreate, friendListGet 等)
+    ├── privateChatDb.c → 私聊消息 CRUD (privateChatStore, privateChatHistory 等)
+    ├── groupDb.c    → 群组 CRUD (groupCreate, groupStoreChat 等)
+    ├── gameDb.c     → 游戏元数据 CRUD (registerGame, listGameBrief 等)
+    ├── gameRoomDb.c → 游戏房间 CRUD (createGameRoom, listGameRooms 等)
     ├── serverDb.c   → 服务器密钥 CRUD (setServerKey, getServerKey)
     └── internal.h   → 内部共享常量和函数声明
 ```
@@ -1718,19 +1841,24 @@ src/server/
 | `DB_SUCC` | `0` | 操作成功                 |
 | `DB_FAIL` | `-1` | 操作失败                 |
 | `USER_DB_PATH` | `"./db/user.db"` | 用户数据库文件路径       |
-| `CHAT_HISTORY_DB_PATH` | `"./db/chatHistory.db"` | 聊天记录数据库文件路径   |
-| `ROOM_DB_PATH` | `"./db/room.db"` | 游戏房间数据库文件路径   |
+| `CHAT_HISTORY_DB_PATH` | `"./db/chatHistory.db"` | 聊天记录数据库文件路径 (DEPRECATED) |
+| `ROOM_DB_PATH` | `"./db/room.db"` | 游戏房间数据库文件路径 (DEPRECATED) |
 | `GAME_DB_PATH` | `"./db/game.db"` | 游戏元数据数据库文件路径 |
 | `SERVER_DB_PATH` | `"./db/server.db"` | 服务器密钥数据库文件路径 |
 | `DB_DIRECTORY` | `"./db"` | 数据库文件所在目录       |
-| `ROOM_STMT_BUCKETS` | `32` | Room 语句缓存哈希表桶数  |
+| `ROOM_STMT_BUCKETS` | `32` | Room 语句缓存哈希表桶数 (DEPRECATED) |
+| `GROUP_STMT_BUCKETS` | `32` | Group 语句缓存哈希表桶数  |
+| `FRIEND_DB_PATH` | `"./db/friend.db"` | 好友关系数据库文件路径 |
+| `PRIVATE_CHAT_DB_PATH` | `"./db/privateChat.db"` | 私聊数据库文件路径 |
+| `GROUP_DB_PATH` | `"./db/group.db"` | 群组数据库文件路径 |
+| `GAME_ROOM_DB_PATH` | `"./db/gameRoom.db"` | 游戏房间数据库文件路径 |
 
 #### 2.7.2 类型定义
 
 **DBType**
 
 ```c
-typedef enum { UserDB = 1, ChatHistoryDB, RoomDB, ServerDB, GameDB } DBType;
+typedef enum { UserDB = 1, ServerDB, GameDB, GameRoomDB, FriendDB, PrivateChatDB, GroupDB } DBType;
 ```
 
 **Chat**
@@ -1752,17 +1880,25 @@ typedef struct DB {
     DBType type;
     // UserDB cached statements
     sqlite3_stmt *stmtInsert, *stmtDelete, *stmtSelect;
-    sqlite3_stmt *stmtRoomExists, *stmtUidCheck;
+    sqlite3_stmt *stmtUidCheck;
     sqlite3_stmt *stmtSetTotpSecret, *stmtGetTOTPSecret, *stmtGetCDBKey;
-    // ChatHistoryDB cached statements
+    // GroupDB cached statements
+    sqlite3_stmt *stmtGroupSeq;
+    GroupStmtCache *groupCache;
+    // PrivateChatDB cached statements
     sqlite3_stmt *stmtSeq;
-    RoomStmtCache *roomCache;
     // ServerDB cached statements
     sqlite3_stmt *stmtSetKey, *stmtGetKey;
     // GameDB cached statements
-    sqlite3_stmt *stmtUpdate;         // UPDATE (GameDB)
-    sqlite3_stmt *stmtSelectById;     // SELECT by ID (GameDB)
-    sqlite3_stmt *stmtSelectByName;   // SELECT by name (GameDB)
+    sqlite3_stmt *stmtGameInsert, *stmtGameDelete, *stmtGameUpdate;
+    sqlite3_stmt *stmtGameSelectById, *stmtGameSelectByName;
+    sqlite3_stmt *stmtGameList, *stmtGameListAll, *stmtGameListRange;
+    sqlite3_stmt *stmtGameListPlatformAll, *stmtGameListPlatformRange;
+    sqlite3_stmt *stmtGameGetKey;
+    sqlite3_stmt *stmtPlatformInsert, *stmtPlatformSelect, *stmtPlatformList;
+    // GameRoomDB cached statements
+    sqlite3_stmt *stmtGameRoomInsert, *stmtGameRoomDelete;
+    sqlite3_stmt *stmtGameRoomSelect, *stmtGameRoomExists;
     // Key material
     uint8_t dekKey[AES_GCM_KEY_LEN];
     uint8_t dbEncKey[DB_ENC_KEY_LEN];
@@ -1784,31 +1920,20 @@ CREATE TABLE IF NOT EXISTS users (
 );
 ```
 
-**ChatHistoryDB**（ `db/chatHistory.db` ）
+**ChatHistoryDB**（ `db/chatHistory.db` ）(DEPRECATED)
+
+> **已废弃**：ChatHistoryDB 已从源码中删除。社交消息存储由 [2.15 Server Social Database](#215-server-social-database-社交数据库模块) 中的 PrivateChatDB 和 GroupDB 替代。
 
 ```sql
-CREATE TABLE IF NOT EXISTS msg_sequence (
-    id INTEGER PRIMARY KEY AUTOINCREMENT
-);
--- Per-room tables created on demand:
-CREATE TABLE IF NOT EXISTS room_<roomId> (
-    msgId INTEGER PRIMARY KEY,
-    uid INTEGER NOT NULL,
-    message TEXT NOT NULL,
-    timestamp INTEGER NOT NULL
-);
+-- 已删除。原 schema 参考 2.15 PrivateChatDB 和 GroupDB。
 ```
 
-`msg_sequence` 表提供全局唯一、单调递增的消息 ID。每次 `storeChat` 插入一行后，通过 `last_insert_rowid()` 获取新 msgId。
+**RoomDB**（ `db/room.db` ）(DEPRECATED)
 
-**RoomDB**（ `db/room.db` ）
+> **已废弃**：RoomDB 已从源码中删除。
 
 ```sql
-CREATE TABLE IF NOT EXISTS rooms (
-    roomId INTEGER PRIMARY KEY,
-    creatorUid INTEGER NOT NULL,
-    createdAt INTEGER NOT NULL
-);
+-- 已删除。
 ```
 
 **ServerDB**（ `db/server.db` ）
@@ -1842,18 +1967,20 @@ CREATE TABLE IF NOT EXISTS rooms (
 | `int setServerKey(DB *database, const char *keyName, const uint8_t *value, size_t valueLen)` | INSERT OR REPLACE 键值对                                                             | —                         |
 | `int getServerKey(DB *database, const char *keyName, uint8_t **outValue, size_t *outLen)` | 按 key_name 查询，返回堆分配副本。不存在时返回 SUCC 且 `*outValue=NULL, *outLen=0` | 调用者 `free(*outValue)` |
 
-#### 2.7.7 聊天记录与 RoomDB 操作
+#### 2.7.7 社交数据库操作 (DEPRECATED — 旧 chat/RoomDB API)
+
+> **已废弃**：以下 API 来自已删除的 ChatHistoryDB 和 RoomDB。社交数据库操作请参考 [2.15 Server Social Database](#215-server-social-database-社交数据库模块)。
 
 | 函数                                                                                                                   | 说明                                                             | 内存释放                                       |
 | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------- |
-| `int storeChat(DB *database, uint32_t roomId, Chat *chat)` | 存储聊天消息，msgId 由数据库生成并回填                           | —                                             |
-| `int queryChatByMsgId(DB *database, uint32_t roomId, uint64_t msgId, Chat *out)` | 按全局 msgId 查询单条                                            | `free(out->message)` |
-| `int queryChatByTimeRange(DB *, uint32_t roomId, uint32_t uid, time_t start, time_t end, Chat **out, size_t *count)` | 时间范围查询                                                     | 逐条 `free(out[i].message)` 后 `free(out)` |
-| `int queryChatByUserAllRooms(DB *, uint32_t uid, time_t start, time_t end, Chat **out, size_t *count)` | 跨所有房间查询用户消息                                           | 逐条 `free(out[i].message)` 后 `free(out)` |
-| `int createRoom(DB *database, uint32_t roomId, uint32_t creatorUid)` | 创建房间                                                         | —                                             |
-| `int deleteRoom(DB *database, uint32_t roomId)` | 删除房间                                                         | 不存在时返回 FAIL                              |
-| `int listRooms(DB *database, uint32_t **outRoomIds, size_t *count)` | 列出所有房间 ID。空库返回 SUCC 且 `*outRoomIds=NULL, *count=0` | `free(*outRoomIds)` |
-| `int roomExists(DB *database, uint32_t roomId)` | 检查房间存在性                                                   | —                                             |
+| `int storeChat(DB *database, uint32_t roomId, Chat *chat)` (DEPRECATED) | 存储聊天消息                                                      | —                                             |
+| `int queryChatByMsgId(DB *database, uint32_t roomId, uint64_t msgId, Chat *out)` (DEPRECATED) | 按全局 msgId 查询单条                                            | `free(out->message)` |
+| `int queryChatByTimeRange(DB *, uint32_t roomId, uint32_t uid, time_t start, time_t end, Chat **out, size_t *count)` (DEPRECATED) | 时间范围查询                                                     | 逐条 `free(out[i].message)` 后 `free(out)` |
+| `int queryChatByUserAllRooms(DB *, uint32_t uid, time_t start, time_t end, Chat **out, size_t *count)` (DEPRECATED) | 跨所有房间查询用户消息                                           | 逐条 `free(out[i].message)` 后 `free(out)` |
+| `int createRoom(DB *database, uint32_t roomId, uint32_t creatorUid)` (DEPRECATED) | 创建房间                                                         | —                                             |
+| `int deleteRoom(DB *database, uint32_t roomId)` (DEPRECATED) | 删除房间                                                         | 不存在时返回 FAIL                              |
+| `int listRooms(DB *database, uint32_t **outRoomIds, size_t *count)` (DEPRECATED) | 列出所有房间 ID。空库返回 SUCC 且 `*outRoomIds=NULL, *count=0` | `free(*outRoomIds)` |
+| `int roomExists(DB *database, uint32_t roomId)` (DEPRECATED) | 检查房间存在性                                                   | —                                             |
 
 #### 2.7.8 数据库加密（SQLCipher）与密钥体系
 
@@ -1871,9 +1998,11 @@ Layer 2: Envelopes 存储于 server.db (ServerDB)
 Layer 3: 明文密钥驻留内存 (Server.dekKey / *dbEncKey)
    DEK → TOTP/CDBKey 信封加密
    UserDBKey → user.db SQLCipher
-   ChatDBKey → chatHistory.db SQLCipher
-   RoomDBKey → room.db SQLCipher
+   FriendDBKey → friend.db SQLCipher
+   PrivateChatDBKey → privateChat.db SQLCipher
+   GroupDBKey → group.db SQLCipher
    GameDBKey → game.db SQLCipher
+   GameRoomDBKey → gameRoom.db SQLCipher
 ```
 
 MK 永不落盘，仅在首次启动时以十六进制一次性显示。DEK 与 DB 密钥在 `serverCleanup()` 和 `dbClose()` 中通过 `OPENSSL_cleanse` 双份擦除。
@@ -2458,7 +2587,7 @@ typedef struct Client {
     SocketFD fd;
     AESGCMKey aesKey;
     uint32_t uid;
-    uint32_t currentRoomId;
+    uint32_t currentGroupId;
     uint32_t seqID;
     uint8_t cdbkey[CLIENT_DB_KEY_LEN];  // 每用户 CDBKey，登录后从服务端获取
     struct ClientDB *db;                 // 加密客户端数据库句柄
@@ -2519,11 +2648,13 @@ flowchart TD
 
 ---
 
-### 3.3 Client Room 客户端房间模块
+### 3.3 Client Room 客户端房间模块 (DEPRECATED)
 
-**接口**： `src/client/room.h`
+> **已废弃**：由 [3.11 Client Social](#311-client-social-社交逻辑模块) 替代。
 
-**实现**： `src/client/room.c`
+### 3.4 Client Chat 客户端聊天模块 (DEPRECATED)
+
+> **已废弃**：由 [3.13 Client chatView](#313-client-chatview-聊天视图-tui) 替代。
 
 `room.h` 仅包含 `client.h` ，作为模块边界头存在，不声明额外公开函数。所有房间 API（ `clientRoomMenu` ）在 `client.h` 中声明。
 
@@ -2899,7 +3030,99 @@ clientRunGame() fork → 子进程 execl("./loader", "loader", <soPath>, NULL)
 
 ---
 
-## 第四部分：端到端协议与典型业务流程
+### 3.11 Client Social 社交逻辑模块
+
+**接口**： `src/client/social.h`
+
+**实现**： `src/client/social.c`
+
+封装所有社交操作的客户端网络请求和消息解析。所有发送函数构造对应 payload 后通过 `packetSendEncrypted()` 发送。
+
+#### 3.11.1 好友操作
+
+| 函数 | 说明 | 发送 MsgType |
+|------|------|-------------|
+| `int clientFriendRequest(Client *c, uint32_t targetUid)` | 发送好友请求 | `MsgFriendRequest` |
+| `int clientFriendAccept(Client *c, uint32_t targetUid)` | 接受好友请求 | `MsgFriendAccept` |
+| `int clientFriendReject(Client *c, uint32_t targetUid)` | 拒绝好友请求 | `MsgFriendReject` |
+| `int clientFriendDelete(Client *c, uint32_t targetUid)` | 删除好友 | `MsgFriendDelete` |
+| `int clientFriendListRequest(Client *c)` | 请求好友列表 | `MsgFriendListReq` |
+
+#### 3.11.2 私聊操作
+
+| 函数 | 说明 |
+|------|------|
+| `int clientPrivateChatSend(Client *c, uint32_t toUid, const char *message)` | 发送私聊消息。构造 `PrivateChatPayload` (fromUid=c->uid, toUid, msgId=0, timestamp, message), 通过 `MsgPrivateChat` 发送。 |
+| `int clientPrivateChatHistoryRequest(Client *c, uint32_t peerUid, uint32_t beforeMsgId, uint32_t limit)` | 请求私聊历史。构造 `PrivateChatHistoryReqPayload`, 通过 `MsgPrivateChatHistoryReq` 发送。 |
+
+#### 3.11.3 群组操作
+
+| 函数 | 说明 |
+|------|------|
+| `int clientGroupCreate(Client *c, const char *groupName)` | 创建群组。 |
+| `int clientGroupJoin(Client *c, uint32_t groupId)` | 加入群组。 |
+| `int clientGroupQuit(Client *c, uint32_t groupId)` | 退出群组。 |
+| `int clientGroupListRequest(Client *c)` | 请求群组列表。 |
+| `int clientGroupChatSend(Client *c, uint32_t groupId, const char *message)` | 发送群聊消息。 |
+| `int clientGroupKick(Client *c, uint32_t groupId, uint32_t targetUid)` | 群主踢人。 |
+| `int clientGroupDisband(Client *c, uint32_t groupId)` | 解散群组。 |
+| `int clientGroupChatHistoryRequest(Client *c, uint32_t groupId, uint32_t beforeMsgId, uint32_t limit)` | 请求群聊历史。 |
+
+#### 3.11.4 消息轮询
+
+**`int clientPollAndDispatch(Client *c, Packet *outPkt)`**
+
+标准的非阻塞 socket 轮询函数。被所有需要接收消息的 TUI 页面共享调用。流程：
+1. `select(c->fd, ...)` 零超时检查可读性
+2. 若可读，调用 `packetRecvEncrypted()` 解密接收
+3. 返回 1（有包）、0（无数据）、-1（错误）
+
+所有 TUI 页面通过此单一入口点接收消息，消除了多页面独立轮询导致的竞态条件。
+
+---
+
+### 3.12 Client socialPage 社交中心 TUI
+
+**接口**： `src/client/tui/socialPage.h`
+
+**实现**： `src/client/tui/socialPage.c`
+
+**`void socialPageEnter(Client *client)`**
+
+进入统一社交中心页面。
+
+**布局**：
+- **顶部操作栏**：`Friend Requests(N)` / `Add Friend` / `New Group` 按钮
+- **联系人列表**：好友和群组混合显示，按最后消息时间降序排列（最近联系置顶）。好友显示在线状态（●/○），群组显示成员数。
+- **底部操作栏**：选中好友时显示 `Chat` / `Remove`；选中群组时显示 `Enter` / `Leave`。
+- **输入覆盖层**：添加好友弹出 UID 输入框，创建群组弹出名称输入框。
+- **好友请求覆盖层**：列出待处理请求，提供 `Accept` / `Reject` 按钮。
+
+**消息处理**：`socialPoll()` 调用 `clientPollAndDispatch()` 接收消息，处理 `MsgFriendListResp`、`MsgGroupListResp`、`MsgFriendNotify`、`MsgGroupMemberJoin`、`MsgGroupMemberQuit`、`MsgGroupKickResp` 等，触发 UI 刷新。私聊/群聊消息在 chatView 激活时缓冲至待处理队列，否则显示通知。
+
+---
+
+### 3.13 Client chatView 聊天视图 TUI
+
+**接口**： `src/client/tui/chatView.h`
+
+**实现**： `src/client/tui/chatView.c`
+
+**`void chatViewEnter(Client *client, uint32_t target, uint8_t isGroup)`**
+
+进入通用聊天视图，私聊和群聊共用同一页面。
+
+**参数**：
+- `target`: 私聊时为对方 uid，群聊时为 groupId
+- `isGroup`: `1` 为群聊模式，`0` 为私聊模式
+
+**布局**：
+- **标题栏**：`← Back` + `Chat with <nickname>` 或 `<groupName>`
+- **消息区域**：滚动消息列表，显示发送者昵称和消息内容
+- **输入区域**：`InputBox` + `Send` 按钮
+- 群聊模式可选右侧成员列表
+
+**消息处理**：从 `client->pendingChatMessages` 队列读取消息（由 `socialPoll()` 填充），不直接轮询 socket，避免了与 socialPage 的竞态条件。
 
 ### 4.1 首次服务端启动流程
 
@@ -2915,18 +3138,22 @@ sequenceDiagram
     S->>K: serverInitKeys()
     K->>DB: getServerKey("dek")
     DB-->>K: 不存在 (首次启动)
-    K->>K: cryptoRandomBytes: MK, DEK, UserDBKey, ChatDBKey, RoomDBKey, GameDBKey
+    K->>K: cryptoRandomBytes: MK, DEK, UserDBKey, FriendDBKey, PrivateChatDBKey, GroupDBKey, GameDBKey, GameRoomDBKey
     K->>DB: setServerKey("dek", AESGCM(MK, DEK))
     K->>DB: setServerKey("user_db", AESGCM(MK, UserDBKey))
-    K->>DB: setServerKey("chat_db", AESGCM(MK, ChatDBKey))
-    K->>DB: setServerKey("room_db", AESGCM(MK, RoomDBKey))
+    K->>DB: setServerKey("friend_db", AESGCM(MK, FriendDBKey))
+    K->>DB: setServerKey("privatechat_db", AESGCM(MK, PrivateChatDBKey))
+    K->>DB: setServerKey("group_db", AESGCM(MK, GroupDBKey))
     K->>DB: setServerKey("game_db", AESGCM(MK, GameDBKey))
+    K->>DB: setServerKey("gameroom_db", AESGCM(MK, GameRoomDBKey))
     K->>Admin: TUI Init Page 显示 MK (64 字符十六进制)
     K->>K: OPENSSL_cleanse(MK)
     S->>DB: dbInit(UserDB, UserDBKey)
-    S->>DB: dbInit(ChatHistoryDB, ChatDBKey)
-    S->>DB: dbInit(RoomDB, RoomDBKey)
+    S->>DB: dbInit(FriendDB, FriendDBKey)
+    S->>DB: dbInit(PrivateChatDB, PrivateChatDBKey)
+    S->>DB: dbInit(GroupDB, GroupDBKey)
     S->>DB: dbInit(GameDB, GameDBKey)
+    S->>DB: dbInit(GameRoomDB, GameRoomDBKey)
     S->>Admin: 服务端就绪，开始监听
 ```
 
@@ -2949,13 +3176,15 @@ sequenceDiagram
     K->>Admin: 提示输入 MK
     Admin->>K: 输入 64 字符 hex MK
     K->>K: hexCharToNibble → 32 字节 MK
-    K->>DB: getServerKey("user_db"), getServerKey("chat_db"), getServerKey("room_db"), getServerKey("game_db")
-    K->>K: 逐一解密 5 个 envelope (AES-GCM, 校验标签和长度)
+    K->>DB: getServerKey("user_db"), getServerKey("friend_db"), getServerKey("privatechat_db"), getServerKey("group_db"), getServerKey("game_db"), getServerKey("gameroom_db")
+    K->>K: 逐一解密 7 个 envelope (AES-GCM, 校验标签和长度)
     K->>K: OPENSSL_cleanse(MK)
     S->>DB: dbInit(UserDB, UserDBKey)
-    S->>DB: dbInit(ChatHistoryDB, ChatDBKey)
-    S->>DB: dbInit(RoomDB, RoomDBKey)
+    S->>DB: dbInit(FriendDB, FriendDBKey)
+    S->>DB: dbInit(PrivateChatDB, PrivateChatDBKey)
+    S->>DB: dbInit(GroupDB, GroupDBKey)
     S->>DB: dbInit(GameDB, GameDBKey)
+    S->>DB: dbInit(GameRoomDB, GameRoomDBKey)
     S->>Admin: 服务端就绪
 ```
 
@@ -2983,7 +3212,7 @@ DK 输入错误时，envelope 解密返回 `CRYPTO_AUTH_FAIL` 或长度不匹配
 2. 服务端 `serverHandleLogin()`：
 
    - `verifyUser()` 校验凭据
-   - **无 TOTP**：直接发送 `MsgLoginResp` ， `cs->state = SessionRoom`
+   - **无 TOTP**：直接发送 `MsgLoginResp` ， `cs->state = SessionLobby`
 
    - **有 TOTP**：发送 `MsgTOTPVerifyReq` （空 payload）， `cs->state = SessionTOTPVerify`
 
@@ -2992,7 +3221,7 @@ DK 输入错误时，envelope 解密返回 `CRYPTO_AUTH_FAIL` 或长度不匹配
    - 客户端收到 `MsgTOTPVerifyReq` ，提示输入 6 位验证码
    - 客户端发送 `MsgTOTPVerifyResp [TOTPVerifyPayload: code]`
 
-   - 服务端 `serverHandleTOTPVerify()` → `verifyTOTPCode()` → 正确则发送 `MsgLoginResp` ， `cs->state = SessionRoom`
+   - 服务端 `serverHandleTOTPVerify()` → `verifyTOTPCode()` → 正确则发送 `MsgLoginResp` ， `cs->state = SessionLobby`
 
 4. 登录成功后：
 
@@ -3004,41 +3233,13 @@ DK 输入错误时，envelope 解密返回 `CRYPTO_AUTH_FAIL` 或长度不匹配
 
    - 客户端调用 `clientInitDB()` 打开加密本地数据库
 
-### 4.5 房间流程
+### 4.5 房间流程 (DEPRECATED)
 
-**列出房间**：
+> **已废弃**：由 [4.13.3 群聊流程](#4133-群聊流程) 替代。
 
-1. 客户端发送 `MsgRoomListReq`
-2. 服务端 `serverHandleRoomList()` → `listRooms()` 查询 RoomDB → 返回 `uint32_t[]` 房间 ID 数组
+### 4.6 聊天流程 (DEPRECATED)
 
-**创建房间**：
-
-1. 客户端发送 `MsgCreateRoom [uint32_t roomId]`
-2. 服务端 `serverHandleRoomCreate()` → `createRoom()` → 返回状态字节
-
-**加入房间**：
-
-1. 客户端发送 `MsgJoinRoom [uint32_t roomId]`
-2. 服务端 `serverHandleRoomJoin()`：
-   - `roomExists()` 校验
-   - 检查房间人数 < `MAX_CLIENTS_PER_ROOM` (10)
-   - 满员时拒绝加入
-   - `serverGetOrCreateActiveRoom()` → 加入 ActiveRoom
-   - `cs->state = SessionChat`
-
-### 4.6 聊天流程
-
-1. 客户端 `clientChatLoop()` 使用 `select(stdin, socket)` 循环：
-
-   - **stdin 有输入**： `clientChatSend()` 构造 `ChatPacketPayload` → `clientSendEncryptedPacket(MsgChat)`
-
-   - **socket 有数据**：接收 `MsgChat` 广播 → `clientChatParseBroadcast()` 解析 → 显示消息
-   - **`/exit`**：发送 `MsgLogout` ，退出循环
-2. 服务端 `serverHandleChatMessage()`：
-
-   - 校验 payload（≥8B timestamp + NUL 终止的消息）
-   - `storeChat()` 写入 ChatHistoryDB，msgId 由 `msg_sequence` 生成
-   - 构造 `ChatBroadcastPayload` → 遍历房间成员（除发送者）→ `serverSendEncryptedPacket()` 广播
+> **已废弃**：由 [4.13.2 私聊流程](#4132-私聊流程) 和 [4.13.3 群聊流程](#4133-群聊流程) 替代。
 
 ### 4.7 命令行运行方式
 
@@ -3143,7 +3344,7 @@ sequenceDiagram
     Note over C2,S: Phase 5 — 退出
     C2->>S: MsgGameRoomQuit
     S->>C1: MsgGameRoomMemberQuit [uid, dissolved=0]
-    Note over C2: state → SessionRoom
+    Note over C2: state → SessionLobby
 ```
 
 ### 4.10 游戏启动流程（客户端本地）
@@ -3182,6 +3383,102 @@ sequenceDiagram
     G->>G: kill(pid, SIGTERM) → waitpid()
     G->>V: vterm_free()
 ```
+
+---
+
+### 4.11 社交系统端到端流程
+
+#### 4.11.1 好友请求与接受流程
+
+```mermaid
+sequenceDiagram
+    participant A as User A
+    participant S as Server
+    participant DB as FriendDB
+    participant T as OnlineTracker
+    participant B as User B
+
+    A->>S: MsgFriendRequest {targetUid: B}
+    S->>DB: friendRequestCreate(A, B)
+    S->>A: MsgFriendRequestResp (status=0)
+
+    Note over B: B 登录后查看待处理请求
+
+    B->>S: MsgFriendAccept {targetUid: A}
+    S->>DB: friendRequestAccept(A, B) → 双向 friendships 行
+    S->>T: 查询 A 是否在线
+    S->>A: MsgFriendNotify {uid: B, online: 1}
+    S->>B: MsgFriendNotify {uid: A, online: 1}
+    S->>B: MsgFriendAcceptResp (status=0)
+```
+
+#### 4.11.2 私聊流程（含离线投递）
+
+```mermaid
+sequenceDiagram
+    participant A as User A
+    participant S as Server
+    participant DB as PrivateChatDB
+    participant T as OnlineTracker
+    participant B as User B (offline→online)
+
+    A->>S: MsgPrivateChat {toUid: B, message: "Hello"}
+    S->>DB: privateChatStore(A, B, "Hello", delivered=0)
+    S->>T: onlineTrackerFind(B)
+    Note over S: B 不在线，不立即转发
+
+    Note over B: --- B 稍后登录 ---
+
+    S->>DB: privateChatDeliverPending(B) → 获取待投递消息
+    S->>B: MsgPrivateChatBroadcast (msgId=42, from: A, "Hello")
+    S->>DB: UPDATE delivered=1 WHERE msgId=42
+```
+
+#### 4.11.3 群聊流程
+
+```mermaid
+sequenceDiagram
+    participant A as User A (群主)
+    participant S as Server
+    participant DB as GroupDB
+    participant T as OnlineTracker
+    participant B as User B
+
+    A->>S: MsgGroupCreate {groupName: "Dev"}
+    S->>DB: groupCreate(groupId=1001, "Dev", owner=A)
+    S->>DB: groupAddMember(1001, A)
+    S->>A: MsgGroupCreateResp (status=0, groupId=1001)
+
+    B->>S: MsgGroupJoin {groupId: 1001}
+    S->>DB: groupAddMember(1001, B)
+    S->>T: 查找在线群成员
+    S->>A: MsgGroupMemberJoin {groupId: 1001, uid: B}
+
+    A->>S: MsgGroupChat {groupId: 1001, message: "Welcome"}
+    S->>DB: groupStoreChat(1001, A, "Welcome") → msgId=1
+    S->>T: 查找在线群成员 (排除发送者)
+    S->>B: MsgGroupChatBroadcast {groupId: 1001, uid: A, msgId: 1, "Welcome"}
+
+    A->>S: MsgGroupKick {groupId: 1001, targetUid: B}
+    S->>DB: groupRemoveMember(1001, B)
+    S->>B: MsgGroupMemberQuit (被踢通知)
+    S->>T: 通知剩余在线成员
+    S->>A: MsgGroupKickResp (status=0)
+
+    A->>S: MsgGroupDisband {groupId: 1001}
+    S->>T: 查找所有在线成员
+    S->>B: MsgGroupDisbandNotify {groupId: 1001}
+    S->>DB: groupDelete(1001)
+```
+
+#### 4.11.4 联系人排序
+
+联系人在 `socialPage` 中按**最后消息时间降序**排列（最近联系的置顶）：
+- 好友：使用 `privateChatLastMsgTimestamp()` 获取与每位好友的最后私聊时间
+- 群组：使用 `groupLastMsgTimestamp()` 获取每个群组的最后消息时间
+- 无消息记录的联系人/群组排在末尾
+
+---
 
 ## 第五部分：可运行示例
 
@@ -3493,9 +3790,11 @@ clang -Iinclude -Isrc -Wall -Wextra -Werror -g \
 
 ---
 
-### 5.6 服务端数据库基本操作
+### 5.6 服务端数据库基本操作 (DEPRECATED)
 
-以下示例展示 UserDB、ChatHistoryDB、RoomDB 的创建/查询流程。**注意**：此示例需要 SQLCipher 和临时工作目录。
+> **已废弃**：以下示例引用已删除的 `ChatHistoryDB`、`RoomDB`、`chatDb.c`、`roomDb.c`。社交数据库的类似示例请参考 [5.6.1 社交数据库基本操作](#561-社交数据库基本操作)。
+
+以下示例展示 UserDB、ChatHistoryDB、RoomDB 的创建/查询流程（DEPRECATED）。**注意**：此示例需要 SQLCipher 和临时工作目录。
 
 ```c
 #include "server/database.h"
@@ -3578,12 +3877,14 @@ int main(void) {
 clang -Iinclude -Isrc -Wall -Wextra -Werror -g \
       -o example_server_db example_server_db.c \
       src/server/database/common.c src/server/database/userDb.c \
-      src/server/database/chatDb.c src/server/database/roomDb.c \
-      src/server/database/serverDb.c src/common/db.c src/common/crypto.c \
-      src/common/log.c src/common/utils.c \
-      -lsqlcipher -lssl -lcrypto
+       src/server/database/chatDb.c src/server/database/roomDb.c \
+       src/server/database/serverDb.c src/common/db.c src/common/crypto.c \
+       src/common/log.c src/common/utils.c \
+       -lsqlcipher -lssl -lcrypto
 ./example_server_db
 ```
+
+> **注意**：`chatDb.c` 和 `roomDb.c` 已从源码中删除，此编译命令仅在保留旧版本文件时有效。社交数据库示例请参考 [2.15 Server Social Database](#215-server-social-database-社交数据库模块)。
 
 **注意**：此示例在当前目录下创建 `db/` 目录和数据库文件。建议在临时目录下运行以避免污染项目目录。
 
@@ -3752,10 +4053,18 @@ clang -Iinclude -Isrc -Wall -Wextra -Werror -g \
 | `getServerKey()` | 函数内部                           | 调用者 | `free(*outValue)` |
 | `verifyUser()` (totpSecret) | `strdup` | 调用者 | `free(user->totpSecret)` |
 | `listGames()` | 逐 record 的 strdup + 数组 malloc  | 调用者 | `free(r->gameName)` , `free(r->gamePath)` , `free(r)` , `free(array)` |
-| `queryChatByTimeRange()` | 函数内部逐条分配                   | 调用者 | 逐条 `free(out[i].message)` 后 `free(out)` |
-| `queryChatByUserAllRooms()` | 函数内部逐条分配                   | 调用者 | 逐条 `free(out[i].message)` 后 `free(out)` |
-| `queryChatByMsgId()` | `strdup(out->message)` | 调用者 | `free(out->message)` |
-| `listRooms()` | 函数内部 `malloc` | 调用者 | `free(*outRoomIds)` |
+| `queryChatByTimeRange()` (DEPRECATED) | 函数内部逐条分配                   | 调用者 | 逐条 `free(out[i].message)` 后 `free(out)` |
+| `queryChatByUserAllRooms()` (DEPRECATED) | 函数内部逐条分配                   | 调用者 | 逐条 `free(out[i].message)` 后 `free(out)` |
+| `queryChatByMsgId()` (DEPRECATED) | `strdup(out->message)` | 调用者 | `free(out->message)` |
+| `listRooms()` (DEPRECATED) | 函数内部 `malloc` | 调用者 | `free(*outRoomIds)` |
+| `privateChatStore()` | 函数内部分配                       | 调用者 | `privateChatFree()` |
+| `privateChatHistory()` | 函数内部逐条分配                   | 调用者 | 逐条 `free(out[i].message)` 后 `free(out)` |
+| `privateChatDeliverPending()` | 函数内部逐条分配                   | 调用者 | 逐条 `free(out[i].message)` 后 `free(out)` |
+| `friendListGet()` | 函数内部 `malloc` | 调用者 | `free(*out)` |
+| `friendRequestPendingList()` | 函数内部 `malloc` | 调用者 | `free(*out)` |
+| `groupListAll()` | 函数内部逐条分配                   | 调用者 | `groupListFree(*out, *count)` |
+| `groupMemberList()` | 函数内部 `malloc` | 调用者 | `free(*outUids)` |
+| `groupChatHistory()` | 函数内部逐条分配                   | 调用者 | 逐条 `free(out[i].message)` 后 `free(out)` |
 | `getGameById()` (字符串字段) | 逐字段 `strdup` | 调用者 | `gameInfoFree(&info)` |
 | `getGameByName()` (字符串字段) | 逐字段 `strdup` | 调用者 | `gameInfoFree(&info)` |
 | `listRegisteredGames()` | 函数内部逐条分配 | 调用者 | `gameInfoArrayFree(arr, count)` |
@@ -3782,16 +4091,20 @@ graph TD
         sMain["server.c<br/>select() 事件循环 / 请求分派"]
         sComm["communication.c<br/>服务端密钥协商 + 加密收发"]
         sAuth["auth.c<br/>登入 / 注册 / TOTP / CDBKey"]
-        sRoom["room.c<br/>房间 CRUD / ActiveRoom"]
-        sChat["chat.c<br/>聊天消息存储与广播"]
+        sRoom["room.c<br/>房间 CRUD / ActiveRoom (DEPRECATED)"]
+        sChat["chat.c<br/>聊天消息存储与广播 (DEPRECATED)"]
         sLog["serverLog.c<br/>异步日志写入 / 压缩 / TUI fetch"]
         sKey["keyManager.c<br/>MK 信封加密密钥体系"]
-        sDb["database/<br/>common.c / userDb.c / chatDb.c<br/>roomDb.c / serverDb.c / gameDb.c"]
+        sDb["database/<br/>common.c / userDb.c / friendDb.c<br/>privateChatDb.c / groupDb.c / serverDb.c / gameDb.c"]
         sTui["tui/serverTUI.c<br/>MK 管理 / 日志面板"]
         sGameRoom["gameRoom.c<br/>游戏房间管理 / ActiveGameRoom"]
         sGameRunner["gameRunner.c<br/>dlopen + 游戏线程管理"]
         sGameDist["gameDistribution.c<br/>游戏列表 / 下载握手"]
         sDownPool["downloadPool.c<br/>多线程文件传输池"]
+        sFriend["friend.c<br/>好友请求/接受/拒绝/删除"]
+        sGroup["group.c<br/>群组创建/加入/聊天/解散"]
+        sPrivateChat["privateChat.c<br/>私聊消息发送/历史/离线投递"]
+        sOnlineTrk["onlineTracker.c<br/>在线状态追踪"]
     end
 
     subgraph client["客户端层 src/client/"]
@@ -3829,23 +4142,33 @@ graph TD
     %% 服务端模块依赖
     sMain --> sComm
     sMain --> sAuth
-    sMain --> sRoom
-    sMain --> sChat
+    sMain --> sRoom (DEPRECATED)
+    sMain --> sChat (DEPRECATED)
     sMain --> sLog
     sMain --> sKey
     sMain --> sDb
+    sMain --> sFriend
+    sMain --> sGroup
+    sMain --> sPrivateChat
+    sMain --> sOnlineTrk
+    sMain --> sGameRoom
+    sMain --> sGameDist
     sAuth --> sDb
     sAuth --> sComm
-    sRoom --> sDb
-    sRoom --> sComm
-    sChat --> sDb
-    sChat --> sComm
+    sRoom --> sDb (DEPRECATED)
+    sRoom --> sComm (DEPRECATED)
+    sChat --> sDb (DEPRECATED)
+    sChat --> sComm (DEPRECATED)
     sKey --> sDb
     sKey --> crypto
     sKey --> utils
     sComm --> protocol
     sDb --> db
     sDb --> crypto
+    sFriend --> sDb
+    sGroup --> sDb
+    sPrivateChat --> sDb
+    sOnlineTrk --> sDb
 
     sLog --> pthread
     sLog --> zlib["libz-ng<br/>zlib-ng"]
@@ -3867,8 +4190,8 @@ graph TD
     %% 客户端模块依赖
     cMain --> cComm
     cMain --> cAuth
-    cMain --> cRoom
-    cMain --> cChat
+    cMain --> cRoom (DEPRECATED)
+    cMain --> cChat (DEPRECATED)
     cMain --> cDb
     cTui --> cMain
     cTui --> cAuth
@@ -3926,8 +4249,8 @@ graph TD
 
 * 任何状态下的非预期消息类型会导致客户端被断开连接
 * 密钥交换完成后所有数据包必须为 `AES256GCMPacket`
-* `SessionRoom` 和 `SessionChat` 都允许 `MsgTOTPSetupReq` 和 `MsgDBKeyReq`
-* 客户端断开连接时自动清理其 ActiveRoom 成员资格，空房间自动删除
+* `SessionLobby` 允许 `MsgTOTPSetupReq`、`MsgDBKeyReq` 以及全部社交与游戏房间消息类型
+* 客户端断开连接时自动清理其 ActiveRoom 成员资格，空游戏房间自动删除
 
 **第三方代码**：
 
@@ -3993,9 +4316,11 @@ serverInit()           → serverLogInit() → 创建监听、打开 ServerDB
   └─ serverInitKeys()  → 首次生成 envelope / 已有则 MK 解密
 serverRun()            → serverLaunch()（后台线程）
   ├─ dbInit(UserDB, userDbEncKey)
-  ├─ dbInit(ChatHistoryDB, chatDbEncKey)
-  ├─ dbInit(RoomDB, roomDbEncKey)
+  ├─ dbInit(FriendDB, friendDbEncKey)
+  ├─ dbInit(PrivateChatDB, privateChatDbEncKey)
+  ├─ dbInit(GroupDB, groupDbEncKey)
   ├─ dbInit(GameDB, gameDbEncKey)
+  ├─ dbInit(GameRoomDB, gameRoomDbEncKey)
   └─ TUI Main Page（日志 + 命令，阻塞）
 serverShutdown()       → running=false → pthread_join
 serverCleanup()        → 释放所有资源、密钥擦除
@@ -4148,7 +4473,7 @@ typedef struct {
 | `serverHandleGameDownload(Server *s, ClientSession *cs, const Packet *pkt)` | 解析 GameDownloadReqPayload → 验证游戏/平台/文件 → 解密 gameEncKey → 注册 token 到 DownloadPool → 发送 GameDownloadRespPayload |
 | `serverHandleGameDownloadCancel(Server *s, ClientSession *cs, const Packet *pkt)` | 按 token 调用 `downloadPoolCancelByToken()`，不发送响应 |
 
-**路由位置**： `server.c:processClient()` 在 `SessionRoom` 状态中，`MsgGameListReq` / `MsgGameDownloadReq` / `MsgGameDownloadCancel` 被分派到以上 handler。
+**路由位置**： `server.c:processClient()` 在 `SessionLobby` 状态中，`MsgGameListReq` / `MsgGameDownloadReq` / `MsgGameDownloadCancel` 被分派到以上 handler。
 
 ### 7.5 DownloadPool 下载线程池
 

@@ -208,7 +208,7 @@ static void testRemoveClientRegularMember(void) {
 
     serverRemoveClientFromGameRoom(&s, &member);
     ASSERT_UINT_EQ(member.currentGameRoomId, (uint32_t)0);
-    ASSERT_INT_EQ(member.state, SessionRoom);
+    ASSERT_INT_EQ(member.state, SessionLobby);
     ASSERT_INT_EQ(gr->memberCount, 1);
     ASSERT_TRUE(gr->members[0] == &host);
     ASSERT_INT_EQ(s.activeGameRoomCount, 1);
@@ -245,11 +245,11 @@ static void testRemoveClientHost(void) {
 
     serverRemoveClientFromGameRoom(&s, &host);
     ASSERT_UINT_EQ(host.currentGameRoomId, (uint32_t)0);
-    ASSERT_INT_EQ(host.state, SessionRoom);
+    ASSERT_INT_EQ(host.state, SessionLobby);
     ASSERT_UINT_EQ(member1.currentGameRoomId, (uint32_t)0);
-    ASSERT_INT_EQ(member1.state, SessionRoom);
+    ASSERT_INT_EQ(member1.state, SessionLobby);
     ASSERT_UINT_EQ(member2.currentGameRoomId, (uint32_t)0);
-    ASSERT_INT_EQ(member2.state, SessionRoom);
+    ASSERT_INT_EQ(member2.state, SessionLobby);
     ASSERT_INT_EQ(s.activeGameRoomCount, 0);
 
     freeTestServer(&s);
@@ -341,7 +341,7 @@ static void testRemoveClientFromNonexistentRoom(void) {
 
     serverRemoveClientFromGameRoom(&s, &cs);
     ASSERT_UINT_EQ(cs.currentGameRoomId, (uint32_t)0);
-    ASSERT_INT_EQ(cs.state, SessionRoom);
+    ASSERT_INT_EQ(cs.state, SessionLobby);
 
     freeTestServer(&s);
 }
@@ -383,7 +383,7 @@ static void testRemoveClientStateTransitionToRoom(void) {
     gr->memberCount = 2;
 
     serverRemoveClientFromGameRoom(&s, &member);
-    ASSERT_INT_EQ(member.state, SessionRoom);
+    ASSERT_INT_EQ(member.state, SessionLobby);
     ASSERT_UINT_EQ(member.currentGameRoomId, (uint32_t)0);
 
     freeTestServer(&s);
@@ -425,7 +425,7 @@ static void testDissolveAllMembersGetReset(void) {
 
     for (int i = 0; i < MemberCount; i++) {
         ASSERT_UINT_EQ(sessions[i].currentGameRoomId, (uint32_t)0);
-        ASSERT_INT_EQ(sessions[i].state, SessionRoom);
+        ASSERT_INT_EQ(sessions[i].state, SessionLobby);
     }
     ASSERT_INT_EQ(s.activeGameRoomCount, 0);
 

@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <openssl/crypto.h>
@@ -41,6 +42,8 @@ enum {
     SdkCtlPlatformOffset = 5,
     SdkCtlStartServerLen = 1 + 4 + PLATFORM_NAME_LEN
 };
+
+#define CLIENT_HEARTBEAT_INTERVAL_SEC 30
 
 /* ─────────────────────────────── public API ─────────────────────────────── */
 
@@ -95,6 +98,7 @@ int clientLaunch(Client *client, PacPlaySDK *sdk) {
 
     client->sdk = sdk;
     client->running = true;
+    client->lastHeartbeat = time(NULL);
 
     if (pthread_create(&client->ioThread, NULL, clientEventLoop, client) != 0) {
         LOG_ERROR("clientLaunch: pthread_create failed (errno=%d)", errno);
@@ -142,6 +146,13 @@ static void *clientEventLoop(void *arg) {
             LOG_ERROR("clientEventLoop: select() failed (errno=%d, fd=%d)",
                       errno, c->fd);
             break;
+        }
+
+        /* Send heartbeat if interval has elapsed. */
+        time_t now = time(NULL);
+        if (now - c->lastHeartbeat >= CLIENT_HEARTBEAT_INTERVAL_SEC) {
+            clientSendEncryptedPacket(c, MsgHeartbeat, NULL, 0);
+            c->lastHeartbeat = now;
         }
 
         /* 1. Drain SDK send queue — encrypt and send game payloads. */

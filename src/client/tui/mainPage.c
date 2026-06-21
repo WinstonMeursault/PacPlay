@@ -28,9 +28,9 @@
 #include "client/gameDownload.h"
 #include "client/gameLoad.h"
 #include "client/gameRoom.h"
-#include "client/room.h"
 #include "clientTUI.h"
 #include "controlGameView.h"
+#include "socialPage.h"
 #include "pacplay_sdk.h"
 #include <stdlib.h>
 #include <string.h>
@@ -54,8 +54,6 @@ struct {
     GameRecord **record;
     size_t cnt;
 } gameList;
-
-bool onlyChat = false;
 
 static DownloadManager *downloadMgr = NULL;
 static GameInfoEntry *serverGameEntries = NULL;
@@ -95,6 +93,7 @@ ControlGrid homeOperGrid;
 
 ControlLabel homeStatusUsername;
 ControlLabel homeStatusNickname;
+ControlButton homeStatusSocial;
 ControlButton homeStatusChat;
 ControlButton homeStatusExit;
 
@@ -117,13 +116,6 @@ ControlButton toGameBtn;
 ControlButton toChatBtn;
 ControlButton backBtn;
 ControlGameView gameView;
-ControlGrid chatGrid;
-ControlListBox chatRoomList;
-ControlButton chatEnterRoomBtn;
-ControlButton chatRefreshRoomBtn;
-ControlButton chatCreateRoomBtn;
-ControlScrollTextBox chatHistoryBox;
-ControlInputBox chatInputBox;
 
 // Game room lobby page
 ControlPage gameRoomLobbyPage;
@@ -136,23 +128,6 @@ ControlLabel gameRoomLobbyStatus;
 ControlButton gameRoomLobbyStartBtn;
 ControlButton gameRoomLobbyBackBtn;
 ControlScrollTextBox gameRoomLobbyMemberBox;
-
-typedef enum { GameTag = 1, ChatTag = 2 } TagEnum;
-static void switchTag(TagEnum tag) {
-    switch (tag) {
-    case GameTag:
-        tuiAppVisibilityChange((Control *)&chatGrid, false);
-        tuiAppVisibilityChange((Control *)&gameView, true);
-        break;
-    case ChatTag:
-        tuiAppVisibilityChange((Control *)&gameView, false);
-        tuiAppVisibilityChange((Control *)&chatGrid, true);
-        break;
-    default:
-        break;
-    }
-    tuiAppRefresh();
-}
 
 static void updateUserData(char *nickname, char *username) {
     if (nickname != NULL) {
@@ -190,7 +165,6 @@ static void fetchGames() {
 void homePageInitUpdate(char *nickname, char *username) {
     updateUserData(nickname, username);
     fetchGames();
-    switchTag(GameTag);
     if (downloadMgr == NULL) {
         downloadManagerInit(&downloadMgr, client);
     }
@@ -263,8 +237,12 @@ static void homeStatusExitOnClick(ControlButton *self) {
 
 static void homeStatusChatOnClick(ControlButton *self) {
     (void)self;
-    switchTag(ChatTag);
-    tuiAppChangePage(&gamePage);
+    /* Chat replaced by social system */
+}
+
+static void homeStatusSocialOnClick(ControlButton *self) {
+    (void)self;
+    socialPageEnter(client);
 }
 
 static void homeGameListResize(ControlListBox *self) {
@@ -415,41 +393,21 @@ static void gameGridResize(ControlGrid *self) {
     self->base.height = pViewArea->height;
     self->base.width = pViewArea->width;
 
-    gameView.base.width = chatGrid.base.width = pViewArea->width - 2;
-    gameView.base.height = chatGrid.base.height =
-        pViewArea->height - 2 - TUI_BTN_HEIGHT;
+    gameView.base.width = pViewArea->width - 2;
+    gameView.base.height = pViewArea->height - 2 - TUI_BTN_HEIGHT;
 
     backBtn.base.x = gameGrid.base.width - backBtn.base.width - 1;
-
-    chatRoomList.base.x = self->base.width / 2 - chatRoomList.base.width / 2;
-    chatRoomList.base.y = self->base.height / 2 - chatRoomList.base.height / 2;
-
-    chatEnterRoomBtn.base.x =
-        self->base.width / 2 - chatEnterRoomBtn.base.width / 2;
-    chatEnterRoomBtn.base.y =
-        chatRoomList.base.y + chatRoomList.base.height + 1;
-
-    chatHistoryBox.base.base.width = self->base.width - 2;
-    chatHistoryBox.base.base.height = self->base.height - 5;
-
-    chatInputBox.base.width = self->base.width - 2;
-    chatInputBox.base.y = self->base.height - 4;
 }
 
 static void toGameBtnOnClick(ControlButton *self) {
     (void)self;
-    switchTag(GameTag);
 }
 static void toChatBtnOnClick(ControlButton *self) {
     (void)self;
-    switchTag(ChatTag);
 }
 
 static void backBtnOnClick(ControlButton *self) {
     (void)self;
-    if (client->currentRoomId != 0) {
-        clientQuitRoom(client);
-    }
     if (gameView.running) {
         controlGameViewStop(&gameView);
     }
@@ -644,7 +602,6 @@ static void gameRoomLobbyStartOnClick(ControlButton *self) {
     if (sdk != NULL) {
         clientLaunch(client, sdk);
     }
-    switchTag(GameTag);
     tuiAppChangePage(&gamePage);
     controlGameViewRun(&gameView, gameRoomLobbyGamePath);
 }
@@ -676,7 +633,6 @@ static void gameRoomLobbyGridUpdate(ControlGrid *self) {
         if (sdk != NULL) {
             clientLaunch(client, sdk);
         }
-        switchTag(GameTag);
         tuiAppChangePage(&gamePage);
         controlGameViewRun(&gameView, gameRoomLobbyGamePath);
         return;
@@ -775,6 +731,9 @@ void tuiClientMainPageInit() {
                            TUI_HOME_STATUSGRID_HEIGHT - 1 - TUI_BTN_HEIGHT, 2,
                            "Chat...", NULL, homeStatusChatOnClick, NULL, NULL,
                            NULL);
+    controlButtonConstruct(&homeStatusSocial, TUI_BTN_HEIGHT, TUI_BTN_WIDTH, 1,
+                           2, "Social", NULL, homeStatusSocialOnClick, NULL, NULL,
+                           NULL);
     controlButtonConstruct(&homeStatusExit, TUI_BTN_HEIGHT, 6, 1,
                            TUI_HOME_STATUSGRID_WIDTH - 1 - 6, "Exit", NULL,
                            homeStatusExitOnClick, NULL, NULL, NULL);
@@ -816,6 +775,8 @@ void tuiClientMainPageInit() {
                           (Control *)&homeStatusGrid);
     tuiAppControlRegister((Control *)&homeStatusChat,
                           (Control *)&homeStatusGrid);
+    tuiAppControlRegister((Control *)&homeStatusSocial,
+                          (Control *)&homeStatusGrid);
     tuiAppControlRegister((Control *)&homeStatusExit,
                           (Control *)&homeStatusGrid);
     tuiAppControlRegister((Control *)&homeOperGameName,
@@ -851,20 +812,6 @@ void tuiClientMainPageInit() {
                            1 + TUI_BTN_WIDTH + 1, "Back", NULL, backBtnOnClick,
                            NULL, NULL, NULL);
     controlGameViewConstruct(&gameView, 3, 3, TUI_BTN_HEIGHT + 1, 1);
-    controlGridConstruct(&chatGrid, 0, 0, TUI_BTN_HEIGHT + 1, 1, LayoutNone, 0,
-                         0, NULL, NULL, NULL, NULL, NULL);
-    controlListBoxConstruct(&chatRoomList, 20, 20, 0, 0, NULL, NULL, NULL,
-                            NULL);
-    controlButtonConstruct(&chatEnterRoomBtn, TUI_BTN_HEIGHT, TUI_BTN_WIDTH, 0,
-                           0, "Enter", NULL, NULL, NULL, NULL, NULL);
-    controlButtonConstruct(&chatRefreshRoomBtn, TUI_BTN_HEIGHT, TUI_BTN_WIDTH,
-                           0, 0, "Refresh", NULL, NULL, NULL, NULL, NULL);
-    controlButtonConstruct(&chatCreateRoomBtn, TUI_BTN_HEIGHT, TUI_BTN_WIDTH, 0,
-                           0, "Create", NULL, NULL, NULL, NULL, NULL);
-    controlScrollTextBoxConstruct(&chatHistoryBox, 0, 0, 1, 1, 1000, NULL, NULL,
-                                  NULL, NULL);
-    controlInputBoxConstruct(&chatInputBox, 10, 0, 1, false, NULL, NULL, NULL,
-                             NULL, NULL);
 
     tuiAppControlRegister((Control *)&gamePage, NULL);
     tuiAppControlRegister((Control *)&gameGrid, (Control *)&gamePage);
@@ -872,9 +819,4 @@ void tuiClientMainPageInit() {
     tuiAppControlRegister((Control *)&toChatBtn, (Control *)&gameGrid);
     tuiAppControlRegister((Control *)&backBtn, (Control *)&gameGrid);
     tuiAppControlRegister((Control *)&gameView, (Control *)&gameGrid);
-    tuiAppControlRegister((Control *)&chatGrid, (Control *)&gameGrid);
-    tuiAppControlRegister((Control *)&chatRoomList, (Control *)&chatGrid);
-    tuiAppControlRegister((Control *)&chatEnterRoomBtn, (Control *)&chatGrid);
-    tuiAppControlRegister((Control *)&chatHistoryBox, (Control *)&chatGrid);
-    tuiAppControlRegister((Control *)&chatInputBox, (Control *)&chatGrid);
 }

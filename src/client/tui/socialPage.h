@@ -1,12 +1,8 @@
 /**
- * @file room.h
- * @brief Client-side room menu module header.
+ * @file socialPage.h
+ * @brief Client TUI social hub page header.
  *
- * Room functions are declared in @c client.h.  This header exists as
- * the module boundary for @c room.c and includes the parent header
- * for type definitions.
- *
- * @date 2026-06-07
+ * @date 2026-06-21
  * @copyright GPLv3 License
  * @section LICENSE
  * PacPlay
@@ -26,14 +22,13 @@
  * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
  */
 
-#ifndef CLIENT_ROOM_H
-#define CLIENT_ROOM_H
+#ifndef CLIENT_TUI_SOCIALPAGE_H
+#define CLIENT_TUI_SOCIALPAGE_H
 
-#include "client.h"
+#include "client/client.h"
 
-int clientRoomList(Client *client, uint32_t **roomIds, size_t *roomCount);
-int clientCreateRoom(Client *client, uint32_t id);
-int clientJoinRoom(Client *client, uint32_t id);
-void clientQuitRoom(Client *client);
+void socialPageEnter(Client *client);
 
-#endif /* CLIENT_ROOM_H */
+void tuiClientSocialPageInit(void);
+
+#endif /* CLIENT_TUI_SOCIALPAGE_H */

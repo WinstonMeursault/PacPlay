@@ -146,9 +146,10 @@ bool serverIsFirstRun(Server *s) {
 }
 
 bool serverKeysAreComplete(Server *s) {
-    const char *keyNames[] = {"DEK", "UserDBKey", "ChatHistoryDBKey",
-                              "RoomDBKey", "GameDBKey", "GameRoomDBKey"};
-    enum { KeyCount = 6 };
+    const char *keyNames[] = {"DEK",    "UserDBKey",   "GameDBKey",
+                               "GameRoomDBKey", "FriendDBKey",
+                               "PrivateChatDBKey", "GroupDBKey"};
+    enum { KeyCount = 7 };
     for (int i = 0; i < KeyCount; i++) {
         uint8_t *val = NULL;
         size_t valLen = 0;
@@ -169,45 +170,51 @@ bool serverKeysAreComplete(Server *s) {
 char *serverGenerateFreshKeys(Server *s) {
     LOG_INFO("serverGenerateFreshKeys: generating fresh server keys");
     uint8_t mkKey[AES256KeyLen], dekKey[AES256KeyLen],
-        userDbKey[DB_ENC_KEY_LEN], chatDbKey[DB_ENC_KEY_LEN],
-        roomDbKey[DB_ENC_KEY_LEN], gameDbKey[DB_ENC_KEY_LEN],
-        gameRoomDbKey[DB_ENC_KEY_LEN];
+        userDbKey[DB_ENC_KEY_LEN], gameDbKey[DB_ENC_KEY_LEN],
+        gameRoomDbKey[DB_ENC_KEY_LEN],
+        friendDbKey[DB_ENC_KEY_LEN], privateChatDbKey[DB_ENC_KEY_LEN],
+        groupDbKey[DB_ENC_KEY_LEN];
     if (cryptoRandomBytes(mkKey, AES256KeyLen) != CRYPTO_SUCC ||
         cryptoRandomBytes(dekKey, AES256KeyLen) != CRYPTO_SUCC ||
         cryptoRandomBytes(userDbKey, DB_ENC_KEY_LEN) != CRYPTO_SUCC ||
-        cryptoRandomBytes(chatDbKey, DB_ENC_KEY_LEN) != CRYPTO_SUCC ||
-        cryptoRandomBytes(roomDbKey, DB_ENC_KEY_LEN) != CRYPTO_SUCC ||
         cryptoRandomBytes(gameDbKey, DB_ENC_KEY_LEN) != CRYPTO_SUCC ||
-        cryptoRandomBytes(gameRoomDbKey, DB_ENC_KEY_LEN) != CRYPTO_SUCC) {
+        cryptoRandomBytes(gameRoomDbKey, DB_ENC_KEY_LEN) != CRYPTO_SUCC ||
+        cryptoRandomBytes(friendDbKey, DB_ENC_KEY_LEN) != CRYPTO_SUCC ||
+        cryptoRandomBytes(privateChatDbKey, DB_ENC_KEY_LEN) != CRYPTO_SUCC ||
+        cryptoRandomBytes(groupDbKey, DB_ENC_KEY_LEN) != CRYPTO_SUCC) {
         LOG_ERROR("serverGenerateFreshKeys: cryptoRandomBytes failed");
         return NULL;
     }
     if (encryptAndStoreKey(mkKey, dekKey, "DEK", s->serverDB) != SERVER_SUCC ||
         encryptAndStoreKey(mkKey, userDbKey, "UserDBKey", s->serverDB) !=
             SERVER_SUCC ||
-        encryptAndStoreKey(mkKey, chatDbKey, "ChatHistoryDBKey", s->serverDB) !=
-            SERVER_SUCC ||
-        encryptAndStoreKey(mkKey, roomDbKey, "RoomDBKey", s->serverDB) !=
-            SERVER_SUCC ||
         encryptAndStoreKey(mkKey, gameDbKey, "GameDBKey", s->serverDB) !=
             SERVER_SUCC ||
         encryptAndStoreKey(mkKey, gameRoomDbKey, "GameRoomDBKey",
+                           s->serverDB) != SERVER_SUCC ||
+        encryptAndStoreKey(mkKey, friendDbKey, "FriendDBKey",
+                           s->serverDB) != SERVER_SUCC ||
+        encryptAndStoreKey(mkKey, privateChatDbKey, "PrivateChatDBKey",
+                           s->serverDB) != SERVER_SUCC ||
+        encryptAndStoreKey(mkKey, groupDbKey, "GroupDBKey",
                            s->serverDB) != SERVER_SUCC) {
         OPENSSL_cleanse(mkKey, sizeof(mkKey));
         OPENSSL_cleanse(dekKey, sizeof(dekKey));
         OPENSSL_cleanse(userDbKey, sizeof(userDbKey));
-        OPENSSL_cleanse(chatDbKey, sizeof(chatDbKey));
-        OPENSSL_cleanse(roomDbKey, sizeof(roomDbKey));
         OPENSSL_cleanse(gameDbKey, sizeof(gameDbKey));
         OPENSSL_cleanse(gameRoomDbKey, sizeof(gameRoomDbKey));
+        OPENSSL_cleanse(friendDbKey, sizeof(friendDbKey));
+        OPENSSL_cleanse(privateChatDbKey, sizeof(privateChatDbKey));
+        OPENSSL_cleanse(groupDbKey, sizeof(groupDbKey));
         return NULL;
     }
     OPENSSL_cleanse(dekKey, sizeof(dekKey));
     OPENSSL_cleanse(userDbKey, sizeof(userDbKey));
-    OPENSSL_cleanse(chatDbKey, sizeof(chatDbKey));
-    OPENSSL_cleanse(roomDbKey, sizeof(roomDbKey));
     OPENSSL_cleanse(gameDbKey, sizeof(gameDbKey));
     OPENSSL_cleanse(gameRoomDbKey, sizeof(gameRoomDbKey));
+    OPENSSL_cleanse(friendDbKey, sizeof(friendDbKey));
+    OPENSSL_cleanse(privateChatDbKey, sizeof(privateChatDbKey));
+    OPENSSL_cleanse(groupDbKey, sizeof(groupDbKey));
 
     char *hex = malloc((size_t)MkHexLen + 1);
     if (hex == NULL) {
@@ -232,38 +239,44 @@ int serverUnlockWithMK(Server *s, const char *masterKeyHex) {
         return SERVER_FAIL;
     }
 
-    uint8_t *dekEnc = NULL, *userDbEnc = NULL, *chatDbEnc = NULL,
-            *roomDbEnc = NULL, *gameDbEnc = NULL, *gameRoomDbEnc = NULL;
-    size_t dekLen = 0, uLen = 0, cLen = 0, rLen = 0, gLen = 0, grLen = 0;
+    uint8_t *dekEnc = NULL, *userDbEnc = NULL,
+            *gameDbEnc = NULL, *gameRoomDbEnc = NULL,
+            *friendDbEnc = NULL, *privateChatDbEnc = NULL, *groupDbEnc = NULL;
+    size_t dekLen = 0, uLen = 0, gLen = 0, grLen = 0,
+           frLen = 0, pcLen = 0, gpLen = 0;
     if (getServerKey(s->serverDB, "DEK", &dekEnc, &dekLen) != DB_SUCC ||
         getServerKey(s->serverDB, "UserDBKey", &userDbEnc, &uLen) != DB_SUCC ||
-        getServerKey(s->serverDB, "ChatHistoryDBKey", &chatDbEnc, &cLen) !=
-            DB_SUCC ||
-        getServerKey(s->serverDB, "RoomDBKey", &roomDbEnc, &rLen) !=
-            DB_SUCC ||
         getServerKey(s->serverDB, "GameDBKey", &gameDbEnc, &gLen) !=
             DB_SUCC ||
         getServerKey(s->serverDB, "GameRoomDBKey", &gameRoomDbEnc, &grLen) !=
+            DB_SUCC ||
+        getServerKey(s->serverDB, "FriendDBKey", &friendDbEnc, &frLen) !=
+            DB_SUCC ||
+        getServerKey(s->serverDB, "PrivateChatDBKey", &privateChatDbEnc,
+                     &pcLen) != DB_SUCC ||
+        getServerKey(s->serverDB, "GroupDBKey", &groupDbEnc, &gpLen) !=
             DB_SUCC) {
         OPENSSL_cleanse(mkKey, sizeof(mkKey));
         free(dekEnc);
         free(userDbEnc);
-        free(chatDbEnc);
-        free(roomDbEnc);
         free(gameDbEnc);
         free(gameRoomDbEnc);
+        free(friendDbEnc);
+        free(privateChatDbEnc);
+        free(groupDbEnc);
         return SERVER_FAIL;
     }
-    if (!dekEnc || !userDbEnc || !chatDbEnc || !roomDbEnc || !gameDbEnc ||
-        !gameRoomDbEnc) {
+    if (!dekEnc || !userDbEnc || !gameDbEnc ||
+        !gameRoomDbEnc || !friendDbEnc || !privateChatDbEnc || !groupDbEnc) {
         LOG_ERROR("serverUnlockWithMK: missing one or more key envelopes");
         OPENSSL_cleanse(mkKey, sizeof(mkKey));
         free(dekEnc);
         free(userDbEnc);
-        free(chatDbEnc);
-        free(roomDbEnc);
         free(gameDbEnc);
         free(gameRoomDbEnc);
+        free(friendDbEnc);
+        free(privateChatDbEnc);
+        free(groupDbEnc);
         return SERVER_FAIL;
     }
 
@@ -272,24 +285,27 @@ int serverUnlockWithMK(Server *s, const char *masterKeyHex) {
             SERVER_SUCC ||
         decryptAndLoadKey(mkKey, userDbEnc, uLen, "UserDBKey",
                           s->userDbEncKey) != SERVER_SUCC ||
-        decryptAndLoadKey(mkKey, chatDbEnc, cLen, "ChatHistoryDBKey",
-                          s->chatDbEncKey) != SERVER_SUCC ||
-        decryptAndLoadKey(mkKey, roomDbEnc, rLen, "RoomDBKey",
-                          s->roomDbEncKey) != SERVER_SUCC ||
         decryptAndLoadKey(mkKey, gameDbEnc, gLen, "GameDBKey",
                           s->gameDbEncKey) != SERVER_SUCC ||
         decryptAndLoadKey(mkKey, gameRoomDbEnc, grLen, "GameRoomDBKey",
-                          s->gameRoomDbEncKey) != SERVER_SUCC) {
+                           s->gameRoomDbEncKey) != SERVER_SUCC ||
+        decryptAndLoadKey(mkKey, friendDbEnc, frLen, "FriendDBKey",
+                           s->friendDbEncKey) != SERVER_SUCC ||
+        decryptAndLoadKey(mkKey, privateChatDbEnc, pcLen, "PrivateChatDBKey",
+                           s->privateChatDbEncKey) != SERVER_SUCC ||
+        decryptAndLoadKey(mkKey, groupDbEnc, gpLen, "GroupDBKey",
+                           s->groupDbEncKey) != SERVER_SUCC) {
         ret = SERVER_FAIL;
     }
 
     OPENSSL_cleanse(mkKey, sizeof(mkKey));
     free(dekEnc);
     free(userDbEnc);
-    free(chatDbEnc);
-    free(roomDbEnc);
     free(gameDbEnc);
     free(gameRoomDbEnc);
+    free(friendDbEnc);
+    free(privateChatDbEnc);
+    free(groupDbEnc);
 
     if (ret == SERVER_SUCC) {
         LOG_INFO("serverUnlockWithMK: server unlocked successfully");

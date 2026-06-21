@@ -65,9 +65,11 @@ static Server makeTestServerWithDB(void) {
 static void cleanupServer(Server *srv) {
     OPENSSL_cleanse(srv->dekKey, sizeof(srv->dekKey));
     OPENSSL_cleanse(srv->userDbEncKey, sizeof(srv->userDbEncKey));
-    OPENSSL_cleanse(srv->chatDbEncKey, sizeof(srv->chatDbEncKey));
-    OPENSSL_cleanse(srv->roomDbEncKey, sizeof(srv->roomDbEncKey));
     OPENSSL_cleanse(srv->gameDbEncKey, sizeof(srv->gameDbEncKey));
+    OPENSSL_cleanse(srv->gameRoomDbEncKey, sizeof(srv->gameRoomDbEncKey));
+    OPENSSL_cleanse(srv->friendDbEncKey, sizeof(srv->friendDbEncKey));
+    OPENSSL_cleanse(srv->privateChatDbEncKey, sizeof(srv->privateChatDbEncKey));
+    OPENSSL_cleanse(srv->groupDbEncKey, sizeof(srv->groupDbEncKey));
     dbClose(srv->serverDB);
     srv->serverDB = NULL;
 }
@@ -315,20 +317,33 @@ static void testGenerateUnlockRoundtripKeysNonZero(void) {
     static const uint8_t zeros[KeyLen];
     ASSERT_TRUE(memcmp(srv.dekKey, zeros, KeyLen) != 0);
     ASSERT_TRUE(memcmp(srv.userDbEncKey, zeros, KeyLen) != 0);
-    ASSERT_TRUE(memcmp(srv.chatDbEncKey, zeros, KeyLen) != 0);
-    ASSERT_TRUE(memcmp(srv.roomDbEncKey, zeros, KeyLen) != 0);
     ASSERT_TRUE(memcmp(srv.gameDbEncKey, zeros, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.gameRoomDbEncKey, zeros, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.friendDbEncKey, zeros, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.privateChatDbEncKey, zeros, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.groupDbEncKey, zeros, KeyLen) != 0);
 
     ASSERT_TRUE(memcmp(srv.dekKey, srv.userDbEncKey, KeyLen) != 0);
-    ASSERT_TRUE(memcmp(srv.dekKey, srv.chatDbEncKey, KeyLen) != 0);
-    ASSERT_TRUE(memcmp(srv.dekKey, srv.roomDbEncKey, KeyLen) != 0);
     ASSERT_TRUE(memcmp(srv.dekKey, srv.gameDbEncKey, KeyLen) != 0);
-    ASSERT_TRUE(memcmp(srv.userDbEncKey, srv.chatDbEncKey, KeyLen) != 0);
-    ASSERT_TRUE(memcmp(srv.userDbEncKey, srv.roomDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.dekKey, srv.gameRoomDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.dekKey, srv.friendDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.dekKey, srv.privateChatDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.dekKey, srv.groupDbEncKey, KeyLen) != 0);
     ASSERT_TRUE(memcmp(srv.userDbEncKey, srv.gameDbEncKey, KeyLen) != 0);
-    ASSERT_TRUE(memcmp(srv.chatDbEncKey, srv.roomDbEncKey, KeyLen) != 0);
-    ASSERT_TRUE(memcmp(srv.chatDbEncKey, srv.gameDbEncKey, KeyLen) != 0);
-    ASSERT_TRUE(memcmp(srv.roomDbEncKey, srv.gameDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.userDbEncKey, srv.gameRoomDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.userDbEncKey, srv.friendDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.userDbEncKey, srv.privateChatDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.userDbEncKey, srv.groupDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.gameDbEncKey, srv.gameRoomDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.gameDbEncKey, srv.friendDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.gameDbEncKey, srv.privateChatDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.gameDbEncKey, srv.groupDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.gameRoomDbEncKey, srv.friendDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.gameRoomDbEncKey, srv.privateChatDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.gameRoomDbEncKey, srv.groupDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.friendDbEncKey, srv.privateChatDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.friendDbEncKey, srv.groupDbEncKey, KeyLen) != 0);
+    ASSERT_TRUE(memcmp(srv.privateChatDbEncKey, srv.groupDbEncKey, KeyLen) != 0);
 
     free(mkHex);
     cleanupServer(&srv);

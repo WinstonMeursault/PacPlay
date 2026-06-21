@@ -21,7 +21,6 @@
 #include "server/communication.h"
 #include "server/database.h"
 #include "server/keyManager.h"
-#include "server/room.h"
 
 #include <errno.h>
 #include <signal.h>
@@ -431,384 +430,6 @@ static void testLoginNonexistentUser(void) {
     waitpid(child, NULL, 0);
 }
 
-/* ═══════════════════════════════ Room Tests ═══════════════════════════════ */
-
-/** @brief Create a room via protocol, then join it. */
-static void testRoomCreateAndJoin(void) {
-    removeDBFiles();
-    DB *userDB = ensureTestUser("Alice", LoginUidAlice, "alice");
-    ASSERT_TRUE(userDB != NULL);
-    DB *roomDB = dbInit(RoomDB, NULL);
-    ASSERT_TRUE(roomDB != NULL);
-
-    SocketFD sv[2];
-    ASSERT_INT_EQ(makeSocketPair(sv), 0);
-
-    dbClose(userDB);
-    dbClose(roomDB);
-    pid_t child = fork();
-    if (child == 0) {
-        socketClose(&sv[0]);
-        userDB = dbInit(UserDB, NULL);
-        roomDB = dbInit(RoomDB, NULL);
-        AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
-        uint32_t seq = 0;
-
-        /* Phase 1: Login pass-through */
-        {
-            Packet pkt;
-            memset(&pkt, 0, sizeof(pkt));
-            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-            LoginResponsePayload lr;
-            memset(&lr, 0, sizeof(lr));
-            lr.uid = LoginUidAlice;
-            memcpy(lr.username, "Alice", StrLenAlice + 1);
-            memcpy(lr.nickname, "TestNick", StrLenTestNick + 1);
-            sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &lr, sizeof(lr));
-            packetClear(&pkt);
-        }
-
-        /* Phase 2: Room create */
-        {
-            Packet pkt;
-            memset(&pkt, 0, sizeof(pkt));
-            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-            ASSERT_INT_EQ(pkt.header.messageType, MsgCreateRoom);
-            uint32_t roomId = *(uint32_t *)pkt.payload;
-            uint8_t s =
-                (createRoom(roomDB, roomId, LoginUidAlice) == DB_SUCC) ? 0 : 1;
-            sendEnc(sv[1], &srvKey, &seq, MsgCreateRoomResp, &s, sizeof(s));
-            packetClear(&pkt);
-        }
-
-        /* Phase 3: Room join */
-        {
-            Packet pkt;
-            memset(&pkt, 0, sizeof(pkt));
-            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-            ASSERT_INT_EQ(pkt.header.messageType, MsgJoinRoom);
-            uint32_t roomId = *(uint32_t *)pkt.payload;
-            uint8_t s = (roomExists(roomDB, roomId) == DB_SUCC) ? 0 : 1;
-            sendEnc(sv[1], &srvKey, &seq, MsgJoinRoomResp, &s, sizeof(s));
-            packetClear(&pkt);
-        }
-
-        dbClose(userDB);
-        dbClose(roomDB);
-        socketClose(&sv[1]);
-        _exit(0);
-    }
-
-    socketClose(&sv[1]);
-    AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
-    uint32_t seq = 0;
-
-    /* Login */
-    {
-        const char *un = "Alice";
-        const char *pw = "alice";
-        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
-        LoginRequestPayload *lp = calloc(1, plen);
-        memcpy(lp->username, un, strlen(un) + 1);
-        memcpy(lp->password, pw, strlen(pw) + 1);
-        sendEnc(sv[0], &cliKey, &seq, MsgLoginReq, lp, plen);
-        OPENSSL_cleanse(lp, plen);
-        free(lp);
-        Packet rpkt;
-        memset(&rpkt, 0, sizeof(rpkt));
-        ASSERT_INT_EQ(recvDec(sv[0], &cliKey, &rpkt), 0);
-        ASSERT_INT_EQ(rpkt.header.messageType, MsgLoginResp);
-        ASSERT_TRUE(rpkt.header.payloadLength >= sizeof(LoginResponsePayload));
-        LoginResponsePayload *lresp = (LoginResponsePayload *)rpkt.payload;
-        ASSERT_TRUE(lresp->uid != 0);
-        packetClear(&rpkt);
-    }
-
-    /* Create room */
-    {
-        uint32_t r = TestRoomId;
-        sendEnc(sv[0], &cliKey, &seq, MsgCreateRoom, &r, sizeof(r));
-        ASSERT_INT_EQ(recvStatus(sv[0], &cliKey, MsgCreateRoomResp), 0);
-    }
-
-    /* Join room */
-    {
-        uint32_t r = TestRoomId;
-        sendEnc(sv[0], &cliKey, &seq, MsgJoinRoom, &r, sizeof(r));
-        ASSERT_INT_EQ(recvStatus(sv[0], &cliKey, MsgJoinRoomResp), 0);
-    }
-
-    socketClose(&sv[0]);
-    waitpid(child, NULL, 0);
-}
-
-/** @brief Joining a non-existent room => MsgJoinRoomResp(1). */
-static void testRoomJoinNonexistent(void) {
-    DB *userDB = ensureTestUser("Bob", LoginUidBob, "bobpass");
-    ASSERT_TRUE(userDB != NULL);
-
-    SocketFD sv[2];
-    ASSERT_INT_EQ(makeSocketPair(sv), 0);
-
-    dbClose(userDB);
-    pid_t child = fork();
-    if (child == 0) {
-        socketClose(&sv[0]);
-        userDB = dbInit(UserDB, NULL);
-        DB *gDB = dbInit(RoomDB, NULL);
-        AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
-        uint32_t seq = 0;
-
-        /* Login pass-through */
-        {
-            Packet pkt;
-            memset(&pkt, 0, sizeof(pkt));
-            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-            LoginResponsePayload lr;
-            memset(&lr, 0, sizeof(lr));
-            lr.uid = LoginUidBob;
-            memcpy(lr.username, "Bob", StrLenBob + 1);
-            memcpy(lr.nickname, "TestNick", StrLenTestNick + 1);
-            sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &lr, sizeof(lr));
-            packetClear(&pkt);
-        }
-
-        /* Reject non-existent room */
-        {
-            Packet pkt;
-            memset(&pkt, 0, sizeof(pkt));
-            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-            ASSERT_INT_EQ(pkt.header.messageType, MsgJoinRoom);
-            uint32_t roomId = *(uint32_t *)pkt.payload;
-            uint8_t s = (roomExists(gDB, roomId) == DB_SUCC) ? 0 : 1;
-            sendEnc(sv[1], &srvKey, &seq, MsgJoinRoomResp, &s, sizeof(s));
-            packetClear(&pkt);
-        }
-
-        dbClose(userDB);
-        dbClose(gDB);
-        socketClose(&sv[1]);
-        _exit(0);
-    }
-
-    socketClose(&sv[1]);
-    AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
-    uint32_t seq = 0;
-
-    /* Login */
-    {
-        const char *un = "Bob";
-        const char *pw = "bobpass";
-        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
-        LoginRequestPayload *lp = calloc(1, plen);
-        memcpy(lp->username, un, strlen(un) + 1);
-        memcpy(lp->password, pw, strlen(pw) + 1);
-        sendEnc(sv[0], &cliKey, &seq, MsgLoginReq, lp, plen);
-        OPENSSL_cleanse(lp, plen);
-        free(lp);
-        Packet rpkt;
-        memset(&rpkt, 0, sizeof(rpkt));
-        ASSERT_INT_EQ(recvDec(sv[0], &cliKey, &rpkt), 0);
-        ASSERT_INT_EQ(rpkt.header.messageType, MsgLoginResp);
-        ASSERT_TRUE(rpkt.header.payloadLength >= sizeof(LoginResponsePayload));
-        LoginResponsePayload *lresp = (LoginResponsePayload *)rpkt.payload;
-        ASSERT_TRUE(lresp->uid != 0);
-        packetClear(&rpkt);
-    }
-
-    /* Join non-existent room */
-    {
-        uint32_t r = RoomIdNonexist;
-        sendEnc(sv[0], &cliKey, &seq, MsgJoinRoom, &r, sizeof(r));
-        ASSERT_INT_EQ(recvStatus(sv[0], &cliKey, MsgJoinRoomResp), 1);
-    }
-
-    socketClose(&sv[0]);
-    waitpid(child, NULL, 0);
-}
-
-/** @brief Room list returns rooms sorted by ID (direct DB test, no fork). */
-static void testRoomList(void) {
-    removeDBFiles();
-    DB *roomDB = dbInit(RoomDB, NULL);
-    ASSERT_TRUE(roomDB != NULL);
-    ASSERT_INT_EQ(createRoom(roomDB, RoomIdA, 1), DB_SUCC);
-    ASSERT_INT_EQ(createRoom(roomDB, RoomIdC, 1), DB_SUCC);
-    ASSERT_INT_EQ(createRoom(roomDB, RoomIdB, 1), DB_SUCC);
-
-    uint32_t *ids = NULL;
-    size_t count = 0;
-    ASSERT_INT_EQ(listRooms(roomDB, &ids, &count), DB_SUCC);
-    ASSERT_UINT_EQ(count, (size_t)3);
-    ASSERT_UINT_EQ(ids[0], (uint32_t)RoomIdA);
-    ASSERT_UINT_EQ(ids[1], (uint32_t)RoomIdB);
-    ASSERT_UINT_EQ(ids[2], (uint32_t)RoomIdC);
-    free(ids);
-    dbClose(roomDB);
-}
-
-/* ═══════════════════════════════ Chat Tests ═══════════════════════════════ */
-
-/** @brief Send a chat message and verify it is stored + broadcast. */
-static void testChatSendAndBroadcast(void) {
-    removeDBFiles();
-    DB *roomDB = dbInit(RoomDB, NULL);
-    ASSERT_TRUE(roomDB != NULL);
-    ASSERT_INT_EQ(createRoom(roomDB, RoomIdCharlies, 1), DB_SUCC);
-
-    DB *userDB = ensureTestUser("Charlie", LoginUidCharlie, "chatpass");
-    ASSERT_TRUE(userDB != NULL);
-    DB *chatDB = dbInit(ChatHistoryDB, NULL);
-    ASSERT_TRUE(chatDB != NULL);
-
-    SocketFD sv[2];
-    ASSERT_INT_EQ(makeSocketPair(sv), 0);
-
-    dbClose(userDB);
-    dbClose(chatDB);
-    dbClose(roomDB);
-    pid_t child = fork();
-    if (child == 0) {
-        socketClose(&sv[0]);
-        userDB = dbInit(UserDB, NULL);
-        chatDB = dbInit(ChatHistoryDB, NULL);
-        roomDB = dbInit(RoomDB, NULL);
-        AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
-        uint32_t seq = 0;
-
-        /* Login pass */
-        {
-            Packet pkt;
-            memset(&pkt, 0, sizeof(pkt));
-            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-            LoginResponsePayload lr;
-            memset(&lr, 0, sizeof(lr));
-            lr.uid = LoginUidCharlie;
-            memcpy(lr.username, "Charlie", StrLenCharlie + 1);
-            memcpy(lr.nickname, "TestNick", StrLenTestNick + 1);
-            sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &lr, sizeof(lr));
-            packetClear(&pkt);
-        }
-
-        /* Join pass */
-        {
-            Packet pkt;
-            memset(&pkt, 0, sizeof(pkt));
-            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-            uint8_t s = 0;
-            sendEnc(sv[1], &srvKey, &seq, MsgJoinRoomResp, &s, sizeof(s));
-            packetClear(&pkt);
-        }
-
-        /* Chat message */
-        {
-            Packet pkt;
-            memset(&pkt, 0, sizeof(pkt));
-            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-            ASSERT_INT_EQ(pkt.header.messageType, MsgChat);
-
-            ChatPacketPayload *chat = (ChatPacketPayload *)pkt.payload;
-            Chat ch;
-            memset(&ch, 0, sizeof(ch));
-            ch.uid = LoginUidCharlie;
-            ch.message = strdup((const char *)chat->message);
-            ch.timestamp = (time_t)chat->timestamp;
-            ASSERT_INT_EQ(storeChat(chatDB, RoomIdCharlies, &ch), DB_SUCC);
-
-            /* Broadcast: uid + msgId + timestamp + message */
-            size_t msgLen = pkt.header.payloadLength - sizeof(int64_t);
-            enum { BcFixed = 20 };
-            size_t bcLen = BcFixed + msgLen;
-            uint8_t *bcBuf = malloc(bcLen);
-            ASSERT_TRUE(bcBuf != NULL);
-            memcpy(bcBuf, &ch.uid, sizeof(uint32_t));
-            memcpy(bcBuf + sizeof(uint32_t), &ch.msgId, sizeof(uint64_t));
-            memcpy(bcBuf + sizeof(uint32_t) + sizeof(uint64_t), &ch.timestamp,
-                   sizeof(int64_t));
-            memcpy(bcBuf + BcFixed, chat->message, msgLen);
-            sendEnc(sv[1], &srvKey, &seq, MsgChat, bcBuf, bcLen);
-            free(bcBuf);
-            free(ch.message);
-            packetClear(&pkt);
-        }
-
-        dbClose(userDB);
-        dbClose(chatDB);
-        dbClose(roomDB);
-        socketClose(&sv[1]);
-        _exit(0);
-    }
-
-    socketClose(&sv[1]);
-    AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
-    uint32_t seq = 0;
-
-    /* Login */
-    {
-        const char *un = "Charlie";
-        const char *pw = "chatpass";
-        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
-        LoginRequestPayload *lp = calloc(1, plen);
-        memcpy(lp->username, un, strlen(un) + 1);
-        memcpy(lp->password, pw, strlen(pw) + 1);
-        sendEnc(sv[0], &cliKey, &seq, MsgLoginReq, lp, plen);
-        OPENSSL_cleanse(lp, plen);
-        free(lp);
-        Packet rpkt;
-        memset(&rpkt, 0, sizeof(rpkt));
-        ASSERT_INT_EQ(recvDec(sv[0], &cliKey, &rpkt), 0);
-        ASSERT_INT_EQ(rpkt.header.messageType, MsgLoginResp);
-        ASSERT_TRUE(rpkt.header.payloadLength >= sizeof(LoginResponsePayload));
-        LoginResponsePayload *lresp = (LoginResponsePayload *)rpkt.payload;
-        ASSERT_TRUE(lresp->uid != 0);
-        packetClear(&rpkt);
-    }
-
-    /* Join room */
-    {
-        uint32_t rid = RoomIdCharlies;
-        sendEnc(sv[0], &cliKey, &seq, MsgJoinRoom, &rid, sizeof(rid));
-        ASSERT_INT_EQ(recvStatus(sv[0], &cliKey, MsgJoinRoomResp), 0);
-    }
-
-    /* Send chat */
-    {
-        int64_t ts = ChatTimestamp;
-        const char *msg = "Hello World!";
-        size_t msgLen = strlen(msg) + 1;
-        size_t plen = sizeof(int64_t) + msgLen;
-        ChatPacketPayload *cp = malloc(plen);
-        ASSERT_TRUE(cp != NULL);
-        memcpy(&cp->timestamp, &ts, sizeof(int64_t));
-        memcpy(cp->message, msg, msgLen);
-        sendEnc(sv[0], &cliKey, &seq, MsgChat, cp, plen);
-        free(cp);
-
-        /* Receive broadcast */
-        Packet pkt;
-        memset(&pkt, 0, sizeof(pkt));
-        ASSERT_INT_EQ(recvDec(sv[0], &cliKey, &pkt), 0);
-        ASSERT_INT_EQ(pkt.header.messageType, MsgChat);
-
-        ChatBroadcastPayload *bc = (ChatBroadcastPayload *)pkt.payload;
-        ASSERT_UINT_EQ(bc->uid, (uint32_t)LoginUidCharlie);
-        ASSERT_UINT_EQ(bc->msgId, (uint64_t)1);
-        ASSERT_INT_EQ(bc->timestamp, ts);
-        ASSERT_STR_EQ((const char *)bc->message, msg);
-        packetClear(&pkt);
-    }
-
-    socketClose(&sv[0]);
-    waitpid(child, NULL, 0);
-}
-
-/* ═════════════════════════════ Session Tests ══════════════════════════════ */
 
 /** @brief Logout received by server disconnects client cleanly. */
 static void testLogout(void) {
@@ -1929,399 +1550,6 @@ static void testCreateRoomZeroPayload(void) {
     waitpid(child, NULL, 0);
 }
 
-/** @brief JoinRoom with zero-length payload => StatusFailure. */
-static void testJoinRoomZeroPayload(void) {
-    DB *userDB = ensureTestUser("jruser", LoginUidBob, "jrpw");
-    ASSERT_TRUE(userDB != NULL);
-
-    SocketFD sv[2];
-    ASSERT_INT_EQ(makeSocketPair(sv), 0);
-
-    dbClose(userDB);
-    pid_t child = fork();
-    if (child == 0) {
-        socketClose(&sv[0]);
-        userDB = dbInit(UserDB, NULL);
-        DB *gDB = dbInit(RoomDB, NULL);
-        ASSERT_INT_EQ(createRoom(gDB, TestRoomId, LoginUidBob), DB_SUCC);
-        AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
-        uint32_t seq = 0;
-
-        /* Login pass-through */
-        {
-            Packet pkt;
-            memset(&pkt, 0, sizeof(pkt));
-            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-            LoginResponsePayload lr;
-            memset(&lr, 0, sizeof(lr));
-            lr.uid = LoginUidBob;
-            memcpy(lr.username, "Bob", StrLenBob + 1);
-            memcpy(lr.nickname, "TestNick", StrLenTestNick + 1);
-            sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &lr, sizeof(lr));
-            packetClear(&pkt);
-        }
-
-        /* Reject zero-payload JoinRoom */
-        {
-            Packet pkt;
-            memset(&pkt, 0, sizeof(pkt));
-            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-            ASSERT_INT_EQ(pkt.header.messageType, MsgJoinRoom);
-            uint8_t s = (pkt.header.payloadLength != sizeof(uint32_t)) ? 1 : 0;
-            sendEnc(sv[1], &srvKey, &seq, MsgJoinRoomResp, &s, sizeof(s));
-            packetClear(&pkt);
-        }
-
-        dbClose(gDB);
-        dbClose(userDB);
-        socketClose(&sv[1]);
-        _exit(0);
-    }
-
-    socketClose(&sv[1]);
-    AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
-    uint32_t seq = 0;
-
-    /* Login */
-    {
-        const char *un = "Bob";
-        const char *pw = "jrpw";
-        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
-        LoginRequestPayload *lp = calloc(1, plen);
-        memcpy(lp->username, un, strlen(un) + 1);
-        memcpy(lp->password, pw, strlen(pw) + 1);
-        sendEnc(sv[0], &cliKey, &seq, MsgLoginReq, lp, plen);
-        OPENSSL_cleanse(lp, plen);
-        free(lp);
-        Packet rpkt;
-        memset(&rpkt, 0, sizeof(rpkt));
-        ASSERT_INT_EQ(recvDec(sv[0], &cliKey, &rpkt), 0);
-        ASSERT_INT_EQ(rpkt.header.messageType, MsgLoginResp);
-        ASSERT_TRUE(rpkt.header.payloadLength >= sizeof(LoginResponsePayload));
-        LoginResponsePayload *lresp = (LoginResponsePayload *)rpkt.payload;
-        ASSERT_TRUE(lresp->uid != 0);
-        packetClear(&rpkt);
-    }
-
-    /* Send JoinRoom with zero payload */
-    ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &seq, MsgJoinRoom, NULL, 0),
-                  PROTOCOL_SUCC);
-    ASSERT_INT_EQ(recvStatus(sv[0], &cliKey, MsgJoinRoomResp), 1);
-
-    socketClose(&sv[0]);
-    waitpid(child, NULL, 0);
-}
-
-/** @brief Chat with payload < sizeof(int64_t) causes disconnect. */
-static void testChatZeroPayload(void) {
-    removeDBFiles();
-    DB *roomDB = dbInit(RoomDB, NULL);
-    ASSERT_TRUE(roomDB != NULL);
-    ASSERT_INT_EQ(createRoom(roomDB, RoomIdCharlies, LoginUidCharlie), DB_SUCC);
-    DB *userDB = ensureTestUser("chzuser", LoginUidCharlie, "chzpw");
-    ASSERT_TRUE(userDB != NULL);
-
-    SocketFD sv[2];
-    ASSERT_INT_EQ(makeSocketPair(sv), 0);
-
-    dbClose(userDB);
-    dbClose(roomDB);
-    pid_t child = fork();
-    if (child == 0) {
-        socketClose(&sv[0]);
-        userDB = dbInit(UserDB, NULL);
-        roomDB = dbInit(RoomDB, NULL);
-        AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
-        uint32_t seq = 0;
-
-        /* Login pass */
-        {
-            Packet pkt;
-            memset(&pkt, 0, sizeof(pkt));
-            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-            LoginResponsePayload lr;
-            memset(&lr, 0, sizeof(lr));
-            lr.uid = LoginUidCharlie;
-            memcpy(lr.username, "Charlie", StrLenCharlie + 1);
-            memcpy(lr.nickname, "TestNick", StrLenTestNick + 1);
-            sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &lr, sizeof(lr));
-            packetClear(&pkt);
-        }
-        /* Join pass */
-        {
-            Packet pkt;
-            memset(&pkt, 0, sizeof(pkt));
-            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-            uint8_t s = 0;
-            sendEnc(sv[1], &srvKey, &seq, MsgJoinRoomResp, &s, sizeof(s));
-            packetClear(&pkt);
-        }
-        /* Chat too small: disconnect */
-        {
-            Packet pkt;
-            memset(&pkt, 0, sizeof(pkt));
-            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-            ASSERT_INT_EQ(pkt.header.messageType, MsgChat);
-            if (pkt.header.payloadLength < sizeof(int64_t)) {
-                packetClear(&pkt);
-                dbClose(userDB);
-                dbClose(roomDB);
-                socketClose(&sv[1]);
-                _exit(0);
-            }
-            packetClear(&pkt);
-        }
-
-        dbClose(userDB);
-        dbClose(roomDB);
-        socketClose(&sv[1]);
-        _exit(0);
-    }
-
-    socketClose(&sv[1]);
-    AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
-    uint32_t seq = 0;
-
-    /* Login */
-    {
-        const char *un = "Charlie";
-        const char *pw = "chzpw";
-        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
-        LoginRequestPayload *lp = calloc(1, plen);
-        memcpy(lp->username, un, strlen(un) + 1);
-        memcpy(lp->password, pw, strlen(pw) + 1);
-        sendEnc(sv[0], &cliKey, &seq, MsgLoginReq, lp, plen);
-        OPENSSL_cleanse(lp, plen);
-        free(lp);
-        Packet rpkt;
-        memset(&rpkt, 0, sizeof(rpkt));
-        ASSERT_INT_EQ(recvDec(sv[0], &cliKey, &rpkt), 0);
-        ASSERT_INT_EQ(rpkt.header.messageType, MsgLoginResp);
-        ASSERT_TRUE(rpkt.header.payloadLength >= sizeof(LoginResponsePayload));
-        LoginResponsePayload *lresp = (LoginResponsePayload *)rpkt.payload;
-        ASSERT_TRUE(lresp->uid != 0);
-        packetClear(&rpkt);
-    }
-    /* Join room */
-    {
-        uint32_t rid = RoomIdCharlies;
-        sendEnc(sv[0], &cliKey, &seq, MsgJoinRoom, &rid, sizeof(rid));
-        ASSERT_INT_EQ(recvStatus(sv[0], &cliKey, MsgJoinRoomResp), 0);
-    }
-    /* Send chat with only 4 bytes (no timestamp) */
-    {
-        uint8_t smallPayload[4] = {0};
-        ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &seq, MsgChat, smallPayload,
-                              sizeof(smallPayload)),
-                      PROTOCOL_SUCC);
-    }
-    /* The child should have closed the connection */
-    {
-        Packet pkt;
-        memset(&pkt, 0, sizeof(pkt));
-        ASSERT_INT_EQ(recvDec(sv[0], &cliKey, &pkt), -1);
-    }
-
-    socketClose(&sv[0]);
-    waitpid(child, NULL, 0);
-}
-
-/** @brief Chat with message not NUL-terminated causes disconnect. */
-static void testChatMsgNotNulTerminated(void) {
-    removeDBFiles();
-    DB *roomDB = dbInit(RoomDB, NULL);
-    ASSERT_TRUE(roomDB != NULL);
-    ASSERT_INT_EQ(createRoom(roomDB, RoomIdCharlies, LoginUidCharlie), DB_SUCC);
-    DB *userDB = ensureTestUser("chnuser", LoginUidCharlie, "chnpw");
-    ASSERT_TRUE(userDB != NULL);
-
-    SocketFD sv[2];
-    ASSERT_INT_EQ(makeSocketPair(sv), 0);
-
-    dbClose(userDB);
-    dbClose(roomDB);
-    pid_t child = fork();
-    if (child == 0) {
-        socketClose(&sv[0]);
-        userDB = dbInit(UserDB, NULL);
-        roomDB = dbInit(RoomDB, NULL);
-        AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
-        uint32_t seq = 0;
-
-        /* Login pass */
-        {
-            Packet pkt;
-            memset(&pkt, 0, sizeof(pkt));
-            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-            LoginResponsePayload lr;
-            memset(&lr, 0, sizeof(lr));
-            lr.uid = LoginUidCharlie;
-            memcpy(lr.username, "Charlie", StrLenCharlie + 1);
-            memcpy(lr.nickname, "TestNick", StrLenTestNick + 1);
-            sendEnc(sv[1], &srvKey, &seq, MsgLoginResp, &lr, sizeof(lr));
-            packetClear(&pkt);
-        }
-        /* Join pass */
-        {
-            Packet pkt;
-            memset(&pkt, 0, sizeof(pkt));
-            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-            uint8_t s = 0;
-            sendEnc(sv[1], &srvKey, &seq, MsgJoinRoomResp, &s, sizeof(s));
-            packetClear(&pkt);
-        }
-        /* Chat without NUL: disconnect */
-        {
-            Packet pkt;
-            memset(&pkt, 0, sizeof(pkt));
-            ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-            ASSERT_INT_EQ(pkt.header.messageType, MsgChat);
-            ChatPacketPayload *chat = (ChatPacketPayload *)pkt.payload;
-            size_t msgLen = pkt.header.payloadLength - sizeof(int64_t);
-            int bad =
-                (msgLen == 0 || memchr(chat->message, '\0', msgLen) == NULL);
-            packetClear(&pkt);
-            if (bad) {
-                dbClose(userDB);
-                dbClose(roomDB);
-                socketClose(&sv[1]);
-                _exit(0);
-            }
-        }
-
-        dbClose(userDB);
-        dbClose(roomDB);
-        socketClose(&sv[1]);
-        _exit(0);
-    }
-
-    socketClose(&sv[1]);
-    AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
-    uint32_t seq = 0;
-
-    /* Login */
-    {
-        const char *un = "Charlie";
-        const char *pw = "chnpw";
-        size_t plen = offsetof(LoginRequestPayload, password) + strlen(pw) + 1;
-        LoginRequestPayload *lp = calloc(1, plen);
-        memcpy(lp->username, un, strlen(un) + 1);
-        memcpy(lp->password, pw, strlen(pw) + 1);
-        sendEnc(sv[0], &cliKey, &seq, MsgLoginReq, lp, plen);
-        OPENSSL_cleanse(lp, plen);
-        free(lp);
-        Packet rpkt;
-        memset(&rpkt, 0, sizeof(rpkt));
-        ASSERT_INT_EQ(recvDec(sv[0], &cliKey, &rpkt), 0);
-        ASSERT_INT_EQ(rpkt.header.messageType, MsgLoginResp);
-        ASSERT_TRUE(rpkt.header.payloadLength >= sizeof(LoginResponsePayload));
-        LoginResponsePayload *lresp = (LoginResponsePayload *)rpkt.payload;
-        ASSERT_TRUE(lresp->uid != 0);
-        packetClear(&rpkt);
-    }
-    /* Join room */
-    {
-        uint32_t rid = RoomIdCharlies;
-        sendEnc(sv[0], &cliKey, &seq, MsgJoinRoom, &rid, sizeof(rid));
-        ASSERT_INT_EQ(recvStatus(sv[0], &cliKey, MsgJoinRoomResp), 0);
-    }
-    /* Send chat with no NUL in message */
-    {
-        int64_t ts = ChatTimestamp;
-        enum { MsgLen = 4 };
-        size_t plen = sizeof(int64_t) + MsgLen;
-        uint8_t *buf = malloc(plen);
-        ASSERT_TRUE(buf != NULL);
-        memcpy(buf, &ts, sizeof(int64_t));
-        memset(buf + sizeof(int64_t), 'x', MsgLen);
-        ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &seq, MsgChat, buf, plen),
-                      PROTOCOL_SUCC);
-        free(buf);
-    }
-    /* The child should have closed the connection */
-    {
-        Packet pkt;
-        memset(&pkt, 0, sizeof(pkt));
-        ASSERT_INT_EQ(recvDec(sv[0], &cliKey, &pkt), -1);
-    }
-
-    socketClose(&sv[0]);
-    waitpid(child, NULL, 0);
-}
-
-/* ═══════════════════════════ Registration Tests ═══════════════════════════ */
-
-/** @brief Register a new user successfully. */
-static void testRegisterSuccess(void) {
-    removeDBFiles();
-    DB *userDB = dbInit(UserDB, NULL);
-    ASSERT_TRUE(userDB != NULL);
-
-    SocketFD sv[2];
-    ASSERT_INT_EQ(makeSocketPair(sv), 0);
-
-    dbClose(userDB);
-    pid_t child = fork();
-    if (child == 0) {
-        socketClose(&sv[0]);
-        userDB = dbInit(UserDB, NULL);
-        AESGCMKey srvKey;
-        ASSERT_INT_EQ(serverDoKeyExchange(sv[1], &srvKey), PROTOCOL_SUCC);
-
-        Packet pkt;
-        memset(&pkt, 0, sizeof(pkt));
-        ASSERT_INT_EQ(recvDec(sv[1], &srvKey, &pkt), 0);
-        ASSERT_INT_EQ(pkt.header.messageType, MsgRegisterReq);
-
-        RegisterRequestPayload *reg = (RegisterRequestPayload *)pkt.payload;
-        User u;
-        memset(&u, 0, sizeof(u));
-        memcpy(u.username, reg->username, USERNAME_MAX_LEN);
-        memcpy(u.nickname, reg->nickname, NICKNAME_MAX_LEN);
-        u.password = strdup(reg->password);
-        int dbRet = createUser(userDB, &u);
-        OPENSSL_cleanse(u.password, strlen(u.password));
-        free(u.password);
-
-        uint8_t status = (dbRet == DB_SUCC) ? 0 : 1;
-        uint32_t seq = 0;
-        sendEnc(sv[1], &srvKey, &seq, MsgRegisterResp, &status, sizeof(status));
-        packetClear(&pkt);
-        dbClose(userDB);
-        socketClose(&sv[1]);
-        _exit(0);
-    }
-
-    socketClose(&sv[1]);
-    AESGCMKey cliKey;
-    ASSERT_INT_EQ(clientDoKeyExchange(sv[0], &cliKey), PROTOCOL_SUCC);
-
-    const char *un = "RegUser";
-    const char *pw = "regpass";
-    size_t plen = offsetof(RegisterRequestPayload, password) + strlen(pw) + 1;
-    RegisterRequestPayload *rp = calloc(1, plen);
-    ASSERT_TRUE(rp != NULL);
-    memcpy(rp->username, un, strlen(un) + 1);
-    memcpy(rp->nickname, "TestNick", StrLenTestNick + 1);
-    memcpy(rp->password, pw, strlen(pw) + 1);
-
-    uint32_t seq = 0;
-    ASSERT_INT_EQ(sendEnc(sv[0], &cliKey, &seq, MsgRegisterReq, rp, plen),
-                  PROTOCOL_SUCC);
-    OPENSSL_cleanse(rp, plen);
-    free(rp);
-
-    ASSERT_INT_EQ(recvStatus(sv[0], &cliKey, MsgRegisterResp), 0);
-
-    socketClose(&sv[0]);
-    waitpid(child, NULL, 0);
-}
 
 /** @brief Registering duplicate UID or username fails. */
 static void testRegisterDuplicate(void) {
@@ -3028,55 +2256,77 @@ static void testServerInitKeysFirstRun(void) {
     ASSERT_INT_EQ(ret, SERVER_SUCC);
     ASSERT_TRUE(srv.freshKeysGenerated);
 
-    /* All 4 keys must be non-zero (generate was called) */
+    /* All 7 keys must be non-zero (generate was called) */
     static const uint8_t zeros32[32];
     ASSERT_TRUE(memcmp(srv.dekKey, zeros32, sizeof(srv.dekKey)) != 0);
     ASSERT_TRUE(memcmp(srv.userDbEncKey, zeros32, sizeof(srv.userDbEncKey)) !=
                 0);
-    ASSERT_TRUE(memcmp(srv.chatDbEncKey, zeros32, sizeof(srv.chatDbEncKey)) !=
-                0);
-    ASSERT_TRUE(memcmp(srv.roomDbEncKey, zeros32, sizeof(srv.roomDbEncKey)) !=
-                0);
     ASSERT_TRUE(memcmp(srv.gameDbEncKey, zeros32, sizeof(srv.gameDbEncKey)) !=
                 0);
+    ASSERT_TRUE(memcmp(srv.gameRoomDbEncKey, zeros32, sizeof(srv.gameRoomDbEncKey)) !=
+                0);
+    ASSERT_TRUE(memcmp(srv.friendDbEncKey, zeros32, sizeof(srv.friendDbEncKey)) !=
+                0);
+    ASSERT_TRUE(memcmp(srv.privateChatDbEncKey, zeros32,
+                       sizeof(srv.privateChatDbEncKey)) != 0);
+    ASSERT_TRUE(memcmp(srv.groupDbEncKey, zeros32, sizeof(srv.groupDbEncKey)) !=
+                0);
 
-    /* All 5 keys must be distinct from each other */
+    /* All 7 keys must be distinct from each other */
     ASSERT_TRUE(memcmp(srv.dekKey, srv.userDbEncKey, 32) != 0);
-    ASSERT_TRUE(memcmp(srv.dekKey, srv.chatDbEncKey, 32) != 0);
-    ASSERT_TRUE(memcmp(srv.dekKey, srv.roomDbEncKey, 32) != 0);
     ASSERT_TRUE(memcmp(srv.dekKey, srv.gameDbEncKey, 32) != 0);
-    ASSERT_TRUE(memcmp(srv.userDbEncKey, srv.chatDbEncKey, 32) != 0);
-    ASSERT_TRUE(memcmp(srv.userDbEncKey, srv.roomDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.dekKey, srv.gameRoomDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.dekKey, srv.friendDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.dekKey, srv.privateChatDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.dekKey, srv.groupDbEncKey, 32) != 0);
     ASSERT_TRUE(memcmp(srv.userDbEncKey, srv.gameDbEncKey, 32) != 0);
-    ASSERT_TRUE(memcmp(srv.chatDbEncKey, srv.roomDbEncKey, 32) != 0);
-    ASSERT_TRUE(memcmp(srv.chatDbEncKey, srv.gameDbEncKey, 32) != 0);
-    ASSERT_TRUE(memcmp(srv.roomDbEncKey, srv.gameDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.userDbEncKey, srv.gameRoomDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.userDbEncKey, srv.friendDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.userDbEncKey, srv.privateChatDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.userDbEncKey, srv.groupDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.gameDbEncKey, srv.gameRoomDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.gameDbEncKey, srv.friendDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.gameDbEncKey, srv.privateChatDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.gameDbEncKey, srv.groupDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.gameRoomDbEncKey, srv.friendDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.gameRoomDbEncKey, srv.privateChatDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.gameRoomDbEncKey, srv.groupDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.friendDbEncKey, srv.privateChatDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.friendDbEncKey, srv.groupDbEncKey, 32) != 0);
+    ASSERT_TRUE(memcmp(srv.privateChatDbEncKey, srv.groupDbEncKey, 32) != 0);
 
-    /* Verify all 5 envelopes are stored in ServerDB */
+    /* Verify all 7 envelopes are stored in ServerDB */
     uint8_t *outDek = NULL;
     uint8_t *outUser = NULL;
-    uint8_t *outChat = NULL;
-    uint8_t *outRoom = NULL;
     uint8_t *outGame = NULL;
     uint8_t *outGameRoom = NULL;
+    uint8_t *outFriend = NULL;
+    uint8_t *outPrivateChat = NULL;
+    uint8_t *outGroup = NULL;
     size_t lenDek = 0;
     size_t lenUser = 0;
-    size_t lenChat = 0;
-    size_t lenRoom = 0;
     size_t lenGame = 0;
     size_t lenGameRoom = 0;
+    size_t lenFriend = 0;
+    size_t lenPrivateChat = 0;
+    size_t lenGroup = 0;
     ASSERT_INT_EQ(getServerKey(serverDB, "DEK", &outDek, &lenDek), DB_SUCC);
     ASSERT_INT_EQ(getServerKey(serverDB, "UserDBKey", &outUser, &lenUser),
-                  DB_SUCC);
-    ASSERT_INT_EQ(
-        getServerKey(serverDB, "ChatHistoryDBKey", &outChat, &lenChat),
-        DB_SUCC);
-    ASSERT_INT_EQ(getServerKey(serverDB, "RoomDBKey", &outRoom, &lenRoom),
                   DB_SUCC);
     ASSERT_INT_EQ(getServerKey(serverDB, "GameDBKey", &outGame, &lenGame),
                   DB_SUCC);
     ASSERT_INT_EQ(
         getServerKey(serverDB, "GameRoomDBKey", &outGameRoom, &lenGameRoom),
+        DB_SUCC);
+    ASSERT_INT_EQ(
+        getServerKey(serverDB, "FriendDBKey", &outFriend, &lenFriend),
+        DB_SUCC);
+    ASSERT_INT_EQ(
+        getServerKey(serverDB, "PrivateChatDBKey", &outPrivateChat,
+                     &lenPrivateChat),
+        DB_SUCC);
+    ASSERT_INT_EQ(
+        getServerKey(serverDB, "GroupDBKey", &outGroup, &lenGroup),
         DB_SUCC);
 
     enum { EnvelopeLen = 12 + 32 + 16 }; /* nonce + key + tag */
@@ -3084,31 +2334,36 @@ static void testServerInitKeysFirstRun(void) {
     ASSERT_UINT_EQ(lenDek, (size_t)EnvelopeLen);
     ASSERT_TRUE(outUser != NULL);
     ASSERT_UINT_EQ(lenUser, (size_t)EnvelopeLen);
-    ASSERT_TRUE(outChat != NULL);
-    ASSERT_UINT_EQ(lenChat, (size_t)EnvelopeLen);
-    ASSERT_TRUE(outRoom != NULL);
-    ASSERT_UINT_EQ(lenRoom, (size_t)EnvelopeLen);
     ASSERT_TRUE(outGame != NULL);
     ASSERT_UINT_EQ(lenGame, (size_t)EnvelopeLen);
     ASSERT_TRUE(outGameRoom != NULL);
     ASSERT_UINT_EQ(lenGameRoom, (size_t)EnvelopeLen);
+    ASSERT_TRUE(outFriend != NULL);
+    ASSERT_UINT_EQ(lenFriend, (size_t)EnvelopeLen);
+    ASSERT_TRUE(outPrivateChat != NULL);
+    ASSERT_UINT_EQ(lenPrivateChat, (size_t)EnvelopeLen);
+    ASSERT_TRUE(outGroup != NULL);
+    ASSERT_UINT_EQ(lenGroup, (size_t)EnvelopeLen);
 
     free(outDek);
     free(outUser);
-    free(outChat);
-    free(outRoom);
     free(outGame);
     free(outGameRoom);
+    free(outFriend);
+    free(outPrivateChat);
+    free(outGroup);
 
     OPENSSL_cleanse(srv.dekKey, sizeof(srv.dekKey));
     OPENSSL_cleanse(srv.userDbEncKey, sizeof(srv.userDbEncKey));
-    OPENSSL_cleanse(srv.chatDbEncKey, sizeof(srv.chatDbEncKey));
-    OPENSSL_cleanse(srv.roomDbEncKey, sizeof(srv.roomDbEncKey));
     OPENSSL_cleanse(srv.gameDbEncKey, sizeof(srv.gameDbEncKey));
     OPENSSL_cleanse(srv.gameRoomDbEncKey, sizeof(srv.gameRoomDbEncKey));
+    OPENSSL_cleanse(srv.friendDbEncKey, sizeof(srv.friendDbEncKey));
+    OPENSSL_cleanse(srv.privateChatDbEncKey, sizeof(srv.privateChatDbEncKey));
+    OPENSSL_cleanse(srv.groupDbEncKey, sizeof(srv.groupDbEncKey));
     dbClose(serverDB);
     removeDBFiles();
 }
+
 
 /** @brief freshKeysGenerated flag defaults to false (memset-zero). */
 static void testFreshKeysGeneratedFlag(void) {
@@ -3124,196 +2379,6 @@ static void testFreshKeysGeneratedFlag(void) {
     /* Manually set back to false and verify */
     srv.freshKeysGenerated = false;
     ASSERT_FALSE(srv.freshKeysGenerated);
-}
-
-/* ═══════════════════ ActiveRoom Helper Function Tests ══════════════════════
- */
-
-enum {
-    ActiveTestRoomNew = 42,
-    ActiveTestRoomReuse = 99,
-    ActiveTestRoomA = 100,
-    ActiveTestRoomB = 200,
-    ActiveTestRoomFind = 77,
-    ActiveTestRoomMissing = 88,
-    ActiveTestRoomRmA = 10,
-    ActiveTestRoomRmB = 20,
-    ActiveTestRoomRmC = 30,
-    ActiveTestRoomKeep = 1,
-    ActiveTestRoomNonexistRm = 999,
-    ActiveTestRoomClean = 50
-};
-
-/* Helper: allocate ActiveRoom pointer array with explicit cast for clang-tidy
- */
-static ActiveRoom **allocActiveRoomArray(size_t n) {
-    return (ActiveRoom **)calloc(n, sizeof(ActiveRoom *));
-}
-
-/** @brief serverFindActiveRoom on empty server returns NULL. */
-static void testFindActiveRoomEmpty(void) {
-    Server s;
-    memset(&s, 0, sizeof(s));
-    ASSERT_TRUE(serverFindActiveRoom(&s, ActiveTestRoomMissing) == NULL);
-}
-
-/** @brief serverGetOrCreateActiveRoom creates a new room on first call. */
-static void testGetOrCreateActiveRoomNew(void) {
-    Server s;
-    memset(&s, 0, sizeof(s));
-    s.activeRoomCapacity = SERVER_INITIAL_CAPACITY;
-    s.activeRooms = allocActiveRoomArray((size_t)s.activeRoomCapacity);
-    ASSERT_TRUE(s.activeRooms != NULL);
-
-    ActiveRoom *room = serverGetOrCreateActiveRoom(&s, ActiveTestRoomNew);
-    ASSERT_TRUE(room != NULL);
-    ASSERT_UINT_EQ(room->roomId, (uint32_t)ActiveTestRoomNew);
-    ASSERT_UINT_EQ(room->memberCount, (unsigned long long)0);
-    ASSERT_UINT_EQ(s.activeRoomCount, (unsigned long long)1);
-
-    free(s.activeRooms[0]);
-    free((void *)s.activeRooms);
-}
-
-/** @brief serverGetOrCreateActiveRoom returns same room on second call. */
-static void testGetOrCreateActiveRoomReuse(void) {
-    Server s;
-    memset(&s, 0, sizeof(s));
-    s.activeRoomCapacity = SERVER_INITIAL_CAPACITY;
-    s.activeRooms = allocActiveRoomArray((size_t)s.activeRoomCapacity);
-    ASSERT_TRUE(s.activeRooms != NULL);
-
-    ActiveRoom *r1 = serverGetOrCreateActiveRoom(&s, ActiveTestRoomReuse);
-    ActiveRoom *r2 = serverGetOrCreateActiveRoom(&s, ActiveTestRoomReuse);
-    ASSERT_TRUE(r1 != NULL);
-    ASSERT_TRUE(r2 != NULL);
-    ASSERT_TRUE(r1 == r2);
-    ASSERT_UINT_EQ(s.activeRoomCount, (unsigned long long)1);
-
-    free(s.activeRooms[0]);
-    free((void *)s.activeRooms);
-}
-
-/** @brief serverGetOrCreateActiveRoom creates distinct rooms for different IDs.
- */
-static void testGetOrCreateActiveRoomDistinct(void) {
-    Server s;
-    memset(&s, 0, sizeof(s));
-    s.activeRoomCapacity = SERVER_INITIAL_CAPACITY;
-    s.activeRooms = allocActiveRoomArray((size_t)s.activeRoomCapacity);
-    ASSERT_TRUE(s.activeRooms != NULL);
-
-    ActiveRoom *rA = serverGetOrCreateActiveRoom(&s, ActiveTestRoomA);
-    ActiveRoom *rB = serverGetOrCreateActiveRoom(&s, ActiveTestRoomB);
-    ASSERT_TRUE(rA != NULL);
-    ASSERT_TRUE(rB != NULL);
-    ASSERT_TRUE(rA != rB);
-    ASSERT_UINT_EQ(rA->roomId, (uint32_t)ActiveTestRoomA);
-    ASSERT_UINT_EQ(rB->roomId, (uint32_t)ActiveTestRoomB);
-    ASSERT_UINT_EQ(s.activeRoomCount, (unsigned long long)2);
-
-    free(s.activeRooms[0]);
-    free(s.activeRooms[1]);
-    free((void *)s.activeRooms);
-}
-
-/** @brief serverFindActiveRoom finds existing room, returns NULL for missing.
- */
-static void testFindActiveRoomSuccess(void) {
-    Server s;
-    memset(&s, 0, sizeof(s));
-    s.activeRoomCapacity = SERVER_INITIAL_CAPACITY;
-    s.activeRooms = allocActiveRoomArray((size_t)s.activeRoomCapacity);
-    ASSERT_TRUE(s.activeRooms != NULL);
-
-    serverGetOrCreateActiveRoom(&s, ActiveTestRoomFind);
-    ASSERT_TRUE(serverFindActiveRoom(&s, ActiveTestRoomFind) != NULL);
-    ASSERT_TRUE(serverFindActiveRoom(&s, ActiveTestRoomMissing) == NULL);
-
-    free(s.activeRooms[0]);
-    free((void *)s.activeRooms);
-}
-
-/** @brief serverRemoveActiveRoom removes room and compacts array. */
-static void testRemoveActiveRoomBasic(void) {
-    Server s;
-    memset(&s, 0, sizeof(s));
-    s.activeRoomCapacity = SERVER_INITIAL_CAPACITY;
-    s.activeRooms = allocActiveRoomArray((size_t)s.activeRoomCapacity);
-    ASSERT_TRUE(s.activeRooms != NULL);
-
-    serverGetOrCreateActiveRoom(&s, ActiveTestRoomRmA);
-    serverGetOrCreateActiveRoom(&s, ActiveTestRoomRmB);
-    serverGetOrCreateActiveRoom(&s, ActiveTestRoomRmC);
-    ASSERT_UINT_EQ(s.activeRoomCount, (unsigned long long)3);
-
-    serverRemoveActiveRoom(&s, ActiveTestRoomRmB);
-    ASSERT_UINT_EQ(s.activeRoomCount, (unsigned long long)2);
-    ASSERT_TRUE(serverFindActiveRoom(&s, ActiveTestRoomRmB) == NULL);
-    ASSERT_TRUE(serverFindActiveRoom(&s, ActiveTestRoomRmA) != NULL);
-    ASSERT_TRUE(serverFindActiveRoom(&s, ActiveTestRoomRmC) != NULL);
-
-    free(s.activeRooms[0]);
-    free(s.activeRooms[1]);
-    free((void *)s.activeRooms);
-}
-
-/** @brief serverRemoveActiveRoom on nonexistent is a no-op. */
-static void testRemoveActiveRoomNotFound(void) {
-    Server s;
-    memset(&s, 0, sizeof(s));
-    s.activeRoomCapacity = SERVER_INITIAL_CAPACITY;
-    s.activeRooms = allocActiveRoomArray((size_t)s.activeRoomCapacity);
-    ASSERT_TRUE(s.activeRooms != NULL);
-
-    serverGetOrCreateActiveRoom(&s, ActiveTestRoomKeep);
-    ASSERT_UINT_EQ(s.activeRoomCount, (unsigned long long)1);
-    serverRemoveActiveRoom(&s, ActiveTestRoomNonexistRm);
-    ASSERT_UINT_EQ(s.activeRoomCount, (unsigned long long)1);
-
-    free(s.activeRooms[0]);
-    free((void *)s.activeRooms);
-}
-
-/** @brief serverRemoveClientFromRoom with currentRoomId=0 is a no-op. */
-static void testRemoveClientFromRoomNoRoom(void) {
-    Server s;
-    memset(&s, 0, sizeof(s));
-    s.activeRoomCapacity = SERVER_INITIAL_CAPACITY;
-    s.activeRooms = allocActiveRoomArray((size_t)s.activeRoomCapacity);
-    ASSERT_TRUE(s.activeRooms != NULL);
-
-    ClientSession cs;
-    memset(&cs, 0, sizeof(cs));
-    cs.currentRoomId = 0;
-    serverRemoveClientFromRoom(&s, &cs);
-    ASSERT_UINT_EQ(cs.currentRoomId, (uint32_t)0);
-
-    free((void *)s.activeRooms);
-}
-
-/** @brief serverRemoveClientFromRoom removes client and cleans empty room. */
-static void testRemoveClientFromRoomCleansEmpty(void) {
-    Server s;
-    memset(&s, 0, sizeof(s));
-    s.activeRoomCapacity = SERVER_INITIAL_CAPACITY;
-    s.activeRooms = allocActiveRoomArray((size_t)s.activeRoomCapacity);
-    ASSERT_TRUE(s.activeRooms != NULL);
-
-    ActiveRoom *room = serverGetOrCreateActiveRoom(&s, ActiveTestRoomClean);
-    ASSERT_TRUE(room != NULL);
-
-    ClientSession cs;
-    memset(&cs, 0, sizeof(cs));
-    cs.currentRoomId = ActiveTestRoomClean;
-    room->members[0] = &cs;
-    room->memberCount = 1;
-
-    serverRemoveClientFromRoom(&s, &cs);
-    ASSERT_UINT_EQ(cs.currentRoomId, (uint32_t)0);
-    ASSERT_UINT_EQ(s.activeRoomCount, (unsigned long long)0);
-
-    free((void *)s.activeRooms);
 }
 
 /** @brief serverInitKeys subsequent-run: pre-populate envelopes, feed
@@ -3345,14 +2410,6 @@ static void testServerInitKeysSubsequentRun(void) {
         0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA,
         0xAB, 0xAC, 0xAD, 0xAE, 0xAF, 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5,
         0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF};
-    static const uint8_t knownChatDbKey[KeyLen] = {
-        0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA,
-        0xCB, 0xCC, 0xCD, 0xCE, 0xCF, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5,
-        0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF};
-    static const uint8_t knownRoomDbKey[KeyLen] = {
-        0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9, 0xEA,
-        0xEB, 0xEC, 0xED, 0xEE, 0xEF, 0xF0, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5,
-        0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF};
     static const uint8_t knownGameDbKey[KeyLen] = {
         0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x11, 0x21, 0x31,
         0x41, 0x51, 0x61, 0x71, 0x81, 0x12, 0x22, 0x32, 0x42, 0x52, 0x62,
@@ -3361,6 +2418,18 @@ static void testServerInitKeysSubsequentRun(void) {
         0x14, 0x24, 0x34, 0x44, 0x54, 0x64, 0x74, 0x84, 0x15, 0x25, 0x35,
         0x45, 0x55, 0x65, 0x75, 0x85, 0x16, 0x26, 0x36, 0x46, 0x56, 0x66,
         0x76, 0x86, 0x17, 0x27, 0x37, 0x47, 0x57, 0x67, 0x77, 0x87};
+    static const uint8_t knownFriendDbKey[KeyLen] = {
+        0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA,
+        0xCB, 0xCC, 0xCD, 0xCE, 0xCF, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5,
+        0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF};
+    static const uint8_t knownPrivateChatDbKey[KeyLen] = {
+        0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9, 0xEA,
+        0xEB, 0xEC, 0xED, 0xEE, 0xEF, 0xF0, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5,
+        0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF};
+    static const uint8_t knownGroupDbKey[KeyLen] = {
+        0x1A, 0x2A, 0x3A, 0x4A, 0x5A, 0x6A, 0x7A, 0x8A, 0x1B, 0x2B, 0x3B,
+        0x4B, 0x5B, 0x6B, 0x7B, 0x8B, 0x1C, 0x2C, 0x3C, 0x4C, 0x5C, 0x6C,
+        0x7C, 0x8C, 0x1D, 0x2D, 0x3D, 0x4D, 0x5D, 0x6D, 0x7D, 0x8D};
 
     removeDBFiles();
 
@@ -3379,12 +2448,13 @@ static void testServerInitKeysSubsequentRun(void) {
         } keys[] = {
             {knownDek, "DEK"},
             {knownUserDbKey, "UserDBKey"},
-            {knownChatDbKey, "ChatHistoryDBKey"},
-            {knownRoomDbKey, "RoomDBKey"},
             {knownGameDbKey, "GameDBKey"},
             {knownGameRoomDbKey, "GameRoomDBKey"},
+            {knownFriendDbKey, "FriendDBKey"},
+            {knownPrivateChatDbKey, "PrivateChatDBKey"},
+            {knownGroupDbKey, "GroupDBKey"},
         };
-        enum { KeyCount = 6 };
+        enum { KeyCount = 7 };
 
         for (int i = 0; i < KeyCount; i++) {
             ASSERT_INT_EQ(cryptoRandomBytes(encKey.nonce, NonceLen),
@@ -3437,17 +2507,19 @@ static void testServerInitKeysSubsequentRun(void) {
         ASSERT_FALSE(srv.freshKeysGenerated);
         ASSERT_MEM_EQ(srv.dekKey, knownDek, KeyLen);
         ASSERT_MEM_EQ(srv.userDbEncKey, knownUserDbKey, KeyLen);
-        ASSERT_MEM_EQ(srv.chatDbEncKey, knownChatDbKey, KeyLen);
-        ASSERT_MEM_EQ(srv.roomDbEncKey, knownRoomDbKey, KeyLen);
         ASSERT_MEM_EQ(srv.gameDbEncKey, knownGameDbKey, KeyLen);
         ASSERT_MEM_EQ(srv.gameRoomDbEncKey, knownGameRoomDbKey, KeyLen);
+        ASSERT_MEM_EQ(srv.friendDbEncKey, knownFriendDbKey, KeyLen);
+        ASSERT_MEM_EQ(srv.privateChatDbEncKey, knownPrivateChatDbKey, KeyLen);
+        ASSERT_MEM_EQ(srv.groupDbEncKey, knownGroupDbKey, KeyLen);
 
         OPENSSL_cleanse(srv.dekKey, sizeof(srv.dekKey));
         OPENSSL_cleanse(srv.userDbEncKey, sizeof(srv.userDbEncKey));
-        OPENSSL_cleanse(srv.chatDbEncKey, sizeof(srv.chatDbEncKey));
-        OPENSSL_cleanse(srv.roomDbEncKey, sizeof(srv.roomDbEncKey));
         OPENSSL_cleanse(srv.gameDbEncKey, sizeof(srv.gameDbEncKey));
         OPENSSL_cleanse(srv.gameRoomDbEncKey, sizeof(srv.gameRoomDbEncKey));
+        OPENSSL_cleanse(srv.friendDbEncKey, sizeof(srv.friendDbEncKey));
+        OPENSSL_cleanse(srv.privateChatDbEncKey, sizeof(srv.privateChatDbEncKey));
+        OPENSSL_cleanse(srv.groupDbEncKey, sizeof(srv.groupDbEncKey));
         dbClose(serverDB);
     }
     removeDBFiles();
@@ -3554,7 +2626,6 @@ int main(void) {
     RUN_TEST(testLoginUsernameNotNulTerminated);
 
     /* —— Registration —— */
-    RUN_TEST(testRegisterSuccess);
     RUN_TEST(testRegisterDuplicate);
     RUN_TEST(testRegisterDuplicateSameSession);
     RUN_TEST(testRegisterEmptyPassword);
@@ -3564,27 +2635,7 @@ int main(void) {
     RUN_TEST(testRegisterThenLogin);
 
     /* —— Room —— */
-    RUN_TEST(testRoomCreateAndJoin);
-    RUN_TEST(testRoomJoinNonexistent);
-    RUN_TEST(testRoomList);
     RUN_TEST(testCreateRoomZeroPayload);
-    RUN_TEST(testJoinRoomZeroPayload);
-
-    /* —— ActiveRoom Helpers —— */
-    RUN_TEST(testFindActiveRoomEmpty);
-    RUN_TEST(testGetOrCreateActiveRoomNew);
-    RUN_TEST(testGetOrCreateActiveRoomReuse);
-    RUN_TEST(testGetOrCreateActiveRoomDistinct);
-    RUN_TEST(testFindActiveRoomSuccess);
-    RUN_TEST(testRemoveActiveRoomBasic);
-    RUN_TEST(testRemoveActiveRoomNotFound);
-    RUN_TEST(testRemoveClientFromRoomNoRoom);
-    RUN_TEST(testRemoveClientFromRoomCleansEmpty);
-
-    /* —— Chat —— */
-    RUN_TEST(testChatSendAndBroadcast);
-    RUN_TEST(testChatZeroPayload);
-    RUN_TEST(testChatMsgNotNulTerminated);
 
     /* —— Session —— */
     RUN_TEST(testLogout);

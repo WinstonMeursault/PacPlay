@@ -70,7 +70,8 @@ struct DownloadPool;
 
 #define DATA_PORT_OFFSET 1 /**< Data channel port = control port + offset. */
 
-/** @brief Maximum length of the game platform role string ("server" | "client"). */
+/** @brief Maximum length of the game platform role string ("server" |
+ * "client"). */
 #define GAME_ROLE_LEN 8
 
 /* ────────────────────────────── return codes ────────────────────────────── */
@@ -105,7 +106,8 @@ typedef struct {
     char *fileName;
     char *hash;
     uint64_t fileSize;
-    char role[GAME_ROLE_LEN]; /**< "server" or "client" — which side this binary runs on. */
+    char role[GAME_ROLE_LEN]; /**< "server" or "client" — which side this binary
+                                 runs on. */
 } GamePlatformInfo;
 
 typedef struct {
@@ -124,30 +126,21 @@ typedef enum {
     SessionKeyExchange = 0, /**< Awaiting MsgKeyExchangeReq. */
     SessionLogin,           /**< Awaiting MsgLoginReq. */
     SessionTOTPVerify,      /**< Awaiting MsgTOTPVerifyResp. */
-    SessionRoom,            /**< Lobby — can list / create / join rooms. */
-    SessionChat,            /**< Inside a room — can chat and heartbeat. */
+    SessionLobby,           /**< Lobby — can create/join groups, friends, chat. */
     SessionGameRoomLobby,   /**< In a game room lobby (pre-game). */
     SessionGameRoomPlay     /**< In a game room with active game. */
 } SessionState;
 
 /** @brief One connected client, tracked across its entire session. */
-typedef struct {
+typedef struct ClientSession {
     SocketFD fd;
     SessionState state;
     AESGCMKey aesKey;
-    User currentUser;       /**< Populated after successful login. */
-    uint32_t currentRoomId;     /**< 0 if not in any room. */
+    User currentUser;           /**< Populated after successful login. */
+    uint32_t currentGroupId;    /**< 0 if not in any group. */
     uint32_t currentGameRoomId; /**< 0 if not in any game room. */
     uint32_t seqID;             /**< Per-client monotonic sequence counter. */
 } ClientSession;
-
-/** @brief In-memory room with currently-connected members (used for
- *         broadcasting).  Persisted room existence is managed by RoomDB. */
-typedef struct {
-    uint32_t roomId;
-    ClientSession *members[MAX_CLIENTS_PER_ROOM];
-    int memberCount;
-} ActiveRoom;
 
 /** @brief In-memory game room with game instance lifecycle. */
 typedef struct {
@@ -169,18 +162,18 @@ typedef struct {
     ClientSession **clients; /**< Dynamic array of connected sessions. */
     int clientCount;
     int clientCapacity;
-    ActiveRoom **activeRooms; /**< Dynamic array of rooms with ≥1 member. */
-    int activeRoomCount;
-    int activeRoomCapacity;
-    ActiveGameRoom **activeGameRooms; /**< Dynamic array of active game rooms. */
+    ActiveGameRoom *
+        *activeGameRooms; /**< Dynamic array of active game rooms. */
     int activeGameRoomCount;
     int activeGameRoomCapacity;
     struct DB *userDB; /**< Opaque DB handle (full def in database.h). */
-    struct DB *chatDB;
-    struct DB *roomDB;
     struct DB *gameDB;
     struct DB *gameRoomDB; /**< Game room persistence database. */
-    struct DB *serverDB;               /**< Server key-value store. */
+    struct DB *serverDB;   /**< Server key-value store. */
+    struct DB *friendDB;
+    struct DB *privateChatDB;
+    struct DB *groupDB;
+    struct OnlineTracker *onlineTrk;
     struct DownloadPool *downloadPool; /**< Game download thread pool (NULL if
                                          not started). */
     uint16_t port;                     /**< Control channel port number. */
@@ -193,15 +186,16 @@ typedef struct {
                                               serverInitKeys. */
     uint8_t userDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted UserDBKey, loaded at
                                               startup. */
-    uint8_t chatDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted ChatHistoryDBKey. */
-    uint8_t roomDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted RoomDBKey. */
-    uint8_t gameDbEncKey[DB_ENC_KEY_LEN];     /**< Decrypted GameDBKey. */
+    uint8_t gameDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted GameDBKey. */
     uint8_t gameRoomDbEncKey[DB_ENC_KEY_LEN]; /**< Decrypted GameRoomDBKey. */
-    struct PacPlaySDK *sdk; /**< Server SDK handle for game payload bridge
-                                (NULL if no game server is attached). */
-    pthread_t gameThread;        /**< Game runner background thread handle. */
-    volatile bool gameRunning;   /**< True while a game server is loaded. */
-    void *gameHandle;            /**< dlopen handle for the game .so, or NULL. */
+    uint8_t friendDbEncKey[DB_ENC_KEY_LEN];
+    uint8_t privateChatDbEncKey[DB_ENC_KEY_LEN];
+    uint8_t groupDbEncKey[DB_ENC_KEY_LEN];
+    struct PacPlaySDK *sdk;    /**< Server SDK handle for game payload bridge
+                                   (NULL if no game server is attached). */
+    pthread_t gameThread;      /**< Game runner background thread handle. */
+    volatile bool gameRunning; /**< True while a game server is loaded. */
+    void *gameHandle;          /**< dlopen handle for the game .so, or NULL. */
 } Server;
 
 /* ─────────────────────────────── public API ─────────────────────────────── */

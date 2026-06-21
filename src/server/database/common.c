@@ -90,20 +90,23 @@ DB *dbInit(DBType dbType, const uint8_t *encKey) {
     case UserDB:
         dbPath = USER_DB_PATH;
         break;
-    case ChatHistoryDB:
-        dbPath = CHAT_HISTORY_DB_PATH;
-        break;
-    case RoomDB:
-        dbPath = ROOM_DB_PATH;
-        break;
     case GameDB:
         dbPath = GAME_DB_PATH;
         break;
     case GameRoomDB:
         dbPath = GAME_ROOM_DB_PATH;
         break;
+    case GroupDB:
+        dbPath = GROUP_DB_PATH;
+        break;
+    case PrivateChatDB:
+        dbPath = PRIVATE_CHAT_DB_PATH;
+        break;
     case ServerDB:
         dbPath = SERVER_DB_PATH;
+        break;
+    case FriendDB:
+        dbPath = FRIEND_DB_PATH;
         break;
     default:
         LOG_ERROR("dbInit: unknown DBType %d", (int)dbType);
@@ -169,20 +172,23 @@ DB *dbInit(DBType dbType, const uint8_t *encKey) {
     case UserDB:
         schemaResult = initUserDBSchema(database->handle);
         break;
-    case ChatHistoryDB:
-        schemaResult = initChatHistoryDBSchema(database->handle);
-        break;
-    case RoomDB:
-        schemaResult = initRoomDBSchema(database->handle);
-        break;
     case GameDB:
         schemaResult = initGameDBSchema(database->handle);
         break;
     case GameRoomDB:
         schemaResult = initGameRoomDBSchema(database->handle);
         break;
+    case GroupDB:
+        schemaResult = initGroupDBSchema(database->handle);
+        break;
     case ServerDB:
         schemaResult = initServerDBSchema(database->handle);
+        break;
+    case FriendDB:
+        schemaResult = initFriendDBSchema(database->handle);
+        break;
+    case PrivateChatDB:
+        schemaResult = initPrivateChatDBSchema(database->handle);
         break;
     default:
         break;
@@ -201,29 +207,42 @@ DB *dbInit(DBType dbType, const uint8_t *encKey) {
     case UserDB:
         stmtResult = prepareUserStmts(database);
         break;
-    case ChatHistoryDB:
-        stmtResult = prepareChatGlobalStmts(database);
-        if (stmtResult == DB_SUCC) {
-            /* Allocate the room statement cache */
-            database->roomCache = calloc(1, sizeof(RoomStmtCache));
-            if (database->roomCache == NULL) {
-                LOG_ERROR("dbInit: roomCache calloc failed (errno=%d)", errno);
-                stmtResult = DB_FAIL;
-            }
-        }
-        break;
-    case RoomDB:
-        stmtResult = prepareRoomDBStmts(database);
-        break;
     case GameDB:
         stmtResult = prepareGameDBStmts(database);
         break;
     case GameRoomDB:
         stmtResult = prepareGameRoomDBStmts(database);
         break;
+    case GroupDB:
+        stmtResult = prepareGroupGlobalStmts(database);
+        if (stmtResult == DB_SUCC) {
+            database->groupCache = calloc(1, sizeof(GroupStmtCache));
+            if (database->groupCache == NULL) {
+                LOG_ERROR("dbInit: groupCache calloc failed (errno=%d)", errno);
+                stmtResult = DB_FAIL;
+            }
+        }
+        break;
     case ServerDB:
         stmtResult = prepareServerDBStmts(database);
         break;
+    case FriendDB:
+        stmtResult = DB_SUCC;
+        break;
+    case PrivateChatDB: {
+        int rc = sqlite3_prepare_v2(
+            database->handle, "INSERT INTO msg_sequence DEFAULT VALUES;", -1,
+            &database->stmtSeq, NULL);
+        if (rc != SQLITE_OK) {
+            LOG_ERROR("dbInit: PrivateChatDB sequence prepare failed: "
+                      "%s (rc=%d)",
+                      sqlite3_errmsg(database->handle), rc);
+            stmtResult = DB_FAIL;
+        } else {
+            stmtResult = DB_SUCC;
+        }
+        break;
+    }
     default:
         break;
     }
@@ -233,14 +252,12 @@ DB *dbInit(DBType dbType, const uint8_t *encKey) {
         dbFinalize(&database->stmtInsert);
         dbFinalize(&database->stmtDelete);
         dbFinalize(&database->stmtSelect);
-        dbFinalize(&database->stmtRoomExists);
         dbFinalize(&database->stmtUidCheck);
         dbFinalize(&database->stmtSetTotpSecret);
         dbFinalize(&database->stmtGetTOTPSecret);
         dbFinalize(&database->stmtGetCDBKey);
         dbFinalize(&database->stmtSetKey);
         dbFinalize(&database->stmtGetKey);
-        dbFinalize(&database->stmtSeq);
         dbFinalize(&database->stmtGameInsert);
         dbFinalize(&database->stmtGameDelete);
         dbFinalize(&database->stmtGameUpdate);
@@ -259,7 +276,9 @@ DB *dbInit(DBType dbType, const uint8_t *encKey) {
         dbFinalize(&database->stmtGameRoomDelete);
         dbFinalize(&database->stmtGameRoomSelect);
         dbFinalize(&database->stmtGameRoomExists);
-        roomCacheDestroy(database->roomCache);
+        dbFinalize(&database->stmtGroupSeq);
+        dbFinalize(&database->stmtSeq);
+        groupCacheDestroy(database->groupCache);
         sqlite3_close(database->handle);
         free(database);
         return NULL;
@@ -278,7 +297,6 @@ void dbClose(DB *database) {
     dbFinalize(&database->stmtInsert);
     dbFinalize(&database->stmtDelete);
     dbFinalize(&database->stmtSelect);
-    dbFinalize(&database->stmtRoomExists);
     dbFinalize(&database->stmtUidCheck);
     dbFinalize(&database->stmtSetTotpSecret);
     dbFinalize(&database->stmtGetTOTPSecret);
@@ -310,9 +328,10 @@ void dbClose(DB *database) {
     dbFinalize(&database->stmtGameRoomSelect);
     dbFinalize(&database->stmtGameRoomExists);
 
-    /* Finalize ChatHistoryDB cached statements */
+    /* Finalize GroupDB cached statements */
+    dbFinalize(&database->stmtGroupSeq);
     dbFinalize(&database->stmtSeq);
-    roomCacheDestroy(database->roomCache);
+    groupCacheDestroy(database->groupCache);
 
     /* Close the sqlite3 connection */
     int rc = sqlite3_close(database->handle);

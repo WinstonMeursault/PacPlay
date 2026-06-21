@@ -30,8 +30,8 @@
 
 #include "server/database.h"
 
-/** @brief Buffer size for the "room_<roomId>" table name string. */
-#define ROOM_TABLE_NAME_SIZE 32
+/** @brief Buffer size for dynamically generated table name strings. */
+#define TABLE_NAME_BUF_SIZE 32
 
 /** @brief Maximum length of a dynamically generated SQL string. */
 #define SQL_BUF_SIZE 512
@@ -53,20 +53,6 @@
 int initUserDBSchema(sqlite3 *dbHandle);
 
 /**
- * @brief Initialize the schema for the chat history database.
- * @param dbHandle  Raw sqlite3 handle.
- * @return @c DB_SUCC on success, @c DB_FAIL on failure.
- */
-int initChatHistoryDBSchema(sqlite3 *dbHandle);
-
-/**
- * @brief Initialize the schema for the room database.
- * @param dbHandle  Raw sqlite3 handle.
- * @return @c DB_SUCC on success, @c DB_FAIL on failure.
- */
-int initRoomDBSchema(sqlite3 *dbHandle);
-
-/**
  * @brief Initialize the schema for the game metadata database.
  * @param dbHandle  Raw sqlite3 handle.
  * @return @c DB_SUCC on success, @c DB_FAIL on failure.
@@ -80,6 +66,20 @@ int initGameDBSchema(sqlite3 *dbHandle);
  */
 int initServerDBSchema(sqlite3 *dbHandle);
 
+/**
+ * @brief Initialize the schema for the friend database.
+ * @param dbHandle  Raw sqlite3 handle.
+ * @return @c DB_SUCC on success, @c DB_FAIL on failure.
+ */
+int initFriendDBSchema(sqlite3 *dbHandle);
+
+/**
+ * @brief Initialize the schema for the private chat database.
+ * @param dbHandle  Raw sqlite3 handle.
+ * @return @c DB_SUCC on success, @c DB_FAIL on failure.
+ */
+int initPrivateChatDBSchema(sqlite3 *dbHandle);
+
 /* ───────────────── internal statement preparation helpers ──────────────────
  */
 
@@ -89,20 +89,6 @@ int initServerDBSchema(sqlite3 *dbHandle);
  * @return @c DB_SUCC on success, @c DB_FAIL on failure.
  */
 int prepareUserStmts(DB *database);
-
-/**
- * @brief Prepare the global sequence statement for ChatHistoryDB.
- * @param database  The DB handle to populate.
- * @return @c DB_SUCC on success, @c DB_FAIL on failure.
- */
-int prepareChatGlobalStmts(DB *database);
-
-/**
- * @brief Prepare cached statements for a RoomDB handle.
- * @param database  The DB handle to populate.
- * @return @c DB_SUCC on success, @c DB_FAIL on failure.
- */
-int prepareRoomDBStmts(DB *database);
 
 /**
  * @brief Prepare cached statements for a GameDB handle.
@@ -119,6 +105,13 @@ int prepareGameDBStmts(DB *database);
 int prepareServerDBStmts(DB *database);
 
 /**
+ * @brief Initialize the schema for the group database.
+ * @param dbHandle  Raw sqlite3 handle.
+ * @return @c DB_SUCC on success, @c DB_FAIL on failure.
+ */
+int initGroupDBSchema(sqlite3 *dbHandle);
+
+/**
  * @brief Initialize the schema for the game room database.
  * @param dbHandle  Raw sqlite3 handle.
  * @return @c DB_SUCC on success, @c DB_FAIL on failure.
@@ -132,17 +125,23 @@ int initGameRoomDBSchema(sqlite3 *dbHandle);
  */
 int prepareGameRoomDBStmts(DB *database);
 
-/* ─────────────────────── room cache lifecycle ──────────────────────────────
- */
+/* ─────────────────────── group cache lifecycle ─────────────────────────── */
 
 /**
- * @brief Free all entries in the room statement cache.
+ * @brief Prepare cached statements for a GroupDB handle.
+ * @param database  The DB handle to populate.
+ * @return @c DB_SUCC on success, @c DB_FAIL on failure.
+ */
+int prepareGroupGlobalStmts(DB *database);
+
+/**
+ * @brief Free all entries in the group statement cache.
  *
  * Finalizes all prepared statements and frees all allocated memory.
  * Safe to call with @c NULL (no-op).
  *
- * @param cache  The room statement cache to destroy (may be NULL).
+ * @param cache  The group statement cache to destroy (may be NULL).
  */
-void roomCacheDestroy(RoomStmtCache *cache);
+void groupCacheDestroy(GroupStmtCache *cache);
 
 #endif /* SERVER_DATABASE_INTERNAL_H */

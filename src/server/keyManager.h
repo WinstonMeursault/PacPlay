@@ -43,8 +43,8 @@ bool serverIsFirstRun(Server *s);
  * @brief Verify that all expected key envelopes exist in ServerDB.
  *
  * Checks for the presence of @c "DEK", @c "UserDBKey",
- * @c "ChatHistoryDBKey", @c "RoomDBKey", @c "GameDBKey", and
- * @c "GameRoomDBKey".  If any is missing the
+ * @c "GameDBKey", @c "GameRoomDBKey", @c "FriendDBKey",
+ * @c "PrivateChatDBKey", and @c "GroupDBKey".  If any is missing the
  * database is considered corrupted and the server must refuse to start.
  *
  * @param s  An initialised Server with @c serverDB open.
@@ -56,8 +56,9 @@ bool serverKeysAreComplete(Server *s);
  * @brief Generate fresh cryptographic keys and store envelopes in
  *        ServerDB.
  *
- * Generates MK, DEK, UserDBKey, ChatHistoryDBKey, RoomDBKey,
- * GameDBKey, and GameRoomDBKey via
+ * Generates MK, DEK, UserDBKey,
+ * GameDBKey, GameRoomDBKey, FriendDBKey,
+ * PrivateChatDBKey, and GroupDBKey via
  * @c cryptoRandomBytes() (each 256-bit).  Wraps DEK and the three
  * per-DB keys with MK using AES-256-GCM into 60-byte envelopes and
  * stores them in ServerDB.
@@ -79,8 +80,9 @@ char *serverGenerateFreshKeys(Server *s);
  * @brief Unlock the server by decrypting all key envelopes with the
  *        given Master Key.
  *
- * Reads the envelopes ("DEK", "UserDBKey", "ChatHistoryDBKey",
- * "RoomDBKey", "GameDBKey", "GameRoomDBKey") from ServerDB, decrypts
+ * Reads the envelopes ("DEK", "UserDBKey",
+ * "GameDBKey", "GameRoomDBKey", "FriendDBKey", "PrivateChatDBKey",
+ * "GroupDBKey") from ServerDB, decrypts
  * each with @p masterKeyHex via AES-256-GCM, and populates the
  * corresponding fields in the Server struct (@c dekKey,
  * @c userDbEncKey, @c chatDbEncKey, @c roomDbEncKey, @c gameDbEncKey,

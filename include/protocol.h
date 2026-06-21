@@ -58,6 +58,7 @@
 #define GAME_VERSION_LEN 32
 #define GAME_HASH_LEN 65
 #define GAME_DESC_LEN 1024
+#define GROUP_NAME_LEN 32
 #define PLATFORM_NAME_LEN 16
 #define GAME_CHUNK_SIZE 65536u
 #define MAX_PAYLOAD_LEN (GAME_CHUNK_SIZE * 2)
@@ -156,7 +157,48 @@ typedef enum {
     /* Game room member notifications. */
     MsgGameRoomMemberList,
     MsgGameRoomMemberJoin,
-    MsgGameRoomMemberQuit
+    MsgGameRoomMemberQuit,
+
+    /* Social — friend system. */
+    MsgFriendRequest = 55,
+    MsgFriendRequestResp,
+    MsgFriendAccept,
+    MsgFriendAcceptResp,
+    MsgFriendReject,
+    MsgFriendDelete,
+    MsgFriendDeleteResp,
+    MsgFriendListReq,
+    MsgFriendListResp,
+    MsgFriendNotify,
+
+    /* Social — private chat. */
+    MsgPrivateChat,
+    MsgPrivateChatBroadcast,
+    MsgPrivateChatHistoryReq,
+    MsgPrivateChatHistoryResp,
+    MsgPrivateChatNotify,
+
+    /* Social — group chat. */
+    MsgGroupCreate,
+    MsgGroupCreateResp,
+    MsgGroupJoin,
+    MsgGroupJoinResp,
+    MsgGroupQuit,
+    MsgGroupQuitResp,
+    MsgGroupListReq,
+    MsgGroupListResp,
+    MsgGroupChat,
+    MsgGroupChatBroadcast,
+    MsgGroupMemberJoin,
+    MsgGroupMemberQuit,
+    MsgGroupKick,
+    MsgGroupKickResp,
+    MsgGroupDisband,
+    MsgGroupDisbandNotify,
+
+    MsgGroupDisbandResp,
+    MsgGroupChatHistoryReq,
+    MsgGroupChatHistoryResp
 } MessageType;
 
 #pragma pack(push, 1)
@@ -459,6 +501,123 @@ typedef struct {
     uint32_t uid;
     uint8_t dissolved;
 } GameRoomMemberQuitPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t targetUid;
+} FriendOpPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t uid;
+    char username[LOGIN_USERNAME_LEN];
+    char nickname[LOGIN_NICKNAME_LEN];
+    uint8_t online;
+} FriendInfo;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t uid;
+    uint8_t online;
+    char nickname[LOGIN_NICKNAME_LEN];
+} FriendNotifyPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t fromUid;
+    uint32_t toUid;
+    uint32_t msgId;
+    int64_t timestamp;
+    uint8_t message[];
+} PrivateChatPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t peerUid;
+    uint32_t beforeMsgId;
+    uint32_t limit;
+} PrivateChatHistoryReqPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    char groupName[GROUP_NAME_LEN];
+} GroupCreatePayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t status;
+    uint32_t groupId;
+} GroupCreateRespPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t groupId;
+} GroupOpPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t groupId;
+    char groupName[GROUP_NAME_LEN];
+    uint32_t ownerUid;
+    uint32_t memberCount;
+    uint64_t createdAt;
+} GroupInfo;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t groupId;
+    int64_t timestamp;
+    uint8_t message[];
+} GroupChatPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t groupId;
+    uint32_t uid;
+    uint32_t msgId;
+    int64_t timestamp;
+    uint8_t message[];
+} GroupChatBroadcastPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t groupId;
+    uint32_t beforeMsgId;
+    uint32_t limit;
+} GroupChatHistoryReqPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t groupId;
+    uint32_t uid;
+    char nickname[LOGIN_NICKNAME_LEN];
+} GroupMemberNotify;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t groupId;
+    uint32_t targetUid;
+} GroupKickPayload;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t groupId;
+} GroupDisbandNotifyPayload;
 #pragma pack(pop)
 
 /**

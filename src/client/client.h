@@ -29,6 +29,7 @@
 #include "protocol.h"
 
 #include <pthread.h>
+#include <time.h>
 
 struct ClientDB;   /* forward — full definition in client/database.h */
 struct PacPlaySDK; /* forward — full definition in pacplay_sdk.h */
@@ -52,7 +53,6 @@ typedef struct Client {
     AESGCMKey aesKey;
     uint32_t uid;
     char nickname[LOGIN_NICKNAME_LEN];
-    uint32_t currentRoomId;
     uint32_t currentGameRoomId; /**< 0 if not in any game room. */
     uint32_t seqID;
     char serverAddr[SERVER_ADDR_LEN]; /**< Server address for data channel
@@ -68,6 +68,24 @@ typedef struct Client {
     GameRoomMemberInfo *roomMembers; /**< Current room member list. */
     int roomMemberCount;             /**< Count of roomMembers entries. */
     volatile bool gameStarted; /**< Set by poll when start resp received. */
+
+    /* ──────────────────────── social system ─────────────────────────────────
+     */
+    time_t lastHeartbeat;
+    FriendInfo *friendList;
+    uint32_t friendCount;
+    GroupInfo *groupList;
+    uint32_t groupCount;
+    uint32_t activeChatTarget;
+    uint8_t activeChatIsGroup;
+    /* Pending chat messages queue (for chatView). Populated by socialPoll()
+     * when a MsgPrivateChatBroadcast or MsgGroupChatBroadcast arrives while
+     * chatView is active. chatView reads from this queue instead of polling
+     * the socket directly. */
+    uint8_t **pendingChatMessages;
+    size_t *pendingChatMsgLens;
+    uint32_t *pendingChatMsgTypes;
+    int pendingChatMsgCount;
 } Client;
 
 /* ─────────────────────── IO thread lifecycle ────────────────────────────── */

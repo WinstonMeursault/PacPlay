@@ -211,10 +211,10 @@ static void mainGridUpdate(ControlGrid *self) {
     (void)snprintf(serverStatusBox.text, TEXTBOX_TEXT_MAXLEN,
                    "Server Status\n\n"
                    "Connections: %d\n"
-                   "Active Rooms: %d\n"
+                   "Game Rooms: %d\n"
                    "Uptime: %02d:%02d:%02d",
-                   server->clientCount, server->activeRoomCount, hours, minutes,
-                   seconds);
+                   server->clientCount, server->activeGameRoomCount, hours,
+                   minutes, seconds);
     serverStatusBox.textLen = strlen(serverStatusBox.text);
 }
 

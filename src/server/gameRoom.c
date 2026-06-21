@@ -6,7 +6,6 @@
 #include "server/database.h"
 #include "server/gameControl.h"
 #include "server/gameRunner.h"
-#include "server/room.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -91,7 +90,7 @@ void serverRemoveClientFromGameRoom(Server *s, ClientSession *cs) {
     ActiveGameRoom *gr = serverFindActiveGameRoom(s, grId);
     if (gr == NULL) {
         cs->currentGameRoomId = 0;
-        cs->state = SessionRoom;
+        cs->state = SessionLobby;
         return;
     }
 
@@ -113,7 +112,7 @@ void serverRemoveClientFromGameRoom(Server *s, ClientSession *cs) {
         }
     }
     cs->currentGameRoomId = 0;
-    cs->state = SessionRoom;
+    cs->state = SessionLobby;
 
     {
         GameRoomMemberQuitPayload quitPayload;
@@ -152,7 +151,7 @@ void serverDissolveGameRoom(Server *s, uint32_t gameRoomId,
 
     for (int i = 0; i < gr->memberCount; i++) {
         gr->members[i]->currentGameRoomId = 0;
-        gr->members[i]->state = SessionRoom;
+        gr->members[i]->state = SessionLobby;
     }
     gr->memberCount = 0;
 
@@ -216,8 +215,10 @@ int serverHandleGameRoomCreate(Server *s, ClientSession *cs,
     if (cs->currentGameRoomId != 0) {
         serverRemoveClientFromGameRoom(s, cs);
     }
-    if (cs->currentRoomId != 0) {
-        serverRemoveClientFromRoom(s, cs);
+    if (cs->currentGroupId != 0) {
+        (void)groupRemoveMember(s->groupDB, cs->currentGroupId,
+                                cs->currentUser.uid);
+        cs->currentGroupId = 0;
     }
 
     enum { MaxGenRetries = 100 };
@@ -293,8 +294,10 @@ int serverHandleGameRoomJoin(Server *s, ClientSession *cs, const Packet *pkt) {
     if (cs->currentGameRoomId != 0) {
         serverRemoveClientFromGameRoom(s, cs);
     }
-    if (cs->currentRoomId != 0) {
-        serverRemoveClientFromRoom(s, cs);
+    if (cs->currentGroupId != 0) {
+        (void)groupRemoveMember(s->groupDB, cs->currentGroupId,
+                                cs->currentUser.uid);
+        cs->currentGroupId = 0;
     }
 
     gr = serverFindActiveGameRoom(s, req->gameRoomId);

@@ -25,9 +25,10 @@
 #include "clientTUI.h"
 #include "client/client.h"
 #include "connectPage.h"
-#include "loginReg.h"
 #include "log.h"
+#include "loginReg.h"
 #include "mainPage.h"
+#include "socialPage.h"
 #include "tui/tuiapp.h"
 
 // Client pointer
@@ -51,5 +52,6 @@ void tuiClientEntry(Client *clientInstance) {
     tuiClientLoginRegInit();
     tuiClientMainPageInit();
     tuiClientGameRoomLobbyInit();
+    tuiClientSocialPageInit();
     tuiAppStart(&connectPage);
 }
