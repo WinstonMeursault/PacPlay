@@ -1,0 +1,767 @@
+/**
+ * @file server.c
+ * @brief PacPlay server — event loop, session management, and request dispatch.
+ *
+ * @date 2026-05-25
+ * @copyright GPLv3 License
+ * @section LICENSE
+ * PacPlay
+ * Copyright (C) 2026 Winston Meursault & Kiraterin
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https: //www.gnu.org/licenses/>.
+ */
+
+#include "server.h"
+#include "log.h"
+#include "platform.h"
+#include "server/auth.h"
+#include "server/chat.h"
+#include "server/communication.h"
+#include "server/database.h"
+#include "server/downloadPool.h"
+#include "server/gameControl.h"
+#include "server/gameRoom.h"
+#include "server/gameDistribution.h"
+#include "server/gameRunner.h"
+#include "server/keyManager.h"
+#include "server/room.h"
+#include "server/tui/serverTUI.h"
+#include "serverLog.h"
+#include "utils.h"
+
+#include <errno.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/select.h>
+#include <unistd.h>
+
+#include <openssl/crypto.h>
+
+#include "pacplay_sdk.h"
+
+/* ────────────── internal constants (avoiding magic numbers) ─────────────── */
+
+enum {
+    StatusSuccess = 0,
+    StatusFailure = 1,
+    SocketTimeoutSecs = 5,
+    MaxConnections = 512,
+    /* Login payload is username(32B) + password(FAM). */
+    LoginHeaderSize = offsetof(LoginRequestPayload, password),
+    /* Register payload is username(32B) + nickname(32B) + password(FAM). */
+    RegisterHeaderSize = offsetof(RegisterRequestPayload, password)
+};
+
+/* ────────────────── signal-based graceful shutdown ──────────────────────── */
+
+static volatile sig_atomic_t gShutdownRequested;
+
+static void shutdownSignalHandler(int sig) {
+    (void)sig;
+    gShutdownRequested = 1;
+}
+
+/* ────────────────────────── forward declarations ────────────────────────── */
+
+static void *serverEventLoop(void *arg);
+static void acceptClient(Server *s);
+static int processClient(Server *s, ClientSession *cs);
+static void clientDisconnect(Server *s, int idx);
+
+/* Handler functions */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+static int handleKeyExchange(Server *s, ClientSession *cs, Packet *pkt);
+static int handleHeartbeat(Server *s, ClientSession *cs);
+static int handleLogout(Server *s, ClientSession *cs);
+static int serverHandleGamePayload(Server *s, ClientSession *sender,
+                                   Packet *pkt);
+
+/* ════════════════════════════ server key init ═════════════════════════════ */
+
+/**
+ * @brief Encrypt a key with MK via AES-256-GCM and store the envelope
+ *        in ServerDB under @p keyName.
+ *
+ * The envelope format is: nonce(12) || ciphertext(32) || tag(16) = 60 bytes.
+ *
+ * @param mkKey     32-byte Master Key.
+ * @param keyData   32-byte key to encrypt and store.
+ * @param keyName   ServerDB key name (e.g. "DEK", "UserDBKey").
+ * @param serverDB  Open ServerDB handle.
+ * @return @c SERVER_SUCC or @c SERVER_FAIL.
+ */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+
+/**
+ * @brief Decrypt a key envelope blob from ServerDB and load it into
+ *        @p outKey.
+ *
+ * Verifies the envelope is exactly 60 bytes (nonce + key + tag), decrypts
+ * it with @p mkKey via AES-256-GCM, and copies the plaintext key to
+ * @p outKey.
+ *
+ * @param mkKey    32-byte Master Key.
+ * @param blob     Raw envelope blob from ServerDB.
+ * @param blobLen  Length of @p blob in bytes (must be 60).
+ * @param keyName  Key name for error messages.
+ * @param outKey   Output buffer (must be at least 32 bytes).
+ * @return @c SERVER_SUCC or @c SERVER_FAIL (including AUTH_FAIL).
+ */
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+
+/* ═══════════════════════════════ public API ═══════════════════════════════ */
+
+int serverInit(Server *server, uint16_t port) {
+    (void)serverLogInit();
+
+    SocketFD listenFd = serverSetup(port);
+    if (listenFd == NULL_SOCKETFD) {
+        return SERVER_FAIL;
+    }
+
+    DB *serverDB = dbInit(ServerDB, NULL);
+    if (serverDB == NULL) {
+        LOG_ERROR("serverInit: ServerDB initialization failed");
+        socketClose(&listenFd);
+        return SERVER_FAIL;
+    }
+
+    server->listenFd = listenFd;
+    server->port = port;
+    server->serverDB = serverDB;
+
+    bool firstRun = serverIsFirstRun(server);
+    char *mkHex = NULL;
+    if (firstRun) {
+        mkHex = serverGenerateFreshKeys(server);
+        if (mkHex == NULL) {
+            LOG_ERROR("serverInit: key generation failed");
+            serverCleanup(server);
+            return SERVER_FAIL;
+        }
+    } else {
+        if (!serverKeysAreComplete(server)) {
+            LOG_FATAL("serverInit: ServerDB key set is incomplete");
+        }
+    }
+    tuiServerEntry(server, firstRun, mkHex);
+    if (mkHex != NULL) {
+        OPENSSL_cleanse(mkHex, strlen(mkHex));
+    }
+    free(mkHex);
+
+    return SERVER_SUCC;
+}
+
+int serverLaunch(Server *server) {
+    if (server->freshKeysGenerated) {
+        remove(USER_DB_PATH);
+        remove(CHAT_HISTORY_DB_PATH);
+        remove(ROOM_DB_PATH);
+        remove(GAME_DB_PATH);
+        remove(GAME_ROOM_DB_PATH);
+    }
+
+    server->userDB = dbInit(UserDB, server->userDbEncKey);
+    if (server->userDB == NULL) {
+        LOG_ERROR("serverLaunch: UserDB initialization failed");
+        return SERVER_FAIL;
+    }
+    server->chatDB = dbInit(ChatHistoryDB, server->chatDbEncKey);
+    if (server->chatDB == NULL) {
+        LOG_ERROR("serverLaunch: ChatHistoryDB initialization failed");
+        dbClose(server->userDB);
+        return SERVER_FAIL;
+    }
+    server->roomDB = dbInit(RoomDB, server->roomDbEncKey);
+    if (server->roomDB == NULL) {
+        LOG_ERROR("serverLaunch: RoomDB initialization failed");
+        dbClose(server->userDB);
+        dbClose(server->chatDB);
+        return SERVER_FAIL;
+    }
+    server->gameDB = dbInit(GameDB, server->gameDbEncKey);
+    if (server->gameDB == NULL) {
+        LOG_ERROR("serverLaunch: GameDB initialization failed");
+        dbClose(server->userDB);
+        dbClose(server->chatDB);
+        dbClose(server->roomDB);
+        return SERVER_FAIL;
+    }
+    server->gameRoomDB = dbInit(GameRoomDB, server->gameRoomDbEncKey);
+    if (server->gameRoomDB == NULL) {
+        LOG_ERROR("serverLaunch: GameRoomDB initialization failed");
+        dbClose(server->userDB);
+        dbClose(server->chatDB);
+        dbClose(server->roomDB);
+        dbClose(server->gameDB);
+        return SERVER_FAIL;
+    }
+
+    dbSetDekKey(server->userDB, server->dekKey);
+
+    platformMkdirp(GAME_LIB_DIR);
+
+    dbSetDekKey(server->gameDB, server->dekKey);
+
+    server->downloadPool = calloc(1, sizeof(DownloadPool));
+    if (server->downloadPool == NULL) {
+        LOG_ERROR("serverLaunch: calloc downloadPool failed");
+        return SERVER_FAIL;
+    }
+    uint16_t dataPort = (uint16_t)(server->port + DATA_PORT_OFFSET);
+    if (downloadPoolInit(server->downloadPool, dataPort,
+                         MAX_DOWNLOAD_WORKERS) != 0) {
+        LOG_ERROR("serverLaunch: downloadPool init failed on port %u",
+                  dataPort);
+        free(server->downloadPool);
+        server->downloadPool = NULL;
+        return SERVER_FAIL;
+    }
+
+    server->clientCapacity = SERVER_INITIAL_CAPACITY;
+    server->clients = (ClientSession **)calloc((size_t)server->clientCapacity,
+                                               sizeof(ClientSession *));
+    if (server->clients == NULL) {
+        LOG_ERROR("serverLaunch: calloc failed (errno=%d)", errno);
+        return SERVER_FAIL;
+    }
+
+    server->activeRoomCapacity = SERVER_INITIAL_CAPACITY;
+    server->activeRooms = (ActiveRoom **)calloc(
+        (size_t)server->activeRoomCapacity, sizeof(ActiveRoom *));
+    if (server->activeRooms == NULL) {
+        LOG_ERROR("serverLaunch: calloc rooms failed (errno=%d)", errno);
+        return SERVER_FAIL;
+    }
+
+    server->activeGameRoomCapacity = SERVER_INITIAL_CAPACITY;
+    server->activeGameRooms = (ActiveGameRoom **)calloc(
+        (size_t)server->activeGameRoomCapacity, sizeof(ActiveGameRoom *));
+    if (server->activeGameRooms == NULL) {
+        LOG_ERROR("serverLaunch: calloc gameRooms failed (errno=%d)", errno);
+        return SERVER_FAIL;
+    }
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = shutdownSignalHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    (void)sigaction(SIGINT, &sa, NULL);
+    (void)sigaction(SIGTERM, &sa, NULL);
+
+    server->running = true;
+    server->startTime = getCurrentTimestamp();
+    if (pthread_create(&server->serverThread, NULL, serverEventLoop, server) !=
+        0) {
+        LOG_ERROR("serverLaunch: pthread_create failed (errno=%d)", errno);
+        server->running = false;
+        return SERVER_FAIL;
+    }
+
+    LOG_INFO("Server event loop started");
+    return SERVER_SUCC;
+}
+
+void serverShutdown(Server *server) {
+    if (!server->running) {
+        return;
+    }
+    server->running = false;
+    pthread_join(server->serverThread, NULL);
+    for (int i = 0; i < server->activeGameRoomCount; i++) {
+        if (server->activeGameRooms[i]->gameRunning) {
+            gameRoomStopGame(server->activeGameRooms[i]);
+        }
+    }
+    serverStopGame(server);
+}
+
+void serverRun(Server *server) { (void)server; }
+
+/* ═════════════════════════ background event loop ═════════════════════════ */
+
+static void *serverEventLoop(void *arg) {
+    Server *s = (Server *)arg;
+
+    while (s->running && !gShutdownRequested) {
+        for (int gi = 0; gi < s->activeGameRoomCount; gi++) {
+            ActiveGameRoom *gr = s->activeGameRooms[gi];
+            if (gr->sdk == NULL || !gr->gameRunning) {
+                continue;
+            }
+            uint8_t *gamePayload = NULL;
+            size_t gameLen = 0;
+            while (pacplay_srv_poll_send(gr->sdk, &gamePayload, &gameLen)) {
+                for (int ci = 0; ci < gr->memberCount; ci++) {
+                    serverSendEncryptedPacket(gr->members[ci],
+                                              MsgGameRoomPlayData,
+                                              gamePayload, gameLen);
+                }
+                pacplay_srv_free_payload(gr->sdk, gamePayload);
+            }
+        }
+
+        if (s->sdk != NULL) {
+            uint8_t *gamePayload = NULL;
+            size_t gameLen = 0;
+            while (pacplay_srv_poll_send(s->sdk, &gamePayload, &gameLen)) {
+                for (int ci = 0; ci < s->clientCount; ci++) {
+                    if (s->clients[ci]->state == SessionChat) {
+                        serverSendEncryptedPacket(s->clients[ci],
+                                                  MsgGamePayload,
+                                                  gamePayload, gameLen);
+                    }
+                }
+                pacplay_srv_free_payload(s->sdk, gamePayload);
+            }
+        }
+
+        fd_set readFds;
+        FD_ZERO(&readFds);
+        FD_SET(s->listenFd, &readFds);
+        int maxFd = s->listenFd;
+
+        for (int i = 0; i < s->clientCount; i++) {
+            FD_SET(s->clients[i]->fd, &readFds);
+            if (s->clients[i]->fd > maxFd) {
+                maxFd = s->clients[i]->fd;
+            }
+        }
+
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = SERVER_SELECT_TIMEOUT_US;
+
+        int ready = select(maxFd + 1, &readFds, NULL, NULL, &tv);
+        if (ready < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            LOG_ERROR("serverEventLoop: select() failed (errno=%d)", errno);
+            break;
+        }
+
+        if (FD_ISSET(s->listenFd, &readFds)) {
+            acceptClient(s);
+            ready--;
+        }
+
+        for (int i = 0; i < s->clientCount && ready > 0; i++) {
+            if (FD_ISSET(s->clients[i]->fd, &readFds)) {
+                ready--;
+                if (processClient(s, s->clients[i]) != SERVER_SUCC) {
+                    clientDisconnect(s, i);
+                    i--;
+                }
+            }
+        }
+
+        serverLogCheckAndRestart();
+    }
+
+    return NULL;
+}
+
+void serverCleanup(Server *server) {
+    if (server == NULL) {
+        return;
+    }
+
+    /* Disconnect all clients (removes them from rooms and closes sockets) */
+    while (server->clientCount > 0) {
+        clientDisconnect(server, 0);
+    }
+    free((void *)server->clients);
+    server->clients = NULL;
+
+    /* Free active rooms (rooms should be empty by now, but be safe) */
+    if (server->activeRooms != NULL) {
+        for (int i = 0; i < server->activeRoomCount; i++) {
+            free(server->activeRooms[i]);
+        }
+        free((void *)server->activeRooms);
+        server->activeRooms = NULL;
+    }
+
+    if (server->activeGameRooms != NULL) {
+        for (int i = 0; i < server->activeGameRoomCount; i++) {
+            if (server->activeGameRooms[i]->gameRunning) {
+                gameRoomStopGame(server->activeGameRooms[i]);
+            }
+            free(server->activeGameRooms[i]);
+        }
+        free((void *)server->activeGameRooms);
+        server->activeGameRooms = NULL;
+    }
+
+    if (server->downloadPool != NULL) {
+        downloadPoolDestroy(server->downloadPool);
+        free(server->downloadPool);
+        server->downloadPool = NULL;
+    }
+
+    socketClose(&server->listenFd);
+    dbClose(server->userDB);
+    dbClose(server->chatDB);
+    dbClose(server->roomDB);
+    dbClose(server->gameDB);
+    dbClose(server->gameRoomDB);
+    dbClose(server->serverDB);
+
+    OPENSSL_cleanse(server->dekKey, sizeof(server->dekKey));
+    OPENSSL_cleanse(server->userDbEncKey, sizeof(server->userDbEncKey));
+    OPENSSL_cleanse(server->chatDbEncKey, sizeof(server->chatDbEncKey));
+    OPENSSL_cleanse(server->roomDbEncKey, sizeof(server->roomDbEncKey));
+    OPENSSL_cleanse(server->gameDbEncKey, sizeof(server->gameDbEncKey));
+    OPENSSL_cleanse(server->gameRoomDbEncKey, sizeof(server->gameRoomDbEncKey));
+
+    LOG_INFO("Server shut down");
+    serverLogClose();
+}
+
+/* ══════════════════════════ connection lifecycle ══════════════════════════ */
+
+static void acceptClient(Server *s) {
+    SocketFD clientFd = accept(s->listenFd, NULL, NULL);
+    if (clientFd == NULL_SOCKETFD) {
+        LOG_ERROR("accept failed (errno=%d)", errno);
+        return;
+    }
+
+    /* FD_SETSIZE protection: reject connections that would overflow fd_set */
+    if (clientFd >= FD_SETSIZE) {
+        LOG_WARN("acceptClient: fd %d >= FD_SETSIZE (%d), rejecting", clientFd,
+                 FD_SETSIZE);
+        socketClose(&clientFd);
+        return;
+    }
+
+    if (s->clientCount >= MaxConnections) {
+        LOG_WARN("acceptClient: connection limit reached (%d)", MaxConnections);
+        socketClose(&clientFd);
+        return;
+    }
+
+    ClientSession *cs = calloc(1, sizeof(ClientSession));
+    if (cs == NULL) {
+        LOG_ERROR("acceptClient: calloc failed (errno=%d)", errno);
+        socketClose(&clientFd);
+        return;
+    }
+
+    struct timeval sockTimeout;
+    sockTimeout.tv_sec = SocketTimeoutSecs;
+    sockTimeout.tv_usec = 0;
+    setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &sockTimeout,
+               sizeof(sockTimeout));
+    setsockopt(clientFd, SOL_SOCKET, SO_SNDTIMEO, &sockTimeout,
+               sizeof(sockTimeout));
+
+    cs->fd = clientFd;
+    cs->state = SessionKeyExchange;
+
+    /* Grow the clients array if needed */
+    if (s->clientCount >= s->clientCapacity) {
+        int newCap = s->clientCapacity * 2;
+        ClientSession **tmp = (ClientSession **)realloc(
+            (void *)s->clients, (size_t)newCap * sizeof(ClientSession *));
+        if (tmp == NULL) {
+            LOG_ERROR("acceptClient: realloc failed (errno=%d)", errno);
+            free(cs);
+            socketClose(&clientFd);
+            return;
+        }
+        s->clients = tmp;
+        s->clientCapacity = newCap;
+    }
+
+    s->clients[s->clientCount] = cs;
+    s->clientCount++;
+    LOG_INFO("Client connected (fd=%d)", clientFd);
+}
+
+static void clientDisconnect(Server *s, int idx) {
+    if (s->clients == NULL || idx < 0 || idx >= s->clientCount) {
+        return;
+    }
+    ClientSession *cs = s->clients[idx];
+
+    LOG_INFO("Client disconnected (fd=%d)", cs->fd);
+
+    serverRemoveClientFromGameRoom(s, cs);
+
+    /* Remove from room first so empty rooms are cleaned up */
+    serverRemoveClientFromRoom(s, cs);
+
+    socketClose(&cs->fd);
+    OPENSSL_cleanse(&cs->aesKey, sizeof(cs->aesKey));
+    if (cs->currentUser.totpSecret != NULL) {
+        OPENSSL_cleanse(cs->currentUser.totpSecret,
+                        strlen(cs->currentUser.totpSecret));
+        free(cs->currentUser.totpSecret);
+    }
+    free(cs);
+
+    /* Compact the clients array */
+    int remaining = s->clientCount - idx - 1;
+    if (remaining > 0) {
+        memmove((void *)&s->clients[idx], (const void *)&s->clients[idx + 1],
+                (size_t)remaining * sizeof(ClientSession *));
+    }
+    s->clientCount--;
+}
+
+/* ═══════════════════════════ receive & dispatch ═══════════════════════════ */
+
+static int processClient(Server *s, ClientSession *cs) {
+    Packet pkt;
+    memset(&pkt, 0, sizeof(pkt));
+
+    if (cs->state == SessionKeyExchange) {
+        if (packetRecv(&pkt, cs->fd) != PROTOCOL_SUCC) {
+            LOG_WARN("processClient: packetRecv failed for fd=%d", cs->fd);
+            return SERVER_FAIL;
+        }
+    } else {
+        if (serverRecvEncryptedPacket(cs, &pkt) != SERVER_SUCC) {
+            LOG_WARN("processClient: recv/decrypt failed for fd=%d", cs->fd);
+            return SERVER_FAIL;
+        }
+    }
+
+    int ret = SERVER_SUCC;
+    MessageType mt = pkt.header.messageType;
+
+    switch (cs->state) {
+    case SessionKeyExchange:
+        if (mt == MsgKeyExchangeReq) {
+            ret = handleKeyExchange(s, cs, &pkt);
+        } else {
+            LOG_WARN("processClient: unexpected msgType %d in state %d (fd=%d)",
+                     (int)mt, cs->state, cs->fd);
+            ret = SERVER_FAIL;
+        }
+        break;
+
+    case SessionLogin:
+        if (mt == MsgLoginReq) {
+            ret = serverHandleLogin(s, cs, &pkt);
+        } else if (mt == MsgRegisterReq) {
+            ret = serverHandleRegister(s, cs, &pkt);
+        } else if (mt == MsgLogout) {
+            ret = handleLogout(s, cs);
+        } else {
+            LOG_WARN("processClient: unexpected msgType %d in state %d (fd=%d)",
+                     (int)mt, cs->state, cs->fd);
+            ret = SERVER_FAIL;
+        }
+        break;
+
+    case SessionTOTPVerify:
+        if (mt == MsgTOTPVerifyResp) {
+            ret = serverHandleTOTPVerify(s, cs, &pkt);
+        } else if (mt == MsgLogout) {
+            ret = handleLogout(s, cs);
+        } else {
+            LOG_WARN("processClient: unexpected msgType %d in state %d (fd=%d)",
+                     (int)mt, cs->state, cs->fd);
+            ret = SERVER_FAIL;
+        }
+        break;
+
+    case SessionRoom:
+        if (mt == MsgRoomListReq) {
+            ret = serverHandleRoomList(s, cs);
+        } else if (mt == MsgCreateRoom) {
+            ret = serverHandleRoomCreate(s, cs, &pkt);
+        } else if (mt == MsgJoinRoom) {
+            ret = serverHandleRoomJoin(s, cs, &pkt);
+        } else if (mt == MsgQuitRoom) {
+            serverHandleRoomQuit(s, cs);
+            ret = SERVER_SUCC;
+        } else if (mt == MsgGameListReq) {
+            ret = serverHandleGameList(s, cs, &pkt);
+        } else if (mt == MsgGameDownloadReq) {
+            ret = serverHandleGameDownload(s, cs, &pkt);
+        } else if (mt == MsgGameDownloadCancel) {
+            ret = serverHandleGameDownloadCancel(s, cs, &pkt);
+        } else if (mt == MsgGameStartReq) {
+            ret = serverHandleGameStart(s, cs, &pkt);
+        } else if (mt == MsgLogout) {
+            ret = handleLogout(s, cs);
+        } else if (mt == MsgTOTPSetupReq) {
+            ret = serverHandleTOTPSetup(s, cs);
+        } else if (mt == MsgDBKeyReq) {
+            ret = serverHandleDBKeyReq(s, cs);
+        } else if (mt == MsgGameRoomListReq) {
+            ret = serverHandleGameRoomList(s, cs);
+        } else if (mt == MsgGameRoomCreate) {
+            ret = serverHandleGameRoomCreate(s, cs, &pkt);
+        } else if (mt == MsgGameRoomJoin) {
+            ret = serverHandleGameRoomJoin(s, cs, &pkt);
+        } else if (mt == MsgGameRoomQuit) {
+            ret = SERVER_SUCC;
+        } else if (mt == MsgGameRoomStart) {
+            uint8_t status = StatusFailure;
+            ret = serverSendEncryptedPacket(cs, MsgGameRoomStartResp, &status,
+                                            sizeof(status));
+        } else if (mt == MsgGameRoomPlayData || mt == MsgGamePayload) {
+            ret = SERVER_SUCC;
+        } else {
+            LOG_WARN("processClient: unexpected msgType %d in state %d (fd=%d)",
+                     (int)mt, cs->state, cs->fd);
+            ret = SERVER_FAIL;
+        }
+        break;
+
+    case SessionChat:
+        if (mt == MsgChat) {
+            ret = serverHandleChatMessage(s, cs, &pkt);
+        } else if (mt == MsgHeartbeat) {
+            ret = handleHeartbeat(s, cs);
+        } else if (mt == MsgGamePayload) {
+            /* Push to SDK receive queue if a game server is attached. */
+            if (s->sdk != NULL && pkt.header.payloadLength > 0) {
+                pacplay_srv_push_received(s->sdk, pkt.payload,
+                                          pkt.header.payloadLength);
+            }
+            /* Broadcast to other room members. */
+            ret = serverHandleGamePayload(s, cs, &pkt);
+        } else if (mt == MsgGameStartReq) {
+            ret = serverHandleGameStart(s, cs, &pkt);
+        } else if (mt == MsgLogout) {
+            ret = handleLogout(s, cs);
+        } else if (mt == MsgTOTPSetupReq) {
+            ret = serverHandleTOTPSetup(s, cs);
+        } else if (mt == MsgDBKeyReq) {
+            ret = serverHandleDBKeyReq(s, cs);
+        } else {
+            LOG_WARN("processClient: unexpected msgType %d in state %d (fd=%d)",
+                     (int)mt, cs->state, cs->fd);
+            ret = SERVER_FAIL;
+        }
+        break;
+
+    case SessionGameRoomLobby:
+        if (mt == MsgGameRoomQuit) {
+            ret = serverHandleGameRoomQuit(s, cs);
+        } else if (mt == MsgGameRoomStart) {
+            ret = serverHandleGameRoomStart(s, cs, &pkt);
+        } else if (mt == MsgGameRoomListReq) {
+            ret = serverHandleGameRoomList(s, cs);
+        } else if (mt == MsgGameRoomCreate) {
+            ret = serverHandleGameRoomCreate(s, cs, &pkt);
+        } else if (mt == MsgGameRoomJoin) {
+            ret = serverHandleGameRoomJoin(s, cs, &pkt);
+        } else if (mt == MsgChat) {
+            ret = serverHandleChatMessage(s, cs, &pkt);
+        } else if (mt == MsgHeartbeat) {
+            ret = handleHeartbeat(s, cs);
+        } else if (mt == MsgLogout) {
+            ret = handleLogout(s, cs);
+        } else if (mt == MsgGameRoomPlayData || mt == MsgGamePayload) {
+            ret = SERVER_SUCC;
+        } else if (mt == MsgGameListReq) {
+            ret = serverHandleGameList(s, cs, &pkt);
+        } else {
+            LOG_WARN("processClient: unexpected msgType %d in state %d (fd=%d)",
+                     (int)mt, cs->state, cs->fd);
+            ret = SERVER_FAIL;
+        }
+        break;
+
+    case SessionGameRoomPlay:
+        if (mt == MsgGameRoomPlayData) {
+            ret = serverHandleGameRoomPlayData(s, cs, &pkt);
+        } else if (mt == MsgGameRoomQuit) {
+            ret = serverHandleGameRoomQuit(s, cs);
+        } else if (mt == MsgHeartbeat) {
+            ret = handleHeartbeat(s, cs);
+        } else if (mt == MsgLogout) {
+            ret = handleLogout(s, cs);
+        } else if (mt == MsgGameRoomStart) {
+            uint8_t status = StatusFailure;
+            ret = serverSendEncryptedPacket(cs, MsgGameRoomStartResp, &status,
+                                            sizeof(status));
+        } else if (mt == MsgChat) {
+            ret = serverHandleChatMessage(s, cs, &pkt);
+        } else if (mt == MsgGameRoomListReq) {
+            ret = serverHandleGameRoomList(s, cs);
+        } else {
+            LOG_WARN("processClient: unexpected msgType %d in state %d (fd=%d)",
+                     (int)mt, cs->state, cs->fd);
+            ret = SERVER_FAIL;
+        }
+        break;
+    }
+
+    packetClear(&pkt);
+    return ret;
+}
+
+/* ════════════════════════════════ handlers ════════════════════════════════ */
+
+static int handleKeyExchange(Server *s, ClientSession *cs, Packet *pkt) {
+    (void)s;
+    AESGCMKey aesKey;
+
+    if (serverExchangeAESKey(cs->fd, pkt, &aesKey) != PROTOCOL_SUCC) {
+        LOG_WARN("handleKeyExchange: exchange failed for fd=%d", cs->fd);
+        return SERVER_FAIL;
+    }
+
+    memcpy(&cs->aesKey, &aesKey, sizeof(aesKey));
+    OPENSSL_cleanse(&aesKey, sizeof(aesKey));
+    cs->state = SessionLogin;
+    LOG_INFO("Key exchange complete for fd=%d", cs->fd);
+    return SERVER_SUCC;
+}
+
+static int handleHeartbeat(Server *s, ClientSession *cs) {
+    (void)s;
+    return serverSendEncryptedPacket(cs, MsgHeartbeat, NULL, 0);
+}
+
+static int serverHandleGamePayload(Server *s, ClientSession *sender,
+                                   Packet *pkt) {
+    uint32_t roomId = sender->currentRoomId;
+    if (roomId == 0 || pkt->payload == NULL ||
+        pkt->header.payloadLength == 0) {
+        return SERVER_SUCC;
+    }
+
+    ActiveRoom *room = serverFindActiveRoom(s, roomId);
+    if (room == NULL) {
+        return SERVER_SUCC;
+    }
+
+    for (int i = 0; i < room->memberCount; i++) {
+        if (room->members[i] != sender) {
+            serverSendEncryptedPacket(room->members[i], MsgGamePayload,
+                                      pkt->payload,
+                                      pkt->header.payloadLength);
+        }
+    }
+
+    return SERVER_SUCC;
+}
+
+static int handleLogout(Server *s, ClientSession *cs) {
+    (void)s;
+    LOG_INFO("User logging out (fd=%d)", cs->fd);
+    return SERVER_FAIL; /* Signal to disconnect */
+}

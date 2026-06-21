@@ -35,7 +35,6 @@
 *.i*86
 *.x86_64
 *.hex
-bin/
 
 # Debug files
 *.dSYM/
@@ -55,4 +54,20 @@ dkms.conf
 # debug information files
 *.dwo
 
+# AI AGENT & MCP
+AGENTS.md
+.ckb/
+.depwire/
+.reflex/
+
 .vscode/
+.cache/
+commit_draft.md
+compile_commands.json
+build/
+bin/
+db/
+src/common/tui/test/
+logs/
+client_err.log
+server_err.log

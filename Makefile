@@ -1,103 +1,300 @@
-# ==========================================
-# 1. Core Configuration
-# ==========================================
-# Automatically enable multi-threaded compilation based on CPU cores to improve speed
+# Variable Section
+
+## Automatically enable multi-threaded compilation based on CPU cores to improve speed
 MAKEFLAGS += -j $(shell nproc)
 
-# Compiler and compilation flags
+## Compiler and compilation flags
 CC := clang
-CFLAGS := -Wall -Wextra -Werror -g
-# Compiler flags for auto-generating dependency files (modern approach, replaces the old sed method)
+CFLAGS := -fsanitize=address -fno-omit-frame-pointer -Wall -Wextra -Werror -g -Wno-unused-command-line-argument
+# LDLIBS := -lssl -lcrypto -lsqlcipher -lncursesw -lpthread -lz-ng -L/path/to/libvterm/.libs -lvterm -Wl,-rpath,/home/kiraterin/gitclone/libvterm/.libs
+LDLIBS := -lssl -lcrypto -lsqlcipher -lncursesw -lpthread -lz-ng -lvterm
+## Compiler flags for auto-generating dependency files (modern approach, replaces the old sed method)
 DEPFLAGS = -MMD -MP -MF $(@:%.o=%.d)
 
-# ==========================================
-# 2. Directories
-# ==========================================
+## Code Analysis
+CLANG_TIDY := clang-tidy
+
+## Directories
 SRC_DIR := src
 BUILD_DIR := build
 BIN_DIR := bin
-INC_DIR := include
-LIB_DIR := lib
+SDK_DIR := sdk
+SDK_INC_DIR := $(SDK_DIR)/include
+SDK_LIB_DIR := $(SDK_DIR)/lib
+INC_DIR := include $(SRC_DIR) $(SDK_INC_DIR)
+INC_FLAGS := $(addprefix -I, $(INC_DIR))
+TEST_DIR := tests
+GAME_TEST_INC := -I$(TEST_DIR)/test_games/PacMan/common -I$(TEST_DIR)/test_games/PacMan/server -I$(TEST_DIR)/test_games/PacMan/client
 
-# ==========================================
-# 3. Target & Libraries
-# ==========================================
-TARGET := main
-TARGET_PATH := $(BIN_DIR)/$(TARGET)
+# Targets
+SERVER_BIN := $(BIN_DIR)/server/server
+CLIENT_BIN := $(BIN_DIR)/client/client
+LOADER_BIN := $(BIN_DIR)/client/loader
+CLIENT_SDK_LIB := $(SDK_LIB_DIR)/libpacplay_client_sdk.so
+SERVER_SDK_LIB := $(SDK_LIB_DIR)/libpacplay_server_sdk.so
 
-LIBS := # e.g., -lm -lpthread
-LIB_PATHS := -L$(LIB_DIR)
+# Source File Discovery
 
-# ==========================================
-# 4. File Discovery
-# ==========================================
-# Recursively search for all .c files in the src directory using find (supports unlimited subdirectories)
-SRC := $(shell find $(SRC_DIR) -type f -name '*.c')
+# Target-specific sources
+SERVER_SRC := $(shell find $(SRC_DIR)/server -type f -name '*.c')
+CLIENT_SRC := $(shell find $(SRC_DIR)/client -type f -name '*.c' ! -path "*/loader/*")
+LOADER_SRC := $(shell find $(SRC_DIR)/client/loader -type f -name '*.c')
 
-# Map src/xxx.c to build/xxx.o (maintains multi-level directory structure)
-OBJ := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRC))
+# Shared common sources
+COMMON_SRC := $(shell find $(SRC_DIR)/common -type f -name '*.c')
 
-# Corresponding .d dependency file list
-DEP := $(OBJ:.o=.d)
+# SDK sources
+SDK_SRC_COMMON := $(shell find $(SDK_DIR)/src/common -type f -name '*.c')
+SDK_SRC_CLIENT := $(shell find $(SDK_DIR)/src/client -type f -name '*.c')
+SDK_SRC_SERVER := $(shell find $(SDK_DIR)/src/server -type f -name '*.c')
 
-# ==========================================
-# 5. Terminal Output Colors
-# ==========================================
+# Object File Mapping
+
+# Server-specific objects under build/server/
+SERVER_OBJ := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SERVER_SRC))
+
+# Client-specific objects under build/client/
+CLIENT_OBJ := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(CLIENT_SRC))
+
+# Client-specific objects under build/client/loader
+LOADER_OBJ := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(LOADER_SRC))
+
+# Common objects compiled separately for each target to avoid main() conflicts
+COMMON_SERVER_OBJ := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/server/%.o, $(COMMON_SRC))
+COMMON_CLIENT_OBJ := $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/client/%.o, $(COMMON_SRC))
+
+# Full object lists for linking
+SERVER_ALL_OBJ := $(SERVER_OBJ) $(COMMON_SERVER_OBJ)
+CLIENT_ALL_OBJ := $(CLIENT_OBJ) $(COMMON_CLIENT_OBJ)
+LOADER_ALL_OBJ := $(LOADER_OBJ) $(COMMON_CLIENT_OBJ)
+
+# Dependency files for incremental rebuilds
+SERVER_DEP := $(SERVER_ALL_OBJ:.o=.d)
+CLIENT_DEP := $(CLIENT_ALL_OBJ:.o=.d)
+LOADER_DEP := $(LOADER_ALL_OBJ:.o=.d)
+
+# Test Discovery (exclude PacMan game tests — they need special linking via their own Makefile)
+TEST_SRC := $(shell find $(TEST_DIR) -type f -name 'test_*.c' ! -name 'test_pacman_*')
+TEST_BIN := $(patsubst $(TEST_DIR)/%.c, $(BIN_DIR)/tests/%, $(TEST_SRC))
+
+# Server and client objects excluding main.o, for test linking
+SERVER_OBJ_NO_MAIN := $(filter-out $(BUILD_DIR)/server/main.o, $(SERVER_OBJ))
+CLIENT_OBJ_NO_MAIN := $(filter-out $(BUILD_DIR)/client/main.o, $(CLIENT_OBJ))
+
+# Each test binary links against common, server, and client objects (excluding main.o)
+TEST_OBJ_PER_BIN = $(patsubst $(TEST_DIR)/%.c, $(BUILD_DIR)/tests/%.o, $(1))
+
+# Terminal Output Colors
 C_GREEN := \033[92m
+C_RED   := \033[91m
 C_BLUE  := \033[94m
 C_RESET := \033[0m
 
-# ==========================================
-# 6. Build Rules
-# ==========================================
-.PHONY: all clean run json debug
+# Build Rules
+.PHONY: all server client sdk clean run run-server run-client analyze test json json-server json-client debug
 
-all: $(TARGET_PATH)
+all: analyze $(SERVER_BIN) $(CLIENT_BIN) $(LOADER_BIN) $(CLIENT_SDK_LIB) $(SERVER_SDK_LIB)
+	cp $(CLIENT_SDK_LIB) $(BIN_DIR)/client/libpacplay_client_sdk.so
 
-# Link to generate the final executable
-# The pipe | before $(BIN_DIR) indicates an order-only prerequisite, creating the directory only if it doesn't exist
-$(TARGET_PATH): $(OBJ) | $(BIN_DIR)
-	@echo -e '$(C_GREEN)Linking executable: $@$(C_RESET)'
-	@$(CC) $(CFLAGS) $^ $(LIB_PATHS) $(LIBS) -o $@
+server: $(SERVER_BIN)
 
-# Compile .c files to .o files
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
-	@# Check if the directory exists; if not, create it and print a message
+client: $(CLIENT_BIN)
+
+sdk: $(CLIENT_SDK_LIB) $(SERVER_SDK_LIB)
+
+# Link server executable
+$(BIN_DIR)/server $(BIN_DIR)/client: | $(BIN_DIR)
+	@echo -e '$(C_GREEN)Creating directory: $@/$(C_RESET)'
+	@mkdir -p $@
+
+# Link server executable (links against server SDK .so)
+$(SERVER_BIN): $(SERVER_ALL_OBJ) $(SERVER_SDK_LIB) | $(BIN_DIR)/server
+	@echo -e '$(C_GREEN)Linking server: $@$(C_RESET)'
+	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS) -L$(SDK_LIB_DIR) -lpacplay_server_sdk \
+		-Wl,-rpath,$(CURDIR)/$(SDK_LIB_DIR) -ldl
+
+# Link client executable (links against client SDK .so)
+$(CLIENT_BIN): $(CLIENT_ALL_OBJ) $(CLIENT_SDK_LIB) | $(BIN_DIR)/client
+	@echo -e '$(C_GREEN)Linking client: $@$(C_RESET)'
+	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS) -L$(SDK_LIB_DIR) -lpacplay_client_sdk \
+		-Wl,-rpath,$(CURDIR)/$(SDK_LIB_DIR)
+
+# Link loader executable
+$(LOADER_BIN): $(LOADER_ALL_OBJ) | $(BIN_DIR)/client
+	@echo -e '$(C_GREEN)Linking loader: $@$(C_RESET)'
+	@$(CC) $(CFLAGS) -ldl $^ -o $@ $(LDLIBS) \
+		-Wl,--disable-new-dtags,-rpath,'$$ORIGIN/../../sdk/lib'
+
+# SDK: Client shared library
+$(CLIENT_SDK_LIB): $(SDK_SRC_COMMON) $(SDK_SRC_CLIENT)
+	@echo -e '$(C_GREEN)Building client SDK: $@$(C_RESET)'
+	@mkdir -p $(SDK_LIB_DIR)
+	@$(CC) $(CFLAGS) -fPIC -shared -Wl,-soname,libpacplay_client_sdk.so \
+		$(INC_FLAGS) -I$(SDK_INC_DIR) \
+		$(SDK_SRC_COMMON) $(SDK_SRC_CLIENT) -o $@ -lpthread
+
+# SDK: Server shared library
+$(SERVER_SDK_LIB): $(SDK_SRC_COMMON) $(SDK_SRC_SERVER)
+	@echo -e '$(C_GREEN)Building server SDK: $@$(C_RESET)'
+	@mkdir -p $(SDK_LIB_DIR)
+	@$(CC) $(CFLAGS) -fPIC -shared -Wl,-soname,libpacplay_server_sdk.so \
+		$(INC_FLAGS) -I$(SDK_INC_DIR) \
+		$(SDK_SRC_COMMON) $(SDK_SRC_SERVER) -o $@ -lpthread
+
+# Compile server-specific .c files
+$(BUILD_DIR)/server/%.o: $(SRC_DIR)/server/%.c
 	@if [ ! -d $(dir $@) ]; then \
 		echo -e '$(C_GREEN)Creating directory: $(dir $@)$(C_RESET)'; \
 		mkdir -p $(dir $@); \
 	fi
 	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
-	@$(CC) $(CFLAGS) $(DEPFLAGS) -I$(INC_DIR) -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INC_FLAGS) -c $< -o $@
 
-# Automatically create the bin directory
+# Compile client-specific .c files
+$(BUILD_DIR)/client/%.o: $(SRC_DIR)/client/%.c
+	@if [ ! -d $(dir $@) ]; then \
+		echo -e '$(C_GREEN)Creating directory: $(dir $@)$(C_RESET)'; \
+		mkdir -p $(dir $@); \
+	fi
+	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INC_FLAGS) -c $< -o $@
+
+# Compile shared common code for the server target
+$(BUILD_DIR)/server/common/%.o: $(SRC_DIR)/common/%.c
+	@if [ ! -d $(dir $@) ]; then \
+		echo -e '$(C_GREEN)Creating directory: $(dir $@)$(C_RESET)'; \
+		mkdir -p $(dir $@); \
+	fi
+	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INC_FLAGS) -c $< -o $@
+
+# Compile shared common code for the client target
+$(BUILD_DIR)/client/common/%.o: $(SRC_DIR)/common/%.c
+	@if [ ! -d $(dir $@) ]; then \
+		echo -e '$(C_GREEN)Creating directory: $(dir $@)$(C_RESET)'; \
+		mkdir -p $(dir $@); \
+	fi
+	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INC_FLAGS) -c $< -o $@
+
+# Ensure output bin directory exists
 $(BIN_DIR):
 	@echo -e '$(C_GREEN)Creating directory: $@/$(C_RESET)'
 	@mkdir -p $@
 
-# Include all auto-generated .d dependency files (if they exist)
--include $(DEP)
+# Include auto-generated dependency files
+-include $(SERVER_DEP)
+-include $(CLIENT_DEP)
+-include $(LOADER_DEP)
 
-# ==========================================
-# 7. Utilities
-# ==========================================
-# Generate compile_commands.json (for LSP plugins like clangd)
-json: clean $(BIN_DIR)
-	@echo -e '$(C_GREEN)Generating compile_commands.json...$(C_RESET)'
+# Test Rules
+
+## Build and run all tests
+test: $(TEST_BIN)
+	@total=$(words $(TEST_BIN)); \
+	echo -e '$(C_GREEN)Running tests...$(C_RESET)'; \
+	failCount=0; totalPass=0; totalFail=0; \
+	for t in $(TEST_BIN); do \
+		log=$$(cd $$(dirname $$t) && ./$$(basename $$t) 2>&1); ret=$$?; \
+		echo "$$log"; \
+		testPass=$$(echo "$$log" | grep -oE '^[0-9]+ passed' | tail -1 | grep -oE '[0-9]+'); \
+		testFail=$$(echo "$$log" | grep -oE '[0-9]+ failed' | tail -1 | grep -oE '[0-9]+'); \
+		totalPass=$$((totalPass + $${testPass:-0})); \
+		totalFail=$$((totalFail + $${testFail:-0})); \
+		if [ $$ret -ne 0 ]; then failCount=$$((failCount + 1)); fi; \
+	done; \
+	sPass=$$((total - failCount)); allPts=$$((totalPass + totalFail)); \
+	if [ $$failCount -ne 0 ]; then \
+		echo -e '$(C_RED)'"$$sPass"'/'"$$total"' suites passed ('"$$totalPass"'/'"$$allPts"' points), '"$$failCount"' failed.$(C_RESET)'; \
+		exit 1; \
+	fi; \
+	echo -e '\n$(C_GREEN)All '"$$sPass"'/'"$$total"' test suites passed ('"$$totalPass"'/'"$$allPts"' points).$(C_RESET)\n'
+
+# Compile test source files
+$(BUILD_DIR)/tests/%.o: $(TEST_DIR)/%.c
+	@if [ ! -d $(dir $@) ]; then \
+		echo -e '$(C_GREEN)Creating directory: $(dir $@)$(C_RESET)'; \
+		mkdir -p $(dir $@); \
+	fi
+	@echo -e '$(C_BLUE)Compiling: $<$(C_RESET)'
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INC_FLAGS) -I$(TEST_DIR) $(GAME_TEST_INC) -c $< -o $@
+
+# Link each test binary against its object + server & client build of common objects
+# (excluding main.o), plus both SDK shared libraries.
+$(BIN_DIR)/tests/%: $(BUILD_DIR)/tests/%.o $(COMMON_SERVER_OBJ) $(SERVER_OBJ_NO_MAIN) $(CLIENT_OBJ_NO_MAIN) $(CLIENT_SDK_LIB) $(SERVER_SDK_LIB) | $(BIN_DIR)/tests
+	@echo -e '$(C_GREEN)Linking test: $@$(C_RESET)'
+	@$(CC) $(CFLAGS) $^ -o $@ $(LDLIBS) \
+		-L$(SDK_LIB_DIR) -lpacplay_client_sdk -lpacplay_server_sdk \
+		-Wl,-rpath,$(CURDIR)/$(SDK_LIB_DIR)
+
+$(BIN_DIR)/tests:
+	@echo -e '$(C_GREEN)Creating directory: $@/$(C_RESET)'
+	@mkdir -p $@
+
+# Run Targets
+run: run-server
+
+run-server: $(SERVER_BIN)
+	@echo -e '$(C_GREEN)Running server...$(C_RESET)'
+	@cd $(dir $(SERVER_BIN)) && ./$(notdir $(SERVER_BIN))
+
+run-client: $(CLIENT_BIN)
+	@echo -e '$(C_GREEN)Running client...$(C_RESET)'
+	@cd $(dir $(CLIENT_BIN)) && ./$(notdir $(CLIENT_BIN))
+
+analyze: json
+	@echo -e '$(C_BLUE)Analyzing code..$(C_RESET)'
+	@run-clang-tidy -quiet | (grep -E "warning:|error:" || true)
+
+# compile_commands.json Generation
+json:
+	@echo -e '$(C_GREEN)Generating compile_commands.json for all targets...$(C_RESET)'
+	@rm -f compile_commands.json
 	@echo "[" > compile_commands.json
-	@$(foreach src, $(SRC), \
-		obj=$(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(src)); \
-		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) -I$(INC_DIR) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
+	@$(foreach src, $(SERVER_SRC) $(COMMON_SRC), \
+		obj=$(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/server/%.o,$(src)); \
+		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) $(INC_FLAGS) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
+	@$(foreach src, $(CLIENT_SRC) $(COMMON_SRC), \
+		obj=$(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/client/%.o,$(src)); \
+		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) $(INC_FLAGS) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
+	@$(foreach src, $(TEST_SRC), \
+		obj=$(patsubst $(TEST_DIR)/%.c,$(BUILD_DIR)/tests/%.o,$(src)); \
+		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) $(INC_FLAGS) -I$(TEST_DIR) $(GAME_TEST_INC) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
 	@sed -i '$$ s/,$$//' compile_commands.json
 	@echo "]" >> compile_commands.json
-	@echo -e '$(C_GREEN)compile_commands.json generated!$(C_RESET)'
+	@echo -e '$(C_GREEN)compile_commands.json generated$(C_RESET)'
 
-# Print current variable environment (for debugging)
+json-server:
+	@echo -e '$(C_GREEN)Generating compile_commands.json for server...$(C_RESET)'
+	@rm -f compile_commands.json
+	@echo "[" > compile_commands.json
+	@$(foreach src, $(SERVER_SRC) $(COMMON_SRC), \
+		obj=$(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/server/%.o,$(src)); \
+		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) $(INC_FLAGS) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
+	@sed -i '$$ s/,$$//' compile_commands.json
+	@echo "]" >> compile_commands.json
+	@echo -e '$(C_GREEN)compile_commands.json generated for server$(C_RESET)'
+
+json-client:
+	@echo -e '$(C_GREEN)Generating compile_commands.json for client...$(C_RESET)'
+	@rm -f compile_commands.json
+	@echo "[" > compile_commands.json
+	@$(foreach src, $(CLIENT_SRC) $(COMMON_SRC), \
+		obj=$(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/client/%.o,$(src)); \
+		echo "  { \"directory\": \"$(CURDIR)\", \"command\": \"$(CC) $(CFLAGS) $(INC_FLAGS) -c $(src) -o $$obj\", \"file\": \"$(src)\" }," >> compile_commands.json;)
+	@sed -i '$$ s/,$$//' compile_commands.json
+	@echo "]" >> compile_commands.json
+	@echo -e '$(C_GREEN)compile_commands.json generated for client$(C_RESET)'
+
+# Debug & Clean
 debug:
-	@echo -e '$(C_BLUE)SRC Files:$(C_RESET) \n$(SRC)\n'
-	@echo -e '$(C_BLUE)OBJ Files:$(C_RESET) \n$(OBJ)\n'
+	@echo -e '$(C_BLUE)Server SRC Files:$(C_RESET) \n$(SERVER_SRC)\n'
+	@echo -e '$(C_BLUE)Client SRC Files:$(C_RESET) \n$(CLIENT_SRC)\n'
+	@echo -e '$(C_BLUE)Common SRC Files:$(C_RESET) \n$(COMMON_SRC)\n'
+	@echo -e '$(C_BLUE)Server OBJ Files:$(C_RESET) \n$(SERVER_ALL_OBJ)\n'
+	@echo -e '$(C_BLUE)Client OBJ Files:$(C_RESET) \n$(CLIENT_ALL_OBJ)\n'
 
-# Clean build artifacts
+## Clean build artifacts
 clean:
 	@echo -e '$(C_GREEN)Cleaning workspace...$(C_RESET)'
-	@rm -rf $(BUILD_DIR) $(BIN_DIR) compile_commands.json
+	@rm -rf $(BUILD_DIR) $(BIN_DIR) $(SDK_LIB_DIR)
